@@ -25,6 +25,6 @@
 #define PIN_LCD_CS   42
 #define PIN_LCD_DC   41
 #define PIN_LCD_RST  39
-#define PIN_LCD_BL   46
+#define PIN_LCD_BL   48
 #define PIN_LED      38   // onboard RGB LED (WS2812-style), UNVERIFIED
 #define PIN_BUTTON    0   // BOOT button, cycles readout pages
