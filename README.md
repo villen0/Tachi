@@ -27,7 +27,11 @@ adapter and shows a face whose mood follows the engine.
 - Serial log (115200) of every command and raw reply, and of every BLE device seen
   during scans.
 
-Not included yet: sound, motion sensing, microSD logging, Wi-Fi.
+- microSD logging: with a card in the TF slot, writes `tachi_000.csv`, `tachi_001.csv`, ... (one file per boot)
+  with `ms,rpm,mph,coolant_c` once per second while data is valid. No card = no logging, no error. Use a
+  FAT32 card. SD pins (CLK 14, CMD 15, D0 16, 1-bit mode) come from the same unconfirmed pin map.
+
+Not included yet: sound, motion sensing, Wi-Fi.
 
 ## Files
 

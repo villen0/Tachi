@@ -4,6 +4,7 @@
 #include <NimBLEDevice.h>
 #include <Arduino_GFX_Library.h>
 #include <Adafruit_NeoPixel.h>
+#include <SD_MMC.h>
 #include "config.h"
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
@@ -122,6 +123,39 @@ Mood computeMood() {
   if (coolantC >= TEMP_WORRIED_C) return WORRIED;
   if (coolantC >= TEMP_UNEASY_C) return UNEASY;
   return HAPPY;
+}
+
+// ---------- microSD logging ----------
+// One file per boot (tachi_000.csv, tachi_001.csv, ...). Flushed every row so pulling power loses little.
+static File logFile;
+static bool sdOk = false;
+
+void sdInit() {
+#if SD_LOG_ENABLED
+  SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0);
+  if (!SD_MMC.begin("/sdcard", true /*1-bit*/)) { Serial.println("SD: no card / init failed (logging off)"); return; }
+  char name[24];
+  for (int n = 0; n < 1000; n++) {
+    snprintf(name, sizeof(name), "/tachi_%03d.csv", n);
+    if (!SD_MMC.exists(name)) break;
+  }
+  logFile = SD_MMC.open(name, FILE_WRITE);
+  if (!logFile) { Serial.println("SD: cannot create log file"); return; }
+  logFile.println("ms,rpm,mph,coolant_c");
+  logFile.flush();
+  sdOk = true;
+  Serial.printf("SD: logging to %s\n", name);
+#endif
+}
+
+void sdLogTick() {
+  static uint32_t lastLog = 0;
+  if (!sdOk || demo) return;
+  uint32_t now = millis();
+  if (now - lastLog < SD_LOG_INTERVAL_MS || now - lastValidMs > STALE_AFTER_MS) return;
+  lastLog = now;
+  logFile.printf("%lu,%d,%d,%d\n", (unsigned long)now, rpm, mph, coolantC);
+  logFile.flush();
 }
 
 // ---------- LED ----------
@@ -306,6 +340,7 @@ void setup() {
   gfx->fillScreen(BLACK);
   led.begin();
   led.setBrightness(60);
+  sdInit();
   NimBLEDevice::init("");
   Serial.printf("Tachi starting, demo mode %s\n", demo ? "ON" : "OFF");
 }
@@ -348,5 +383,6 @@ void loop() {
     which = (which + 1) % 3;
     lastPoll = millis();
   }
+  sdLogTick();
   uiTick();
 }
