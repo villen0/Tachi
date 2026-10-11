@@ -50,12 +50,15 @@ Not included yet: sound, motion sensing, microSD logging, Wi-Fi.
 - `FFF1`: Notify (adapter -> board). `FFF2`: Write and Write Without Response (board -> adapter).
 - The adapter had been bonded to the phone before; it accepts only one connection at a time.
 
+**Build status:** compiles and links with PlatformIO (NimBLE-Arduino 2.3.7, GFX Library for Arduino 1.6.9,
+Arduino-ESP32 3.3.12). It has not been run on hardware yet. GFX Library 1.6.0 does NOT build against this
+core, hence the `^1.6.5` pin.
+
 **Unverified, check these first:**
-1. **Nothing has been compiled or run.** Expect compile errors and fix them first.
-   NimBLE-Arduino is 2.x and Arduino_GFX API names may differ slightly by version.
+1. **Never run on the board.** First boot may show display problems (see 2).
 2. **Display driver and pins.** `main.cpp` assumes an ST7789 172x320 panel with
-   column offset 34, and `config.h` pins (MOSI 45, SCLK 40, CS 42, DC 41, RST 39, BL 46)
-   are guesses. Take the real driver, pins, offsets and rotation from Waveshare's
+   column offset 34, and `config.h` pins (MOSI 45, SCLK 40, CS 42, DC 41, RST 39, BL 48)
+   come from the espp ws-s3-lcd-1-47 pin map, not Waveshare's own page. Take the real driver, pins, offsets and rotation from Waveshare's
    demo code / wiki for this exact board before anything else. A blank screen means this.
 3. **RGB LED pin** (`PIN_LED` = 38) and **BOOT button pin** (`PIN_BUTTON` = 0) are guesses.
 4. **Mazda 3 PID support.** Standard Mode 01 PIDs are assumed to work with `ATSP0`
@@ -65,12 +68,12 @@ Not included yet: sound, motion sensing, microSD logging, Wi-Fi.
 
 ## Known issues / ideas for next steps
 
-- `rxBuf` (a `String`) is written from the BLE callback task and read from the main task
-  with no lock. Fine for a first version; use a mutex or a ring buffer.
-- `sendCmd` blocks up to 1.5 s when the adapter doesn't answer, which freezes blinking.
-- Face redraw clears a region and redraws; flicker may show. Consider a canvas in PSRAM.
+- (Fixed) receive buffer is now lock-protected; the UI keeps blinking and reading the button while waiting
+  for the adapter; blinks redraw only the eyes. Scanning (5 s) still blocks the UI.
 - If the adapter lacks a prompt `>` after some replies, commands will time out.
 - Mood thresholds are for coolant in deg C and may need tuning for the Mazda.
+- Demo mode: set `DEMO_MODE_DEFAULT` to 1 in `config.h`, or hold BOOT ~1.5 s to toggle at runtime.
+  Fake data sweeps through every mood, no Bluetooth needed. Use it first to check the screen, LED and button.
 - Possible additions: sound (if the board has a buzzer or add an I2S amp), IMU reactions,
   logging to microSD, more PIDs (throttle, fuel trim), simulated-data demo mode for
   testing the face without a car.

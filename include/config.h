@@ -3,7 +3,7 @@
 // Part of the BLE adapter's name (check with the nRF Connect app or the scan log).
 #define ADAPTER_NAME_SUBSTR "CodeReader"   // seen in nRF Connect as "CodeReader31B"
 
-// Typical BLE ELM327 UUIDs. VERIFY against your adapter (nRF Connect).
+// BLE ELM327 UUIDs, verified from a phone screenshot of the adapter.
 #define SERVICE_UUID_STR "FFF0"
 #define RX_UUID_STR      "FFF1"   // adapter -> board (notify)
 #define TX_UUID_STR      "FFF2"   // board -> adapter (write)
@@ -12,12 +12,22 @@
 #define TEMP_UNEASY_C   100
 #define TEMP_WORRIED_C  108
 
+// Demo mode: fake RPM / speed / coolant, no Bluetooth. Lets you test the face at a desk.
+// DEMO_MODE_DEFAULT is the state at boot. Hold the BOOT button ~1.5 s to toggle at runtime.
+#define DEMO_MODE_DEFAULT  0
+#define LONG_PRESS_MS      1500
+
 // Timing
 #define POLL_INTERVAL_MS   250
 #define STALE_AFTER_MS     5000   // no valid data this long -> sleepy
 #define RECONNECT_WAIT_MS  3000
+#define CMD_TIMEOUT_MS     1000   // wait for one OBD reply (the UI keeps animating meanwhile)
+#define INIT_TIMEOUT_MS    3000   // adapter setup commands (ATZ is slow)
+#define SCAN_TIME_MS       5000
 
-// ===== Hardware pins: UNVERIFIED, confirm against Waveshare's demo for this board =====
+// ===== Hardware pins =====
+// LCD pins and RGB LED match the espp ws-s3-lcd-1-47 pin map for this board.
+// The BOOT button is the standard ESP32-S3 strapping pin. Not yet confirmed on hardware.
 #define LCD_W 172
 #define LCD_H 320
 #define PIN_LCD_MOSI 45
@@ -26,5 +36,5 @@
 #define PIN_LCD_DC   41
 #define PIN_LCD_RST  39
 #define PIN_LCD_BL   48
-#define PIN_LED      38   // onboard RGB LED (WS2812-style), UNVERIFIED
-#define PIN_BUTTON    0   // BOOT button, cycles readout pages
+#define PIN_LED      38   // onboard RGB LED (WS2812-style)
+#define PIN_BUTTON    0   // BOOT button: short press cycles readout, long press toggles demo
