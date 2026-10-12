@@ -33,17 +33,21 @@ static char rxBuf[128];
 static size_t rxLen = 0;
 static volatile bool gotPrompt = false;
 
-int rpm = 0, mph = 0, coolantC = 0;
+int rpm = 0, mph = 0, coolantC = 0, oilC = 0;
+bool oilValid = false;       // oil temp PID (015C) answered at least once; many cars do not support it
+static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP we only retry occasionally
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 bool demo = DEMO_MODE_DEFAULT;
-int page = 0;               // readout: 0 RPM, 1 mph, 2 coolant, 3 hidden
+enum Page { PAGE_FACE, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_COUNT };
+int page = PAGE_FACE;       // BOOT short press cycles: Face > MPH > RPM > Coolant > Oil temp
 
 // ---------- UI state (shared by loop() and the wait loops inside sendCmd) ----------
 static int lastMood = -1;
 static bool lastOpen = true;
 static bool forceDraw = true;
-static int shownRpm = -1, shownMph = -1, shownTemp = -999;
+static int drawnPage = -1, shownVal = -99999;
+static bool shownStale = false, shownValid = false;
 static bool blinking = false;
 static uint32_t nextBlink = 0, blinkEnd = 0;
 
@@ -103,9 +107,21 @@ void pollOne(int which) {
     if (parsePid(sendCmd("010C"), "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; lastValidMs = millis(); }
   } else if (which == 1) {
     if (parsePid(sendCmd("010D"), "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); lastValidMs = millis(); }
-  } else {
+  } else if (which == 2) {
     if (parsePid(sendCmd("0105"), "4105", 1, b)) { coolantC = b[0] - 40; lastValidMs = millis(); }
+  } else {
+    if (parsePid(sendCmd("015C"), "415C", 1, b)) { oilC = b[0] - 40; oilValid = true; oilFails = 0; lastValidMs = millis(); }
+    else if (oilFails < 255) oilFails++;
   }
+}
+
+// Oil temp (PID 015C) is optional and often unsupported. After a few failures only retry now and then
+// so it does not slow down the other readings.
+bool oilDue() {
+  static uint8_t skip = 0;
+  if (oilFails < 5) return true;
+  if (++skip >= 40) { skip = 0; return true; }
+  return false;
 }
 
 // Fake data that sweeps through every mood: idle, driving, then a slow overheat.
@@ -115,6 +131,7 @@ void demoStep() {
   mph = (int)(70 * (0.5f + 0.5f * sinf(t * 0.3f)));
   float cyc = fmodf(t, 60.0f);                       // 60 s loop
   coolantC = 88 + (int)(cyc < 40 ? cyc * 0.2f : 8 + (cyc - 40) * 1.0f);   // 88 -> 96 -> 116
+  oilC = 80 + (int)(cyc * 0.4f); oilValid = true;                           // 80 -> 104
   lastValidMs = (fmodf(t, 75.0f) > 65.0f) ? lastValidMs : millis();       // 10 s "engine off" gap
 }
 
@@ -162,7 +179,7 @@ void sdInit() {
   }
   logFile = SD_MMC.open(name, FILE_WRITE);
   if (!logFile) { Serial.println("SD: cannot create log file"); return; }
-  logFile.println("ms,rpm,mph,coolant_c");
+  logFile.println("ms,rpm,mph,coolant_c,oil_c");
   logFile.flush();
   sdOk = true;
   Serial.printf("SD: logging to %s\n", name);
@@ -175,7 +192,8 @@ void sdLogTick() {
   uint32_t now = millis();
   if (now - lastLog < SD_LOG_INTERVAL_MS || now - lastValidMs > STALE_AFTER_MS) return;
   lastLog = now;
-  logFile.printf("%lu,%d,%d,%d\n", (unsigned long)now, rpm, mph, coolantC);
+  if (oilValid) logFile.printf("%lu,%d,%d,%d,%d\n", (unsigned long)now, rpm, mph, coolantC, oilC);
+  else          logFile.printf("%lu,%d,%d,%d,\n", (unsigned long)now, rpm, mph, coolantC);
   logFile.flush();
 }
 
@@ -197,11 +215,12 @@ void setLedMood(Mood m) {
 }
 
 // ---------- Drawing ----------
-const int EYE_Y = 115, EYE_X1 = 48, EYE_X2 = 124;
-const int MOUTH_X = LCD_W / 2, MOUTH_Y = 200;
+const int FACE_DY = 30;   // face page has no readout, so the face sits lower / centered
+const int EYE_Y = 115 + FACE_DY, EYE_X1 = 48, EYE_X2 = 124;
+const int MOUTH_X = LCD_W / 2, MOUTH_Y = 200 + FACE_DY;
 
 void showStatus(const char *msg, uint16_t color) {
-  gfx->fillRect(0, 50, LCD_W, 190, BLACK);
+  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
   gfx->setTextSize(2);
   gfx->setTextColor(color);
   int16_t x1, y1; uint16_t w, h;
@@ -222,7 +241,7 @@ void drawMouth(int cx, int cy, int width, int curve, uint16_t color) {
 }
 
 void drawEyes(Mood m, bool eyesOpen) {
-  gfx->fillRect(0, 70, LCD_W, 90, BLACK);
+  gfx->fillRect(0, 70 + FACE_DY, LCD_W, 90, BLACK);
   int r = (m == WORRIED) ? 26 : (m == EXCITED) ? 28 : 22;
   if (m == SLEEPY || !eyesOpen) {
     gfx->fillRect(EYE_X1 - 20, EYE_Y - 3, 40, 6, WHITE);
@@ -246,7 +265,7 @@ void drawEyes(Mood m, bool eyesOpen) {
 }
 
 void drawMouthFor(Mood m) {
-  gfx->fillRect(0, 165, LCD_W, 75, BLACK);
+  gfx->fillRect(0, 165 + FACE_DY, LCD_W, 75, BLACK);
   switch (m) {
     case HAPPY:   drawMouth(MOUTH_X, MOUTH_Y, 70, 16, GREEN);       break;
     case UNEASY:  drawMouth(MOUTH_X, MOUTH_Y, 60, 0, YELLOW);       break;
@@ -262,29 +281,49 @@ void drawMouthFor(Mood m) {
   }
 }
 
-void drawReadout() {
-  gfx->fillRect(0, 240, LCD_W, 80, BLACK);
-  if (page == 3) return;
+// Full-screen data page: title, one big number, unit. Mood is still shown by the LED, and the
+// coolant/oil numbers turn yellow/red at the uneasy/worried thresholds.
+void pageInfo(int p, int *val, bool *valid, const char **title, const char **unit, uint16_t *color) {
+  *valid = true; *color = WHITE;
+  switch (p) {
+    case PAGE_MPH:     *val = mph;      *title = "SPEED";     *unit = "MPH"; break;
+    case PAGE_RPM:     *val = rpm;      *title = "ENGINE";    *unit = "RPM"; break;
+    case PAGE_COOLANT: *val = coolantC; *title = "COOLANT";   *unit = "deg C";
+      if (coolantC >= TEMP_WORRIED_C) *color = RED; else if (coolantC >= TEMP_UNEASY_C) *color = YELLOW; break;
+    default:           *val = oilC;     *title = "OIL TEMP";  *unit = "deg C"; *valid = oilValid; break;
+  }
+}
+
+void drawDataPage(bool stale) {
+  int val; bool valid; const char *title, *unit; uint16_t color;
+  pageInfo(page, &val, &valid, &title, &unit, &color);
+  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
   char big[16];
-  const char *label;
-  if (page == 0)      { snprintf(big, sizeof(big), "%d", rpm);      label = "RPM"; }
-  else if (page == 1) { snprintf(big, sizeof(big), "%d", mph);      label = "MPH"; }
-  else                { snprintf(big, sizeof(big), "%d", coolantC); label = "COOLANT C"; }
+  if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
+  else snprintf(big, sizeof(big), "%d", val);
   int16_t x1, y1; uint16_t w, h;
-  gfx->setTextSize(4);
-  gfx->setTextColor(WHITE);
-  gfx->getTextBounds(big, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor((LCD_W - w) / 2, 252);
-  gfx->print(big);
-  gfx->setTextSize(2);
+  gfx->setTextSize(3);
   gfx->setTextColor(0x7BEF);
-  gfx->getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor((LCD_W - w) / 2, 295);
-  gfx->print(label);
+  gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+  gfx->setCursor((LCD_W - w) / 2, 40);
+  gfx->print(title);
+  gfx->setTextSize(strlen(big) <= 3 ? 8 : 6);
+  gfx->setTextColor(color);
+  gfx->getTextBounds(big, 0, 0, &x1, &y1, &w, &h);
+  gfx->setCursor((LCD_W - w) / 2, 135);
+  gfx->print(big);
+  gfx->setTextSize(3);
+  gfx->setTextColor(0x7BEF);
+  gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
+  gfx->setCursor((LCD_W - w) / 2, 230);
+  gfx->print(unit);
+  // page dots at the bottom
+  for (int i = 0; i < PAGE_COUNT; i++)
+    gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16, 300, 4, i == page ? WHITE : 0x39E7);
 }
 
 // ---------- Input ----------
-// Short press: cycle readout. Long press (LONG_PRESS_MS): toggle demo mode.
+// Short press: next page (Face > MPH > RPM > Coolant > Oil temp). Long press (LONG_PRESS_MS): toggle demo mode.
 void handleButton() {
   static bool last = HIGH, longDone = false;
   static uint32_t pressedAt = 0;
@@ -299,13 +338,13 @@ void handleButton() {
     forceDraw = true;
   }
   if (last == LOW && now == HIGH && !longDone && ms - pressedAt > 40) {
-    page = (page + 1) % 4;
-    drawReadout();
+    page = (page + 1) % PAGE_COUNT;
+    forceDraw = true;
   }
   last = now;
 }
 
-// Everything that must stay alive while we wait on Bluetooth: button, blink, face, readout.
+// Everything that must stay alive while we wait on Bluetooth: button, blink, redraw.
 void uiTick() {
   handleButton();
 
@@ -316,24 +355,30 @@ void uiTick() {
 
   Mood m = computeMood();
   bool moodChanged = (int)m != lastMood;
-  if (forceDraw || moodChanged) {
-    gfx->fillRect(0, 50, LCD_W, 190, BLACK);   // wipe status text and any strip between eyes and mouth
-    drawEyes(m, open);
-    drawMouthFor(m);
-    setLedMood(m);
-    lastMood = (int)m;
-    lastOpen = open;
-    forceDraw = false;
-    shownRpm = -1;                       // force a readout refresh after a full redraw
-  } else if (m != SLEEPY && open != lastOpen) {
-    drawEyes(m, open);                   // blink: only the eyes change
-    lastOpen = open;
-  }
+  if (moodChanged || forceDraw) setLedMood(m);   // LED follows the mood on every page
 
-  if (rpm != shownRpm || mph != shownMph || coolantC != shownTemp) {
-    drawReadout();
-    shownRpm = rpm; shownMph = mph; shownTemp = coolantC;
+  if (page == PAGE_FACE) {
+    if (forceDraw || moodChanged || drawnPage != PAGE_FACE) {
+      gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);  // wipe status text / previous page
+      drawEyes(m, open);
+      drawMouthFor(m);
+      lastOpen = open;
+    } else if (m != SLEEPY && open != lastOpen) {
+      drawEyes(m, open);                         // blink: only the eyes change
+      lastOpen = open;
+    }
+  } else {
+    int val; bool valid; const char *t, *u; uint16_t c;
+    pageInfo(page, &val, &valid, &t, &u, &c);
+    bool stale = (m == SLEEPY);
+    if (forceDraw || drawnPage != page || val != shownVal || valid != shownValid || stale != shownStale || moodChanged) {
+      drawDataPage(stale);
+      shownVal = val; shownValid = valid; shownStale = stale;
+    }
   }
+  drawnPage = page;
+  lastMood = (int)m;
+  forceDraw = false;
 }
 
 // ---------- Connection ----------
@@ -420,8 +465,14 @@ void loop() {
   uint32_t now = millis();
   if (now - lastPoll >= POLL_INTERVAL_MS) {
     pollOne(which);
-    which = (which + 1) % 3;
+    which = (which + 1) % 4;
+    if (which == 3 && !oilDue()) which = 0;
     lastPoll = millis();
+  }
+  static uint32_t lastPrint = 0;
+  if (millis() - lastPrint >= 1000) {   // one summary line per second on the serial monitor
+    lastPrint = millis();
+    Serial.printf("rpm=%d mph=%d coolant=%dC oil=%s%d page=%d\n", rpm, mph, coolantC, oilValid ? "" : "n/a:", oilC, page);
   }
   sdLogTick();
   uiTick();

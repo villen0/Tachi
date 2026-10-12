@@ -25,13 +25,17 @@ adapter and shows a face whose mood follows the engine.
   calm (cruising >= 55 mph with RPM < 2600: half-closed eyes, small cyan smile, teal LED),
   happy (everything else). Eyes blink.
 - RGB LED color follows the mood.
-- Readout under the face; the BOOT button cycles RPM / mph / coolant / hidden.
+- Separate pages, cycled by a short press of the BOOT button: Face > MPH > RPM > Coolant > Oil temp > Face.
+  The face page shows only the face; each data page is one big number. The LED shows the mood on every page.
+  Oil temp uses PID 015C, which many cars (possibly the Mazda 3) do not answer; the page then shows `--`,
+  and after 5 failures the board only retries occasionally so other readings are not slowed.
+- Long press (~1.5 s) toggles demo mode. One summary line per second goes to the serial monitor.
 - Status screens: scanning, connecting, not found, link lost.
 - Serial log (115200) of every command and raw reply, and of every BLE device seen
   during scans.
 
 - microSD logging: with a card in the TF slot, writes `tachi_000.csv`, `tachi_001.csv`, ... (one file per boot)
-  with `ms,rpm,mph,coolant_c` once per second while data is valid. No card = no logging, no error. Use a
+  with `ms,rpm,mph,coolant_c,oil_c` once per second while data is valid. No card = no logging, no error. Use a
   FAT32 card. SD pins (CLK 14, CMD 15, D0 16, 1-bit mode) come from the same unconfirmed pin map.
 
 Not included yet: sound, motion sensing, Wi-Fi.
