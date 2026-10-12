@@ -19,8 +19,11 @@ adapter and shows a face whose mood follows the engine.
 - Scans for the adapter by name, connects over BLE, sets it up
   (`ATZ ATE0 ATL0 ATH0 ATS0 ATSP0`), reconnects automatically if the link drops.
 - Polls PIDs round-robin every 250 ms: `010C` RPM, `010D` speed, `0105` coolant.
-- Face moods: happy (normal), uneasy (coolant >= 100 C), worried (>= 108 C),
-  sleepy (no valid data for 5 s, e.g. engine off). Eyes blink.
+- Face moods, checked in this order (thresholds in `config.h`):
+  sleepy (no valid data for 5 s, e.g. engine off), worried (coolant >= 108 C), uneasy (>= 100 C),
+  excited (RPM >= 3500, or speed rising >= 8 mph/s: big sparkly eyes, open grin, magenta LED),
+  calm (cruising >= 55 mph with RPM < 2600: half-closed eyes, small cyan smile, teal LED),
+  happy (everything else). Eyes blink.
 - RGB LED color follows the mood.
 - Readout under the face; the BOOT button cycles RPM / mph / coolant / hidden.
 - Status screens: scanning, connecting, not found, link lost.

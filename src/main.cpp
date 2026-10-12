@@ -14,7 +14,7 @@
 #define YELLOW RGB565_YELLOW
 #define RED    RGB565_RED
 
-enum Mood { HAPPY, UNEASY, WORRIED, SLEEPY };
+enum Mood { HAPPY, UNEASY, WORRIED, SLEEPY, EXCITED, CALM };
 
 // ---------- Display (ST7789 172x320, column offset 34) ----------
 Arduino_DataBus *bus = new Arduino_ESP32SPI(PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI, GFX_NOT_DEFINED);
@@ -111,17 +111,38 @@ void pollOne(int which) {
 // Fake data that sweeps through every mood: idle, driving, then a slow overheat.
 void demoStep() {
   float t = millis() / 1000.0f;
-  rpm = 800 + (int)(2200 * (0.5f + 0.5f * sinf(t * 0.6f)));
-  mph = (int)(45 * (0.5f + 0.5f * sinf(t * 0.3f)));
+  rpm = 800 + (int)(3400 * (0.5f + 0.5f * sinf(t * 0.6f)));   // idle .. 4200 (excited at the top)
+  mph = (int)(70 * (0.5f + 0.5f * sinf(t * 0.3f)));
   float cyc = fmodf(t, 60.0f);                       // 60 s loop
   coolantC = 88 + (int)(cyc < 40 ? cyc * 0.2f : 8 + (cyc - 40) * 1.0f);   // 88 -> 96 -> 116
   lastValidMs = (fmodf(t, 75.0f) > 65.0f) ? lastValidMs : millis();       // 10 s "engine off" gap
 }
 
+// Mood priority: sleepy > worried > uneasy (engine health first), then excited > calm > happy.
 Mood computeMood() {
-  if (millis() - lastValidMs > STALE_AFTER_MS) return SLEEPY;   // engine off / no data
+  uint32_t now = millis();
+  if (now - lastValidMs > STALE_AFTER_MS) return SLEEPY;   // engine off / no data
   if (coolantC >= TEMP_WORRIED_C) return WORRIED;
   if (coolantC >= TEMP_UNEASY_C) return UNEASY;
+
+  // Excited: high revs (with hysteresis so it doesn't flicker) or hard acceleration.
+  static bool highRev = false;
+  static int prevMph = 0;
+  static uint32_t lastSpeedSample = 0, excitedUntil = 0;
+  if (!highRev && rpm >= RPM_EXCITED_ON) highRev = true;
+  else if (highRev && rpm < RPM_EXCITED_OFF) highRev = false;
+  if (now - lastSpeedSample >= 1000) {
+    if (mph - prevMph >= ACCEL_EXCITED_MPH_PER_S) excitedUntil = now + 3000;
+    prevMph = mph;
+    lastSpeedSample = now;
+  }
+  if (highRev || now < excitedUntil) return EXCITED;
+
+  // Calm: relaxed highway cruising.
+  static bool cruising = false;
+  if (!cruising && mph >= CRUISE_MPH_ON && rpm < CRUISE_RPM_MAX) cruising = true;
+  else if (cruising && (mph < CRUISE_MPH_OFF || rpm >= CRUISE_RPM_MAX)) cruising = false;
+  if (cruising) return CALM;
   return HAPPY;
 }
 
@@ -170,6 +191,8 @@ void setLedMood(Mood m) {
     case UNEASY:  setLed(40, 30, 0); break;
     case WORRIED: setLed(60, 0, 0);  break;
     case SLEEPY:  setLed(0, 0, 25);  break;
+    case EXCITED: setLed(50, 0, 50); break;
+    case CALM:    setLed(0, 30, 30); break;
   }
 }
 
@@ -200,16 +223,25 @@ void drawMouth(int cx, int cy, int width, int curve, uint16_t color) {
 
 void drawEyes(Mood m, bool eyesOpen) {
   gfx->fillRect(0, 70, LCD_W, 90, BLACK);
-  int r = (m == WORRIED) ? 26 : 22;
+  int r = (m == WORRIED) ? 26 : (m == EXCITED) ? 28 : 22;
   if (m == SLEEPY || !eyesOpen) {
     gfx->fillRect(EYE_X1 - 20, EYE_Y - 3, 40, 6, WHITE);
     gfx->fillRect(EYE_X2 - 20, EYE_Y - 3, 40, 6, WHITE);
   } else {
-    int pupil = (m == WORRIED) ? 5 : 9;
+    int pupil = (m == WORRIED) ? 5 : (m == EXCITED) ? 13 : 9;
     gfx->fillCircle(EYE_X1, EYE_Y, r, WHITE);
     gfx->fillCircle(EYE_X2, EYE_Y, r, WHITE);
     gfx->fillCircle(EYE_X1, EYE_Y, pupil, BLACK);
     gfx->fillCircle(EYE_X2, EYE_Y, pupil, BLACK);
+    if (m == EXCITED) {                       // sparkle highlight in each pupil
+      gfx->fillCircle(EYE_X1 - 4, EYE_Y - 4, 4, WHITE);
+      gfx->fillCircle(EYE_X2 - 4, EYE_Y - 4, 4, WHITE);
+    } else if (m == CALM) {                   // relaxed half-closed lids
+      gfx->fillRect(EYE_X1 - r, EYE_Y - r, 2 * r + 1, r, BLACK);
+      gfx->fillRect(EYE_X2 - r, EYE_Y - r, 2 * r + 1, r, BLACK);
+      gfx->fillRect(EYE_X1 - r, EYE_Y - 2, 2 * r + 1, 3, WHITE);
+      gfx->fillRect(EYE_X2 - r, EYE_Y - 2, 2 * r + 1, 3, WHITE);
+    }
   }
 }
 
@@ -220,6 +252,13 @@ void drawMouthFor(Mood m) {
     case UNEASY:  drawMouth(MOUTH_X, MOUTH_Y, 60, 0, YELLOW);       break;
     case WORRIED: drawMouth(MOUTH_X, MOUTH_Y + 8, 60, -16, RED);    break;
     case SLEEPY:  gfx->drawCircle(MOUTH_X, MOUTH_Y, 8, 0x7BEF);     break;
+    case CALM:    drawMouth(MOUTH_X, MOUTH_Y, 50, 8, 0x07FF);       break;
+    case EXCITED:                                                    // open grin, filled
+      for (int t = -40; t <= 40; t++) {
+        float u = t / 40.0f;
+        gfx->drawFastVLine(MOUTH_X + t, MOUTH_Y - 6, (int)(8 + 26 * (1.0f - u * u)), 0xFD20);
+      }
+      break;
   }
 }
 

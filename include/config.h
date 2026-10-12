@@ -12,6 +12,15 @@
 #define TEMP_UNEASY_C   100
 #define TEMP_WORRIED_C  108
 
+// Excited: revs at/above RPM_EXCITED_ON (until they drop below _OFF), or speed rising this fast (mph per second).
+#define RPM_EXCITED_ON         3500
+#define RPM_EXCITED_OFF        3000
+#define ACCEL_EXCITED_MPH_PER_S   8
+// Calm: relaxed cruising at highway speed with low revs.
+#define CRUISE_MPH_ON   55
+#define CRUISE_MPH_OFF  45
+#define CRUISE_RPM_MAX  2600
+
 // Demo mode: fake RPM / speed / coolant, no Bluetooth. Lets you test the face at a desk.
 // DEMO_MODE_DEFAULT is the state at boot. Hold the BOOT button ~1.5 s to toggle at runtime.
 #define DEMO_MODE_DEFAULT  0
