@@ -18,7 +18,7 @@ adapter and shows a face whose mood follows the engine.
 
 - Scans for the adapter by name, connects over BLE, sets it up
   (`ATZ ATE0 ATL0 ATH0 ATS0 ATSP0`), reconnects automatically if the link drops.
-- Polls PIDs round-robin every 250 ms: `010C` RPM, `010D` speed, `0105` coolant, `015C` oil temp.
+- Polls back-to-back (no idle gap): speed and RPM together in one request (`010C0D`, falls back to separate requests if unsupported) every cycle, and coolant (`0105`) / oil temp (`015C`) alternately every 6th cycle. The serial line shows requests per second.
 - Face moods, checked in this order (thresholds in `config.h`):
   sleepy (no valid data for 5 s, e.g. engine off), worried (coolant >= 108 C), uneasy (>= 100 C),
   excited (RPM >= 3500, or speed rising >= 8 mph/s: big sparkly eyes, open grin, magenta LED),

@@ -101,13 +101,35 @@ bool parsePid(const String &r, const char *tag, int nBytes, int *out) {
   return true;
 }
 
-void pollOne(int which) {
+// Fast values (speed, RPM) are what you watch, so they are polled every cycle. ELM327 can answer two
+// PIDs in one request ("010C0D"), which halves the Bluetooth round trips. If the adapter/car does not
+// support that, we fall back to separate requests. Slow values (coolant, oil) are polled less often.
+static bool combinedOk = true;
+static uint8_t combinedFails = 0;
+static uint32_t pollCount = 0;   // completed requests, for the serial rate counter
+
+bool pollRpm()   { int b[2]; if (parsePid(sendCmd("010C"), "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; lastValidMs = millis(); return true; } return false; }
+bool pollSpeed() { int b[2]; if (parsePid(sendCmd("010D"), "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); lastValidMs = millis(); return true; } return false; }
+
+void pollFast() {
+  pollCount++;
+  if (combinedOk) {
+    String r = sendCmd("010C0D");
+    int b[2]; bool got = false;
+    if (parsePid(r, "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; got = true; }
+    if (parsePid(r, "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); got = true; }
+    if (got) { lastValidMs = millis(); combinedFails = 0; }
+    else if (++combinedFails >= 3) { combinedOk = false; Serial.println("combined 010C0D not answered, using separate requests"); }
+  } else {
+    pollSpeed();
+    pollRpm();
+  }
+}
+
+void pollSlow(int which) {   // 0 coolant, 1 oil
+  pollCount++;
   int b[2];
   if (which == 0) {
-    if (parsePid(sendCmd("010C"), "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; lastValidMs = millis(); }
-  } else if (which == 1) {
-    if (parsePid(sendCmd("010D"), "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); lastValidMs = millis(); }
-  } else if (which == 2) {
     if (parsePid(sendCmd("0105"), "4105", 1, b)) { coolantC = b[0] - 40; lastValidMs = millis(); }
   } else {
     if (parsePid(sendCmd("015C"), "415C", 1, b)) { oilC = b[0] - 40; oilValid = true; oilFails = 0; lastValidMs = millis(); }
@@ -431,8 +453,7 @@ void setup() {
 }
 
 void loop() {
-  static int which = 0;
-  static uint32_t lastPoll = 0;
+  static int cycle = 0, slowIdx = 0;
 
   if (demo) {
     if (client && client->isConnected()) client->disconnect();
@@ -462,17 +483,22 @@ void loop() {
     return;
   }
 
-  uint32_t now = millis();
-  if (now - lastPoll >= POLL_INTERVAL_MS) {
-    pollOne(which);
-    which = (which + 1) % 4;
-    if (which == 3 && !oilDue()) which = 0;
-    lastPoll = millis();
+  // Back-to-back polling: next request goes out as soon as the previous reply is in.
+  // Every SLOW_EVERY-th cycle one slow value (coolant, then oil) is polled instead of waiting a full round.
+  pollFast();
+  if (++cycle >= SLOW_EVERY) {
+    cycle = 0;
+    if (slowIdx == 1 && !oilDue()) slowIdx = 0;
+    pollSlow(slowIdx);
+    slowIdx = (slowIdx + 1) % 2;
   }
   static uint32_t lastPrint = 0;
   if (millis() - lastPrint >= 1000) {   // one summary line per second on the serial monitor
     lastPrint = millis();
-    Serial.printf("rpm=%d mph=%d coolant=%dC oil=%s%d page=%d\n", rpm, mph, coolantC, oilValid ? "" : "n/a:", oilC, page);
+    static uint32_t lastCount = 0;
+    Serial.printf("rpm=%d mph=%d coolant=%dC oil=%s%d page=%d  (%lu req/s)\n", rpm, mph, coolantC, oilValid ? "" : "n/a:", oilC, page,
+                  (unsigned long)(pollCount - lastCount));
+    lastCount = pollCount;
   }
   sdLogTick();
   uiTick();

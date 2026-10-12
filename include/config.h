@@ -27,7 +27,7 @@
 #define LONG_PRESS_MS      1500
 
 // Timing
-#define POLL_INTERVAL_MS   250
+#define SLOW_EVERY         6      // poll coolant/oil once every N fast (speed+RPM) polls
 #define STALE_AFTER_MS     5000   // no valid data this long -> sleepy
 #define RECONNECT_WAIT_MS  3000
 #define CMD_TIMEOUT_MS     1000   // wait for one OBD reply (the UI keeps animating meanwhile)
