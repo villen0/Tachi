@@ -278,6 +278,7 @@ void uiTick() {
   Mood m = computeMood();
   bool moodChanged = (int)m != lastMood;
   if (forceDraw || moodChanged) {
+    gfx->fillRect(0, 50, LCD_W, 190, BLACK);   // wipe status text and any strip between eyes and mouth
     drawEyes(m, open);
     drawMouthFor(m);
     setLedMood(m);
