@@ -34,6 +34,9 @@ static size_t rxLen = 0;
 static volatile bool gotPrompt = false;
 
 int rpm = 0, mph = 0, coolantC = 0, oilC = 0;
+uint32_t tsRpm = 0, tsMph = 0, tsCool = 0, tsOil = 0;   // when each value was last updated by the car
+#define FAST_FRESH_MS 3000   // speed / RPM older than this are treated as unknown (shown as --, counted as 0)
+#define SLOW_FRESH_MS 10000  // coolant / oil are polled less often
 bool oilValid = false;       // oil temp PID (015C) answered at least once; many cars do not support it
 static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP we only retry occasionally
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
@@ -101,6 +104,32 @@ bool parsePid(const String &r, const char *tag, int nBytes, int *out) {
   return true;
 }
 
+// A two-PID reply is normally ONE message: "41 0C aa bb 0D cc" (the 41 appears once), but some
+// adapters/ECUs answer with two messages "410C aabb" and "410D cc". Accept both, in either order.
+bool parseRpmSpeed(const String &r, bool *gotRpm, bool *gotSpeed) {
+  int b[2];
+  *gotRpm = *gotSpeed = false;
+  int i = r.indexOf("410C");
+  if (i >= 0 && (int)r.length() >= i + 8) {
+    b[0] = hexAt(r, i + 4); b[1] = hexAt(r, i + 6);
+    rpm = (b[0] * 256 + b[1]) / 4; *gotRpm = true;
+    int q = i + 8;                                              // chained: 41 0C aa bb 0D cc
+    if (r.substring(q, q + 2) == "0D" && (int)r.length() >= q + 4) { mph = (int)(hexAt(r, q + 2) * 0.621f + 0.5f); *gotSpeed = true; }
+  }
+  int j = r.indexOf("410D");
+  if (j >= 0 && (int)r.length() >= j + 6) {
+    mph = (int)(hexAt(r, j + 4) * 0.621f + 0.5f); *gotSpeed = true;
+    int q = j + 6;                                              // chained: 41 0D cc 0C aa bb
+    if (!*gotRpm && r.substring(q, q + 2) == "0C" && (int)r.length() >= q + 8) {
+      rpm = (hexAt(r, q + 2) * 256 + hexAt(r, q + 4)) / 4; *gotRpm = true;
+    }
+  }
+  uint32_t now = millis();
+  if (*gotRpm) tsRpm = now;
+  if (*gotSpeed) tsMph = now;
+  return *gotRpm || *gotSpeed;
+}
+
 // Fast values (speed, RPM) are what you watch, so they are polled every cycle. ELM327 can answer two
 // PIDs in one request ("010C0D"), which halves the Bluetooth round trips. If the adapter/car does not
 // support that, we fall back to separate requests. Slow values (coolant, oil) are polled less often.
@@ -108,18 +137,22 @@ static bool combinedOk = true;
 static uint8_t combinedFails = 0;
 static uint32_t pollCount = 0;   // completed requests, for the serial rate counter
 
-bool pollRpm()   { int b[2]; if (parsePid(sendCmd("010C"), "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; lastValidMs = millis(); return true; } return false; }
-bool pollSpeed() { int b[2]; if (parsePid(sendCmd("010D"), "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); lastValidMs = millis(); return true; } return false; }
+bool pollRpm()   { int b[2]; if (parsePid(sendCmd("010C"), "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; tsRpm = lastValidMs = millis(); return true; } return false; }
+bool pollSpeed() { int b[2]; if (parsePid(sendCmd("010D"), "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); tsMph = lastValidMs = millis(); return true; } return false; }
+
+static uint8_t speedMisses = 0;
 
 void pollFast() {
   pollCount++;
   if (combinedOk) {
     String r = sendCmd("010C0D");
-    int b[2]; bool got = false;
-    if (parsePid(r, "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; got = true; }
-    if (parsePid(r, "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); got = true; }
+    bool gotRpm, gotSpeed;
+    bool got = parseRpmSpeed(r, &gotRpm, &gotSpeed);
     if (got) { lastValidMs = millis(); combinedFails = 0; }
     else if (++combinedFails >= 3) { combinedOk = false; Serial.println("combined 010C0D not answered, using separate requests"); }
+    // Speed missing from the combined reply (RPM only) 3 times in a row: ask for speed on its own.
+    if (got && !gotSpeed) { if (++speedMisses >= 3) { combinedOk = false; Serial.println("speed missing from combined reply, using separate requests"); } }
+    else if (gotSpeed) speedMisses = 0;
   } else {
     pollSpeed();
     pollRpm();
@@ -130,9 +163,9 @@ void pollSlow(int which) {   // 0 coolant, 1 oil
   pollCount++;
   int b[2];
   if (which == 0) {
-    if (parsePid(sendCmd("0105"), "4105", 1, b)) { coolantC = b[0] - 40; lastValidMs = millis(); }
+    if (parsePid(sendCmd("0105"), "4105", 1, b)) { coolantC = b[0] - 40; tsCool = lastValidMs = millis(); }
   } else {
-    if (parsePid(sendCmd("015C"), "415C", 1, b)) { oilC = b[0] - 40; oilValid = true; oilFails = 0; lastValidMs = millis(); }
+    if (parsePid(sendCmd("015C"), "415C", 1, b)) { oilC = b[0] - 40; oilValid = true; oilFails = 0; tsOil = lastValidMs = millis(); }
     else if (oilFails < 255) oilFails++;
   }
 }
@@ -154,7 +187,7 @@ void demoStep() {
   float cyc = fmodf(t, 60.0f);                       // 60 s loop
   coolantC = 88 + (int)(cyc < 40 ? cyc * 0.2f : 8 + (cyc - 40) * 1.0f);   // 88 -> 96 -> 116
   oilC = 80 + (int)(cyc * 0.4f); oilValid = true;                           // 80 -> 104
-  lastValidMs = (fmodf(t, 75.0f) > 65.0f) ? lastValidMs : millis();       // 10 s "engine off" gap
+  if (fmodf(t, 75.0f) <= 65.0f) tsRpm = tsMph = tsCool = tsOil = lastValidMs = millis();   // else: 10 s "engine off" gap
 }
 
 // Mood priority: sleepy > worried > uneasy (engine health first), then excited > calm > happy.
@@ -305,14 +338,16 @@ void drawMouthFor(Mood m) {
 
 // Full-screen data page: title, one big number, unit. Mood is still shown by the LED, and the
 // coolant/oil numbers turn yellow/red at the uneasy/worried thresholds.
+static bool fresh(uint32_t ts, uint32_t maxAge) { return ts != 0 && millis() - ts < maxAge; }
+
 void pageInfo(int p, int *val, bool *valid, const char **title, const char **unit, uint16_t *color) {
   *valid = true; *color = WHITE;
   switch (p) {
-    case PAGE_MPH:     *val = mph;      *title = "SPEED";     *unit = "MPH"; break;
-    case PAGE_RPM:     *val = rpm;      *title = "ENGINE";    *unit = "RPM"; break;
-    case PAGE_COOLANT: *val = coolantC; *title = "COOLANT";   *unit = "deg C";
+    case PAGE_MPH:     *val = mph;      *title = "SPEED";     *unit = "MPH"; *valid = fresh(tsMph, FAST_FRESH_MS); break;
+    case PAGE_RPM:     *val = rpm;      *title = "ENGINE";    *unit = "RPM"; *valid = fresh(tsRpm, FAST_FRESH_MS); break;
+    case PAGE_COOLANT: *val = coolantC; *title = "COOLANT";   *unit = "deg C"; *valid = fresh(tsCool, SLOW_FRESH_MS);
       if (coolantC >= TEMP_WORRIED_C) *color = RED; else if (coolantC >= TEMP_UNEASY_C) *color = YELLOW; break;
-    default:           *val = oilC;     *title = "OIL TEMP";  *unit = "deg C"; *valid = oilValid; break;
+    default:           *val = oilC;     *title = "OIL TEMP";  *unit = "deg C"; *valid = oilValid && fresh(tsOil, SLOW_FRESH_MS); break;
   }
 }
 
@@ -375,6 +410,9 @@ void uiTick() {
   if (blinking && now >= blinkEnd) { blinking = false; nextBlink = now + random(2500, 5500); }
   bool open = !blinking;
 
+  // Values the car has stopped answering must not linger on screen or drive the mood.
+  if (!fresh(tsMph, FAST_FRESH_MS)) mph = 0;
+  if (!fresh(tsRpm, FAST_FRESH_MS)) rpm = 0;
   Mood m = computeMood();
   bool moodChanged = (int)m != lastMood;
   if (moodChanged || forceDraw) setLedMood(m);   // LED follows the mood on every page
