@@ -62,6 +62,7 @@ struct DbgEntry { char cmd[10]; char reply[40]; bool timeout; };
 static DbgEntry dbg[5];
 static uint8_t dbgHead = 0;
 static uint32_t reqPerSec = 0;
+static uint32_t lastCmdMs = 0, lastWriteMs = 0, maxTickGapMs = 0, sdWriteMs = 0;   // timing shown on the Debug page
 
 // ---------- BLE receive ----------
 void onNotify(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, bool) {
@@ -81,13 +82,16 @@ String sendCmd(const char *cmd, uint32_t timeoutMs = CMD_TIMEOUT_MS) {
   portEXIT_CRITICAL(&rxMux);
 
   String out = String(cmd) + "\r";
+  uint32_t tw = millis();
   txChar->writeValue((const uint8_t *)out.c_str(), out.length(), false);
+  lastWriteMs = millis() - tw;
 
   uint32_t t0 = millis();
   while (!gotPrompt && millis() - t0 < timeoutMs) {
     uiTick();            // keep blinking / button alive while waiting for the adapter
     delay(5);
   }
+  lastCmdMs = millis() - t0;
   char tmp[sizeof(rxBuf)];
   portENTER_CRITICAL(&rxMux);
   memcpy(tmp, rxBuf, sizeof(tmp));   // copy under the lock, allocate the String outside it
@@ -271,14 +275,14 @@ void sdInit() {
 }
 
 void sdLogTick() {
-  static uint32_t lastLog = 0;
+  static uint32_t lastLog = 0, lastFlush = 0;
   if (!sdOk || demo) return;
   uint32_t now = millis();
   if (now - lastLog < SD_LOG_INTERVAL_MS || now - lastValidMs > STALE_AFTER_MS) return;
   lastLog = now;
   if (oilValid) logFile.printf("%lu,%d,%d,%d,%d\n", (unsigned long)now, rpm, mph, coolantC, oilC);
   else          logFile.printf("%lu,%d,%d,%d,\n", (unsigned long)now, rpm, mph, coolantC);
-  logFile.flush();
+  if (millis() - lastFlush >= 5000) { lastFlush = millis(); uint32_t t = millis(); logFile.flush(); sdWriteMs = millis() - t; }
 }
 
 // ---------- LED ----------
@@ -424,7 +428,9 @@ void drawDebugPage() {
   gfx->setCursor(4, 54);  gfx->printf("rpm:%d  age:%ldms", rpm, tsRpm ? (long)(now - tsRpm) : -1L);
   gfx->setCursor(4, 66);  gfx->printf("cool:%d oil:%d", coolantC, oilValid ? oilC : -999);
   gfx->setTextColor(0x7BEF);
-  int y = 86;
+  gfx->setCursor(4, 78);  gfx->printf("cmd:%lums wr:%lums gap:%lums", (unsigned long)lastCmdMs, (unsigned long)lastWriteMs, (unsigned long)maxTickGapMs);
+  gfx->setCursor(4, 90);  gfx->printf("sd:%s %lums", sdOk ? "on" : "off", (unsigned long)sdWriteMs);
+  int y = 110;
   for (int k = 0; k < 5; k++) {   // oldest first
     DbgEntry &d = dbg[(dbgHead + k) % 5];
     if (!d.cmd[0]) continue;
@@ -478,6 +484,11 @@ void handleButton() {
 
 // Everything that must stay alive while we wait on Bluetooth: button, blink, redraw.
 void uiTick() {
+  static uint32_t lastTick = 0, gapWindowStart = 0, gapMax = 0;
+  uint32_t t = millis();
+  if (lastTick && t - lastTick > gapMax) gapMax = t - lastTick;   // longest stall between UI updates
+  lastTick = t;
+  if (t - gapWindowStart >= 5000) { maxTickGapMs = gapMax; gapMax = 0; gapWindowStart = t; }
   handleButton();
 
   uint32_t now = millis();
@@ -571,6 +582,7 @@ bool connectAdapter() {
 // ---------- Arduino entry points ----------
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);   // never stall when nothing is reading the USB serial port (car power)
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), onButtonEdge, CHANGE);
   pinMode(PIN_LCD_BL, OUTPUT);
