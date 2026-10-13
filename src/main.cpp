@@ -149,6 +149,10 @@ bool parseRpmSpeed(const String &r, bool *gotRpm, bool *gotSpeed) {
 // both detected at connect time and dropped automatically if the adapter does not support them:
 //  - useFilter: ATCRA7E8 so only the engine computer's replies are received
 //  - useCount : a trailing "1" on the request = "expect exactly one reply", so the adapter answers at once
+// Both were tried on the Mazda 3 + CodeReader31B: the filter was not accepted and the count suffix made
+// requests MUCH slower (about 1 cycle/s instead of 5-6), so they are OFF. Set to 1 to experiment.
+#define USE_ENGINE_FILTER 0
+#define USE_COUNT_SUFFIX  0
 static bool useFilter = false, useCount = false;
 String obdQuery(const char *pid) {
   char cmd[12];
@@ -548,12 +552,16 @@ bool connectAdapter() {
   for (auto c : init) sendCmd(c, INIT_TIMEOUT_MS);
   sendCmd("0100", 8000);                      // let the adapter find the car's protocol now (can take seconds)
   useFilter = useCount = false;
+#if USE_ENGINE_FILTER
   String f = sendCmd("ATCRA7E8", INIT_TIMEOUT_MS);   // only listen to the engine computer
   if (f.indexOf("OK") >= 0) {
     useFilter = parsePid(sendCmd("010D"), "410D", 1, tmpBytes);
     if (!useFilter) sendCmd("ATCRA", INIT_TIMEOUT_MS);   // filter blocked everything: remove it
   }
+#endif
+#if USE_COUNT_SUFFIX
   useCount = parsePid(sendCmd("010D1"), "410D", 1, tmpBytes);   // does the adapter accept "expect 1 reply"?
+#endif
   Serial.printf("init: filter=%s count=%s\n", useFilter ? "on" : "off", useCount ? "on" : "off");
   lastValidMs = 0;
   linked = true;

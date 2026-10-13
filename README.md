@@ -18,7 +18,7 @@ adapter and shows a face whose mood follows the engine.
 
 - Scans for the adapter by name, connects over BLE, sets it up
   (`ATZ ATE0 ATL0 ATH0 ATS0 ATSP0`), reconnects automatically if the link drops.
-- Polls back-to-back with separate requests for speed (`010D`) and RPM (`010C`) every cycle, and coolant (`0105`) / oil temp (`015C`) alternately every 6th cycle. On the Mazda two modules answer each request (the reply comes back twice) and the adapter waits a fixed time for more replies, so at connect time the firmware tries `ATCRA7E8` (only the engine computer) and a trailing `1` on requests (expect one reply) and keeps whichever the adapter accepts (shown as `f:` and `c:` on the Debug page). The combined `010C0D` request did not work on this car and is off (`USE_COMBINED_PID`).
+- Polls back-to-back with separate requests for speed (`010D`) and RPM (`010C`) every cycle, and coolant (`0105`) / oil temp (`015C`) alternately every 6th cycle (about 5-6 cycles/s on the Mazda 3). Tested on the car and found NOT to help, so they are off: the combined `010C0D` request (`USE_COMBINED_PID`), the engine-only filter `ATCRA7E8` (`USE_ENGINE_FILTER`, not accepted) and the trailing-`1` reply count (`USE_COUNT_SUFFIX`, made requests much slower). Two modules answer every request (replies come back twice, e.g. `410D00410D00`); the first one is used.
 - Face moods, checked in this order (thresholds in `config.h`):
   sleepy (no valid data for 5 s, e.g. engine off), worried (coolant >= 108 C), uneasy (>= 100 C),
   excited (RPM >= 3500, or speed rising >= 8 mph/s: big sparkly eyes, open grin, magenta LED),
