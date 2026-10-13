@@ -39,6 +39,11 @@ uint32_t tsRpm = 0, tsMph = 0, tsCool = 0, tsOil = 0;   // when each value was l
 #define SLOW_FRESH_MS 10000  // coolant / oil are polled less often
 bool oilValid = false;       // oil temp PID (015C) answered at least once; many cars do not support it
 static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP we only retry occasionally
+
+// The car reports deg C. Mood thresholds stay in deg C; only what is shown/logged is converted.
+static int tempOut(int c) { return TEMP_UNIT_F ? (c * 9 + 2) / 5 + 32 : c; }   // rounded
+static const char *tempUnit() { return TEMP_UNIT_F ? "deg F" : "deg C"; }
+static bool oilUnsupported() { return !oilValid && oilFails >= 5; }   // car never answers 015C
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 bool demo = DEMO_MODE_DEFAULT;
@@ -267,7 +272,7 @@ void sdInit() {
   }
   logFile = SD_MMC.open(name, FILE_WRITE);
   if (!logFile) { Serial.println("SD: cannot create log file"); return; }
-  logFile.println("ms,rpm,mph,coolant_c,oil_c");
+  logFile.println(TEMP_UNIT_F ? "ms,rpm,mph,coolant_f,oil_f" : "ms,rpm,mph,coolant_c,oil_c");
   logFile.flush();
   sdOk = true;
   Serial.printf("SD: logging to %s\n", name);
@@ -280,8 +285,8 @@ void sdLogTick() {
   uint32_t now = millis();
   if (now - lastLog < SD_LOG_INTERVAL_MS || now - lastValidMs > STALE_AFTER_MS) return;
   lastLog = now;
-  if (oilValid) logFile.printf("%lu,%d,%d,%d,%d\n", (unsigned long)now, rpm, mph, coolantC, oilC);
-  else          logFile.printf("%lu,%d,%d,%d,\n", (unsigned long)now, rpm, mph, coolantC);
+  if (oilValid) logFile.printf("%lu,%d,%d,%d,%d\n", (unsigned long)now, rpm, mph, tempOut(coolantC), tempOut(oilC));
+  else          logFile.printf("%lu,%d,%d,%d,\n", (unsigned long)now, rpm, mph, tempOut(coolantC));
   if (millis() - lastFlush >= 5000) { lastFlush = millis(); uint32_t t = millis(); logFile.flush(); sdWriteMs = millis() - t; }
 }
 
@@ -378,9 +383,9 @@ void pageInfo(int p, int *val, bool *valid, const char **title, const char **uni
   switch (p) {
     case PAGE_MPH:     *val = mph;      *title = "SPEED";     *unit = "MPH"; *valid = fresh(tsMph, FAST_FRESH_MS); break;
     case PAGE_RPM:     *val = rpm;      *title = "ENGINE";    *unit = "RPM"; *valid = fresh(tsRpm, FAST_FRESH_MS); break;
-    case PAGE_COOLANT: *val = coolantC; *title = "COOLANT";   *unit = "deg C"; *valid = fresh(tsCool, SLOW_FRESH_MS);
+    case PAGE_COOLANT: *val = tempOut(coolantC); *title = "COOLANT";   *unit = tempUnit(); *valid = fresh(tsCool, SLOW_FRESH_MS);
       if (coolantC >= TEMP_WORRIED_C) *color = RED; else if (coolantC >= TEMP_UNEASY_C) *color = YELLOW; break;
-    default:           *val = oilC;     *title = "OIL TEMP";  *unit = "deg C"; *valid = oilValid && fresh(tsOil, SLOW_FRESH_MS); break;
+    default:           *val = tempOut(oilC); *title = "OIL TEMP";  *unit = oilUnsupported() ? "not supported" : tempUnit(); *valid = oilValid && fresh(tsOil, SLOW_FRESH_MS); break;
   }
 }
 
@@ -396,6 +401,7 @@ void drawDataPage(bool stale, bool full) {
     gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
     gfx->setCursor((LCD_W - w) / 2, 40);
     gfx->print(title);
+    gfx->setTextSize(strlen(unit) > 8 ? 2 : 3);   // "not supported" needs the smaller size to fit
     gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
     gfx->setCursor((LCD_W - w) / 2, 230);
     gfx->print(unit);
@@ -403,7 +409,8 @@ void drawDataPage(bool stale, bool full) {
       gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16 + 8, 300, 4, i == page ? WHITE : 0x39E7);
   }
   char big[16];
-  if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
+  if (page == PAGE_OIL && oilUnsupported()) { snprintf(big, sizeof(big), "N/A"); color = 0x7BEF; }
+  else if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
   else snprintf(big, sizeof(big), "%d", val);
   gfx->fillRect(0, 100, LCD_W, 110, BLACK);   // number area only
   gfx->setTextSize(strlen(big) <= 3 ? 8 : 6);
@@ -426,7 +433,7 @@ void drawDebugPage() {
   gfx->setCursor(4, 30);  gfx->printf("link:%s f:%s c:%s %lu req/s", linked ? "OK" : "--", useFilter ? "Y" : "N", useCount ? "Y" : "N", (unsigned long)reqPerSec);
   gfx->setCursor(4, 42);  gfx->printf("mph:%d  age:%ldms", mph, tsMph ? (long)(now - tsMph) : -1L);
   gfx->setCursor(4, 54);  gfx->printf("rpm:%d  age:%ldms", rpm, tsRpm ? (long)(now - tsRpm) : -1L);
-  gfx->setCursor(4, 66);  gfx->printf("cool:%d oil:%d", coolantC, oilValid ? oilC : -999);
+  gfx->setCursor(4, 66);  gfx->printf("cool:%d oil:%d %s", tempOut(coolantC), oilValid ? tempOut(oilC) : -999, TEMP_UNIT_F ? "F" : "C");
   gfx->setTextColor(0x7BEF);
   gfx->setCursor(4, 78);  gfx->printf("cmd:%lums wr:%lums gap:%lums", (unsigned long)lastCmdMs, (unsigned long)lastWriteMs, (unsigned long)maxTickGapMs);
   gfx->setCursor(4, 90);  gfx->printf("sd:%s %lums", sdOk ? "on" : "off", (unsigned long)sdWriteMs);
@@ -520,7 +527,10 @@ void uiTick() {
     int val; bool valid; const char *t, *u; uint16_t c;
     pageInfo(page, &val, &valid, &t, &u, &c);
     bool stale = (m == SLEEPY);
-    bool full = forceDraw || drawnPage != page;
+    static bool shownOilUnsup = false;
+    bool oilUns = (page == PAGE_OIL) && oilUnsupported();
+    bool full = forceDraw || drawnPage != page || oilUns != shownOilUnsup;
+    shownOilUnsup = oilUns;
     if (full || val != shownVal || valid != shownValid || stale != shownStale) {
       drawDataPage(stale, full);
       shownVal = val; shownValid = valid; shownStale = stale;
@@ -640,7 +650,7 @@ void loop() {
   if (millis() - lastPrint >= 1000) {   // one summary line per second on the serial monitor
     lastPrint = millis();
     static uint32_t lastCount = 0;
-    Serial.printf("rpm=%d mph=%d coolant=%dC oil=%s%d page=%d  (%lu req/s)\n", rpm, mph, coolantC, oilValid ? "" : "n/a:", oilC, page,
+    Serial.printf("rpm=%d mph=%d coolant=%d%c oil=%s%d page=%d  (%lu req/s)\n", rpm, mph, tempOut(coolantC), TEMP_UNIT_F ? 'F' : 'C', oilValid ? "" : "n/a:", tempOut(oilC), page,
                   (unsigned long)(pollCount - lastCount));
     reqPerSec = pollCount - lastCount;
     lastCount = pollCount;

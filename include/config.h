@@ -8,6 +8,9 @@
 #define RX_UUID_STR      "FFF1"   // adapter -> board (notify)
 #define TX_UUID_STR      "FFF2"   // board -> adapter (write)
 
+// Temperature display unit: 1 = deg F, 0 = deg C. (Mood thresholds below stay in deg C.)
+#define TEMP_UNIT_F 1
+
 // Mood thresholds (coolant, deg C)
 #define TEMP_UNEASY_C   100
 #define TEMP_WORRIED_C  108
