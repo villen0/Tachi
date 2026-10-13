@@ -42,8 +42,8 @@ static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP 
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_COUNT };
-int page = PAGE_FACE;       // BOOT short press cycles: Face > MPH > RPM > Coolant > Oil temp
+enum Page { PAGE_FACE, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_DEBUG, PAGE_COUNT };
+int page = PAGE_FACE;       // BOOT short press cycles: Face > MPH > RPM > Coolant > Oil temp > Debug
 
 // ---------- UI state (shared by loop() and the wait loops inside sendCmd) ----------
 static int lastMood = -1;
@@ -56,6 +56,12 @@ static uint32_t nextBlink = 0, blinkEnd = 0;
 
 Mood computeMood();
 void uiTick();
+
+// Last few adapter exchanges, shown on the Debug page so the raw replies can be read in the car.
+struct DbgEntry { char cmd[10]; char reply[40]; bool timeout; };
+static DbgEntry dbg[5];
+static uint8_t dbgHead = 0;
+static uint32_t reqPerSec = 0;
 
 // ---------- BLE receive ----------
 void onNotify(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, bool) {
@@ -87,6 +93,11 @@ String sendCmd(const char *cmd, uint32_t timeoutMs = CMD_TIMEOUT_MS) {
   memcpy(tmp, rxBuf, sizeof(tmp));   // copy under the lock, allocate the String outside it
   portEXIT_CRITICAL(&rxMux);
   String r(tmp);
+  DbgEntry &d = dbg[dbgHead];
+  dbgHead = (dbgHead + 1) % 5;
+  strncpy(d.cmd, cmd, sizeof(d.cmd) - 1); d.cmd[sizeof(d.cmd) - 1] = 0;
+  strncpy(d.reply, tmp, sizeof(d.reply) - 1); d.reply[sizeof(d.reply) - 1] = 0;
+  d.timeout = !gotPrompt;
   Serial.printf("> %s   < %s%s\n", cmd, r.c_str(), gotPrompt ? "" : "   (timeout)");
   return r;
 }
@@ -351,32 +362,63 @@ void pageInfo(int p, int *val, bool *valid, const char **title, const char **uni
   }
 }
 
-void drawDataPage(bool stale) {
+// full = also draw the static parts (title, unit, page dots); otherwise only the number is redrawn.
+void drawDataPage(bool stale, bool full) {
   int val; bool valid; const char *title, *unit; uint16_t color;
   pageInfo(page, &val, &valid, &title, &unit, &color);
-  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
+  int16_t x1, y1; uint16_t w, h;
+  if (full) {
+    gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
+    gfx->setTextSize(3);
+    gfx->setTextColor(0x7BEF);
+    gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+    gfx->setCursor((LCD_W - w) / 2, 40);
+    gfx->print(title);
+    gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
+    gfx->setCursor((LCD_W - w) / 2, 230);
+    gfx->print(unit);
+    for (int i = 0; i < PAGE_COUNT; i++)   // page dots at the bottom
+      gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16 + 8, 300, 4, i == page ? WHITE : 0x39E7);
+  }
   char big[16];
   if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
   else snprintf(big, sizeof(big), "%d", val);
-  int16_t x1, y1; uint16_t w, h;
-  gfx->setTextSize(3);
-  gfx->setTextColor(0x7BEF);
-  gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor((LCD_W - w) / 2, 40);
-  gfx->print(title);
+  gfx->fillRect(0, 100, LCD_W, 110, BLACK);   // number area only
   gfx->setTextSize(strlen(big) <= 3 ? 8 : 6);
   gfx->setTextColor(color);
   gfx->getTextBounds(big, 0, 0, &x1, &y1, &w, &h);
   gfx->setCursor((LCD_W - w) / 2, 135);
   gfx->print(big);
-  gfx->setTextSize(3);
+}
+
+// Debug page: link state and the last raw adapter exchanges (newest at the bottom).
+void drawDebugPage() {
+  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
+  gfx->setTextSize(2);
+  gfx->setTextColor(0x07FF);
+  gfx->setCursor(8, 6);
+  gfx->print("DEBUG");
+  gfx->setTextSize(1);
+  gfx->setTextColor(WHITE);
+  uint32_t now = millis();
+  gfx->setCursor(4, 30);  gfx->printf("link:%s comb:%s %lu req/s", linked ? "OK" : "--", combinedOk ? "Y" : "N", (unsigned long)reqPerSec);
+  gfx->setCursor(4, 42);  gfx->printf("mph:%d  age:%ldms", mph, tsMph ? (long)(now - tsMph) : -1L);
+  gfx->setCursor(4, 54);  gfx->printf("rpm:%d  age:%ldms", rpm, tsRpm ? (long)(now - tsRpm) : -1L);
+  gfx->setCursor(4, 66);  gfx->printf("cool:%d oil:%d", coolantC, oilValid ? oilC : -999);
   gfx->setTextColor(0x7BEF);
-  gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor((LCD_W - w) / 2, 230);
-  gfx->print(unit);
-  // page dots at the bottom
+  int y = 86;
+  for (int k = 0; k < 5; k++) {   // oldest first
+    DbgEntry &d = dbg[(dbgHead + k) % 5];
+    if (!d.cmd[0]) continue;
+    gfx->setCursor(4, y);  gfx->setTextColor(0xFFE0); gfx->printf("> %s%s", d.cmd, d.timeout ? " (timeout)" : ""); y += 10;
+    for (int off = 0; off < (int)strlen(d.reply) && off < 56; off += 27) {   // wrap reply at 27 chars
+      char line[28]; strncpy(line, d.reply + off, 27); line[27] = 0;
+      gfx->setCursor(4, y); gfx->setTextColor(WHITE); gfx->print(line); y += 10;
+    }
+    y += 4;
+  }
   for (int i = 0; i < PAGE_COUNT; i++)
-    gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16, 300, 4, i == page ? WHITE : 0x39E7);
+    gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16 + 8, 308, 4, i == page ? WHITE : 0x39E7);
 }
 
 // ---------- Input ----------
@@ -442,12 +484,16 @@ void uiTick() {
       drawEyes(m, open);                         // blink: only the eyes change
       lastOpen = open;
     }
+  } else if (page == PAGE_DEBUG) {
+    static uint32_t lastDbgDraw = 0;
+    if (forceDraw || drawnPage != PAGE_DEBUG || now - lastDbgDraw >= 500) { drawDebugPage(); lastDbgDraw = now; }
   } else {
     int val; bool valid; const char *t, *u; uint16_t c;
     pageInfo(page, &val, &valid, &t, &u, &c);
     bool stale = (m == SLEEPY);
-    if (forceDraw || drawnPage != page || val != shownVal || valid != shownValid || stale != shownStale || moodChanged) {
-      drawDataPage(stale);
+    bool full = forceDraw || drawnPage != page;
+    if (full || val != shownVal || valid != shownValid || stale != shownStale) {
+      drawDataPage(stale, full);
       shownVal = val; shownValid = valid; shownStale = stale;
     }
   }
@@ -552,6 +598,7 @@ void loop() {
     static uint32_t lastCount = 0;
     Serial.printf("rpm=%d mph=%d coolant=%dC oil=%s%d page=%d  (%lu req/s)\n", rpm, mph, coolantC, oilValid ? "" : "n/a:", oilC, page,
                   (unsigned long)(pollCount - lastCount));
+    reqPerSec = pollCount - lastCount;
     lastCount = pollCount;
   }
   sdLogTick();

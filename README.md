@@ -25,7 +25,8 @@ adapter and shows a face whose mood follows the engine.
   calm (cruising >= 55 mph with RPM < 2600: half-closed eyes, small cyan smile, teal LED),
   happy (everything else). Eyes blink.
 - RGB LED color follows the mood.
-- Separate pages, cycled by a short press of the BOOT button: Face > MPH > RPM > Coolant > Oil temp > Face.
+- Separate pages, cycled by a short press of the BOOT button: Face > MPH > RPM > Coolant > Oil temp > Debug > Face.
+  The Debug page shows link state, request rate, value ages and the last raw adapter replies, so problems can be diagnosed in the car without a computer.
   The face page shows only the face; each data page is one big number. The LED shows the mood on every page.
   Oil temp uses PID 015C, which many cars (possibly the Mazda 3) do not answer; the page then shows `--`,
   and after 5 failures the board only retries occasionally so other readings are not slowed.
