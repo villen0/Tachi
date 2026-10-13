@@ -381,24 +381,39 @@ void drawDataPage(bool stale) {
 
 // ---------- Input ----------
 // Short press: next page (Face > MPH > RPM > Coolant > Oil temp). Long press (LONG_PRESS_MS): toggle demo mode.
-void handleButton() {
-  static bool last = HIGH, longDone = false;
-  static uint32_t pressedAt = 0;
-  bool now = digitalRead(PIN_BUTTON);
+// Edges are caught by an interrupt, so a quick click is never missed while the main loop is busy
+// talking to the adapter or redrawing. handleButton() then acts on what the interrupt recorded.
+static volatile bool btnDown = false, btnLongFired = false;
+static volatile uint32_t btnDownMs = 0, btnLastEdgeMs = 0;
+static volatile uint8_t btnShortPresses = 0;
+
+void IRAM_ATTR onButtonEdge() {
   uint32_t ms = millis();
-  if (last == HIGH && now == LOW) { pressedAt = ms; longDone = false; }
-  if (now == LOW && !longDone && ms - pressedAt >= LONG_PRESS_MS) {
-    longDone = true;
+  if (ms - btnLastEdgeMs < 30) return;                 // contact bounce
+  if (digitalRead(PIN_BUTTON) == LOW) {
+    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; btnLastEdgeMs = ms; }
+  } else if (btnDown) {
+    btnDown = false; btnLastEdgeMs = ms;
+    if (!btnLongFired && btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;
+  }
+}
+
+void handleButton() {
+  if (btnDown && !btnLongFired && millis() - btnDownMs >= LONG_PRESS_MS) {
+    btnLongFired = true;
     demo = !demo;
     Serial.printf("demo mode %s\n", demo ? "ON" : "OFF");
     lastValidMs = 0;
     forceDraw = true;
   }
-  if (last == LOW && now == HIGH && !longDone && ms - pressedAt > 40) {
-    page = (page + 1) % PAGE_COUNT;
+  noInterrupts();
+  uint8_t n = btnShortPresses;
+  btnShortPresses = 0;
+  interrupts();
+  if (n) {
+    page = (page + n) % PAGE_COUNT;
     forceDraw = true;
   }
-  last = now;
 }
 
 // Everything that must stay alive while we wait on Bluetooth: button, blink, redraw.
@@ -479,6 +494,7 @@ bool connectAdapter() {
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_BUTTON, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), onButtonEdge, CHANGE);
   pinMode(PIN_LCD_BL, OUTPUT);
   digitalWrite(PIN_LCD_BL, HIGH);
   gfx->begin();
