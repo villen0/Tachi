@@ -43,7 +43,10 @@ static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP 
 // The car reports deg C. Mood thresholds stay in deg C; only what is shown/logged is converted.
 static int tempOut(int c) { return TEMP_UNIT_F ? (c * 9 + 2) / 5 + 32 : c; }   // rounded
 static const char *tempUnit() { return TEMP_UNIT_F ? "deg F" : "deg C"; }
-static bool oilUnsupported() { return !oilValid && oilFails >= 5; }   // car never answers 015C
+static bool oilUnsupported() { return !oilValid && oilFails >= 5; }   // no usable oil reply so far (keeps retrying)
+static char oilReply[40] = "(not asked yet)";                          // last raw reply to the oil request, for the Debug page
+static uint32_t lastOilTry = 0;
+#define OIL_FRESH_MS 20000
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 bool demo = DEMO_MODE_DEFAULT;
@@ -203,7 +206,10 @@ void pollSlow(int which) {   // 0 coolant, 1 oil
   if (which == 0) {
     if (parsePid(obdQuery("0105"), "4105", 1, b)) { coolantC = b[0] - 40; tsCool = lastValidMs = millis(); }
   } else {
-    if (parsePid(obdQuery("015C"), "415C", 1, b)) { oilC = b[0] - 40; oilValid = true; oilFails = 0; tsOil = lastValidMs = millis(); }
+    String r = obdQuery("015C");
+    lastOilTry = millis();
+    strncpy(oilReply, r.length() ? r.c_str() : "(no reply)", sizeof(oilReply) - 1); oilReply[sizeof(oilReply) - 1] = 0;
+    if (parsePid(r, "415C", 1, b)) { oilC = b[0] - 40; oilValid = true; oilFails = 0; tsOil = lastValidMs = millis(); }
     else if (oilFails < 255) oilFails++;
   }
 }
@@ -211,10 +217,8 @@ void pollSlow(int which) {   // 0 coolant, 1 oil
 // Oil temp (PID 015C) is optional and often unsupported. After a few failures only retry now and then
 // so it does not slow down the other readings.
 bool oilDue() {
-  static uint8_t skip = 0;
   if (oilFails < 5) return true;
-  if (++skip >= 40) { skip = 0; return true; }
-  return false;
+  return millis() - lastOilTry >= 8000;   // no answer so far: keep trying, but only every 8 s
 }
 
 // Fake data that sweeps through every mood: idle, driving, then a slow overheat.
@@ -385,7 +389,7 @@ void pageInfo(int p, int *val, bool *valid, const char **title, const char **uni
     case PAGE_RPM:     *val = rpm;      *title = "ENGINE";    *unit = "RPM"; *valid = fresh(tsRpm, FAST_FRESH_MS); break;
     case PAGE_COOLANT: *val = tempOut(coolantC); *title = "COOLANT";   *unit = tempUnit(); *valid = fresh(tsCool, SLOW_FRESH_MS);
       if (coolantC >= TEMP_WORRIED_C) *color = RED; else if (coolantC >= TEMP_UNEASY_C) *color = YELLOW; break;
-    default:           *val = tempOut(oilC); *title = "OIL TEMP";  *unit = oilUnsupported() ? "not supported" : tempUnit(); *valid = oilValid && fresh(tsOil, SLOW_FRESH_MS); break;
+    default:           *val = tempOut(oilC); *title = "OIL TEMP";  *unit = oilUnsupported() ? "no reply" : tempUnit(); *valid = oilValid && fresh(tsOil, OIL_FRESH_MS); break;
   }
 }
 
@@ -401,7 +405,7 @@ void drawDataPage(bool stale, bool full) {
     gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
     gfx->setCursor((LCD_W - w) / 2, 40);
     gfx->print(title);
-    gfx->setTextSize(strlen(unit) > 8 ? 2 : 3);   // "not supported" needs the smaller size to fit
+    gfx->setTextSize(3);
     gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
     gfx->setCursor((LCD_W - w) / 2, 230);
     gfx->print(unit);
@@ -409,8 +413,7 @@ void drawDataPage(bool stale, bool full) {
       gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16 + 8, 300, 4, i == page ? WHITE : 0x39E7);
   }
   char big[16];
-  if (page == PAGE_OIL && oilUnsupported()) { snprintf(big, sizeof(big), "N/A"); color = 0x7BEF; }
-  else if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
+  if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
   else snprintf(big, sizeof(big), "%d", val);
   gfx->fillRect(0, 100, LCD_W, 110, BLACK);   // number area only
   gfx->setTextSize(strlen(big) <= 3 ? 8 : 6);
@@ -437,7 +440,8 @@ void drawDebugPage() {
   gfx->setTextColor(0x7BEF);
   gfx->setCursor(4, 78);  gfx->printf("cmd:%lums wr:%lums gap:%lums", (unsigned long)lastCmdMs, (unsigned long)lastWriteMs, (unsigned long)maxTickGapMs);
   gfx->setCursor(4, 90);  gfx->printf("sd:%s %lums", sdOk ? "on" : "off", (unsigned long)sdWriteMs);
-  int y = 110;
+  gfx->setCursor(4, 102); gfx->printf("oil: %s", oilReply);
+  int y = 122;
   for (int k = 0; k < 5; k++) {   // oldest first
     DbgEntry &d = dbg[(dbgHead + k) % 5];
     if (!d.cmd[0]) continue;

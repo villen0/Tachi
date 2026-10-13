@@ -28,8 +28,8 @@ adapter and shows a face whose mood follows the engine.
 - Separate pages, cycled by a short press of the BOOT button: Face > MPH > RPM > Coolant > Oil temp > Debug > Face.
   The Debug page shows link state, request rate, value ages and the last raw adapter replies, so problems can be diagnosed in the car without a computer.
   The face page shows only the face; each data page is one big number. The LED shows the mood on every page.
-  Oil temp uses PID 015C. The 2025 Mazda 3 does NOT answer it (confirmed on the Debug page: `oil:-999`), so
-  after 5 failures the page shows `N/A` / `not supported` and the board only retries occasionally.
+  Oil temp uses PID 015C. It is not known whether the 2025 Mazda 3 answers it: until a reply is parsed the page
+  shows `--` / `no reply` (retrying every 8 s after 5 failures) and the Debug page shows the last raw oil reply.
 - Temperatures are shown in deg F (`TEMP_UNIT_F` in `config.h`, set 0 for deg C). Mood thresholds stay in deg C.
 - Long press (~1.5 s) toggles demo mode. One summary line per second goes to the serial monitor.
 - Status screens: scanning, connecting, not found, link lost.
