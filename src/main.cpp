@@ -144,12 +144,26 @@ bool parseRpmSpeed(const String &r, bool *gotRpm, bool *gotSpeed) {
 // Fast values (speed, RPM) are what you watch, so they are polled every cycle. ELM327 can answer two
 // PIDs in one request ("010C0D"), which halves the Bluetooth round trips. If the adapter/car does not
 // support that, we fall back to separate requests. Slow values (coolant, oil) are polled less often.
-static bool combinedOk = true;
+// Query helper. Several modules answer a PID request on this car (the reply comes back twice), and the
+// adapter waits a fixed time for more replies when it does not know how many to expect. Two fixes,
+// both detected at connect time and dropped automatically if the adapter does not support them:
+//  - useFilter: ATCRA7E8 so only the engine computer's replies are received
+//  - useCount : a trailing "1" on the request = "expect exactly one reply", so the adapter answers at once
+static bool useFilter = false, useCount = false;
+String obdQuery(const char *pid) {
+  char cmd[12];
+  snprintf(cmd, sizeof(cmd), "%s%s", pid, useCount ? "1" : "");
+  return sendCmd(cmd);
+}
+
+// Combined speed+RPM requests ("010C0D") did not work on this car (see Debug page), so they are off.
+#define USE_COMBINED_PID 0
+static bool combinedOk = USE_COMBINED_PID;
 static uint8_t combinedFails = 0;
 static uint32_t pollCount = 0;   // completed requests, for the serial rate counter
 
-bool pollRpm()   { int b[2]; if (parsePid(sendCmd("010C"), "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; tsRpm = lastValidMs = millis(); return true; } return false; }
-bool pollSpeed() { int b[2]; if (parsePid(sendCmd("010D"), "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); tsMph = lastValidMs = millis(); return true; } return false; }
+bool pollRpm()   { int b[2]; if (parsePid(obdQuery("010C"), "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; tsRpm = lastValidMs = millis(); return true; } return false; }
+bool pollSpeed() { int b[2]; if (parsePid(obdQuery("010D"), "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); tsMph = lastValidMs = millis(); return true; } return false; }
 
 static uint8_t speedMisses = 0;
 
@@ -174,9 +188,9 @@ void pollSlow(int which) {   // 0 coolant, 1 oil
   pollCount++;
   int b[2];
   if (which == 0) {
-    if (parsePid(sendCmd("0105"), "4105", 1, b)) { coolantC = b[0] - 40; tsCool = lastValidMs = millis(); }
+    if (parsePid(obdQuery("0105"), "4105", 1, b)) { coolantC = b[0] - 40; tsCool = lastValidMs = millis(); }
   } else {
-    if (parsePid(sendCmd("015C"), "415C", 1, b)) { oilC = b[0] - 40; oilValid = true; oilFails = 0; tsOil = lastValidMs = millis(); }
+    if (parsePid(obdQuery("015C"), "415C", 1, b)) { oilC = b[0] - 40; oilValid = true; oilFails = 0; tsOil = lastValidMs = millis(); }
     else if (oilFails < 255) oilFails++;
   }
 }
@@ -401,7 +415,7 @@ void drawDebugPage() {
   gfx->setTextSize(1);
   gfx->setTextColor(WHITE);
   uint32_t now = millis();
-  gfx->setCursor(4, 30);  gfx->printf("link:%s comb:%s %lu req/s", linked ? "OK" : "--", combinedOk ? "Y" : "N", (unsigned long)reqPerSec);
+  gfx->setCursor(4, 30);  gfx->printf("link:%s f:%s c:%s %lu req/s", linked ? "OK" : "--", useFilter ? "Y" : "N", useCount ? "Y" : "N", (unsigned long)reqPerSec);
   gfx->setCursor(4, 42);  gfx->printf("mph:%d  age:%ldms", mph, tsMph ? (long)(now - tsMph) : -1L);
   gfx->setCursor(4, 54);  gfx->printf("rpm:%d  age:%ldms", rpm, tsRpm ? (long)(now - tsRpm) : -1L);
   gfx->setCursor(4, 66);  gfx->printf("cool:%d oil:%d", coolantC, oilValid ? oilC : -999);
@@ -504,6 +518,7 @@ void uiTick() {
 
 // ---------- Connection ----------
 bool connectAdapter() {
+  int tmpBytes[2];
   showStatus("Scanning...", 0x07FF);
   setLed(0, 20, 40);
   NimBLEScan *scan = NimBLEDevice::getScan();
@@ -531,6 +546,15 @@ bool connectAdapter() {
 
   const char *init[] = {"ATZ", "ATE0", "ATL0", "ATH0", "ATS0", "ATSP0"};
   for (auto c : init) sendCmd(c, INIT_TIMEOUT_MS);
+  sendCmd("0100", 8000);                      // let the adapter find the car's protocol now (can take seconds)
+  useFilter = useCount = false;
+  String f = sendCmd("ATCRA7E8", INIT_TIMEOUT_MS);   // only listen to the engine computer
+  if (f.indexOf("OK") >= 0) {
+    useFilter = parsePid(sendCmd("010D"), "410D", 1, tmpBytes);
+    if (!useFilter) sendCmd("ATCRA", INIT_TIMEOUT_MS);   // filter blocked everything: remove it
+  }
+  useCount = parsePid(sendCmd("010D1"), "410D", 1, tmpBytes);   // does the adapter accept "expect 1 reply"?
+  Serial.printf("init: filter=%s count=%s\n", useFilter ? "on" : "off", useCount ? "on" : "off");
   lastValidMs = 0;
   linked = true;
   return true;
