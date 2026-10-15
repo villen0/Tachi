@@ -29,6 +29,12 @@
 #define DEMO_MODE_DEFAULT  0
 #define LONG_PRESS_MS      1500
 
+// Character (Mochi-style animated eyes on the Face page, see docs/mochi-plan.md)
+#define MOCHI_FACE   1        // 1 = animated character, 0 = the old simple face
+#define MOCHI_INTRO  1        // play the welcome animation at power-on
+#define UI_FPS       30       // target frame rate of the Face page
+#define LCD_SPI_HZ   40000000 // panel SPI clock (ST7789 handles up to ~60 MHz; lower it if the picture shows noise)
+
 // Timing
 #define SLOW_EVERY         6      // poll coolant/oil once every N fast (speed+RPM) polls
 #define STALE_AFTER_MS     5000   // no valid data this long -> sleepy

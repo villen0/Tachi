@@ -6,6 +6,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <SD_MMC.h>
 #include "config.h"
+#include "mochi.h"
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -49,14 +50,14 @@ static uint32_t lastOilTry = 0;
 #define OIL_FRESH_MS 20000
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
-bool demo = DEMO_MODE_DEFAULT;
+volatile bool demo = DEMO_MODE_DEFAULT;
 enum Page { PAGE_FACE, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_DEBUG, PAGE_COUNT };
-int page = PAGE_FACE;       // BOOT short press cycles: Face > MPH > RPM > Coolant > Oil temp > Debug
+volatile int page = PAGE_FACE;       // BOOT short press cycles: Face > MPH > RPM > Coolant > Oil temp > Debug
 
 // ---------- UI state (shared by loop() and the wait loops inside sendCmd) ----------
 static int lastMood = -1;
 static bool lastOpen = true;
-static bool forceDraw = true;
+static volatile bool forceDraw = true;
 static int drawnPage = -1, shownVal = -99999;
 static bool shownStale = false, shownValid = false;
 static bool blinking = false;
@@ -71,6 +72,7 @@ static DbgEntry dbg[5];
 static uint8_t dbgHead = 0;
 static uint32_t reqPerSec = 0;
 static uint32_t lastCmdMs = 0, lastWriteMs = 0, maxTickGapMs = 0, sdWriteMs = 0;   // timing shown on the Debug page
+static volatile uint32_t faceFps = 0, faceFrameMs = 0, reqPerSecFace = 0;            // animation speed / car polling while the Face page is shown
 
 // ---------- BLE receive ----------
 void onNotify(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, bool) {
@@ -95,10 +97,7 @@ String sendCmd(const char *cmd, uint32_t timeoutMs = CMD_TIMEOUT_MS) {
   lastWriteMs = millis() - tw;
 
   uint32_t t0 = millis();
-  while (!gotPrompt && millis() - t0 < timeoutMs) {
-    uiTick();            // keep blinking / button alive while waiting for the adapter
-    delay(5);
-  }
+  while (!gotPrompt && millis() - t0 < timeoutMs) delay(1);   // the display has its own task, nothing to keep alive here
   lastCmdMs = millis() - t0;
   char tmp[sizeof(rxBuf)];
   portENTER_CRITICAL(&rxMux);
@@ -316,16 +315,35 @@ const int FACE_DY = 30;   // face page has no readout, so the face sits lower / 
 const int EYE_Y = 115 + FACE_DY, EYE_X1 = 48, EYE_X2 = 124;
 const int MOUTH_X = LCD_W / 2, MOUTH_Y = 200 + FACE_DY;
 
+// Status text ("Scanning...", "Link lost", ...) is requested from the main task and drawn by the UI task
+// (only one task may touch the display). It stays until clearStatus(); the welcome animation has priority.
+static portMUX_TYPE statusMux = portMUX_INITIALIZER_UNLOCKED;
+static char statusMsg[24];
+static uint16_t statusColor = 0;
+static volatile uint32_t statusVer = 0;
+static volatile bool statusActive = false;
+
 void showStatus(const char *msg, uint16_t color) {
+  portENTER_CRITICAL(&statusMux);
+  strncpy(statusMsg, msg, sizeof(statusMsg) - 1); statusMsg[sizeof(statusMsg) - 1] = 0;
+  statusColor = color; statusVer = statusVer + 1; statusActive = true;
+  portEXIT_CRITICAL(&statusMux);
+  Serial.println(msg);
+}
+void clearStatus() { if (!statusActive) return; statusActive = false; forceDraw = true; }   // no-op when nothing is shown (no needless redraws)
+
+static void drawStatusScreen() {
+  char msg[24]; uint16_t col;
+  portENTER_CRITICAL(&statusMux);
+  memcpy(msg, statusMsg, sizeof(msg)); col = statusColor;
+  portEXIT_CRITICAL(&statusMux);
   gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
   gfx->setTextSize(2);
-  gfx->setTextColor(color);
+  gfx->setTextColor(col);
   int16_t x1, y1; uint16_t w, h;
   gfx->getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
   gfx->setCursor((LCD_W - w) / 2, 150);
   gfx->print(msg);
-  Serial.println(msg);
-  forceDraw = true;   // face must be redrawn after a status screen
 }
 
 // Draw a smile (curve > 0), flat line (0) or frown (curve < 0).
@@ -441,7 +459,8 @@ void drawDebugPage() {
   gfx->setCursor(4, 78);  gfx->printf("cmd:%lums wr:%lums gap:%lums", (unsigned long)lastCmdMs, (unsigned long)lastWriteMs, (unsigned long)maxTickGapMs);
   gfx->setCursor(4, 90);  gfx->printf("sd:%s %lums", sdOk ? "on" : "off", (unsigned long)sdWriteMs);
   gfx->setCursor(4, 102); gfx->printf("oil: %s", oilReply);
-  int y = 122;
+  gfx->setCursor(4, 114); gfx->printf("face:%lufps %lums req:%lu", (unsigned long)faceFps, (unsigned long)faceFrameMs, (unsigned long)reqPerSecFace);
+  int y = 132;
   for (int k = 0; k < 5; k++) {   // oldest first
     DbgEntry &d = dbg[(dbgHead + k) % 5];
     if (!d.cmd[0]) continue;
@@ -493,7 +512,74 @@ void handleButton() {
   }
 }
 
-// Everything that must stay alive while we wait on Bluetooth: button, blink, redraw.
+// ---------- Face page (animated character) ----------
+static mochi::Mochi character;
+static Arduino_Canvas *canvas = nullptr;
+static const int FACE_Y = (LCD_H - mochi::H) / 2;    // canvas position on the panel (centered)
+
+static mochi::Expr moodExpr(Mood m) {
+  switch (m) {
+    case UNEASY:  return mochi::E_SWEAT;
+    case WORRIED: return mochi::E_ANGRY;
+    case SLEEPY:  return mochi::E_SLEEPY;
+    case EXCITED: return mochi::E_TURBO;
+    case CALM:    return mochi::E_SQUINT;
+    default:      return mochi::E_DEFAULT;
+  }
+}
+
+static void drawPageDots(int y) {
+  for (int i = 0; i < PAGE_COUNT; i++)
+    gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16 + 8, y, 4, i == page ? WHITE : 0x39E7);
+}
+
+// One animation frame. Demo mode shows every expression in turn (with its name) for checking at a desk.
+static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
+  uint32_t t0 = millis();
+  static int showIdx = 0; static uint32_t showAt = 0; static bool lastDemoSeen = false;
+  if (entering) {
+    gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
+    drawPageDots(300);
+    character.setBase(moodExpr(m), now);
+  }
+  bool d = demo;
+  if (d && !lastDemoSeen) { character.startIntro(now); showIdx = 0; showAt = now + 5200; }   // demo ON replays the welcome
+  if (!d && lastDemoSeen) {                       // demo just turned OFF: back to the real mood face
+    character.setBase(moodExpr(m), now);
+    gfx->fillRect(0, 262, LCD_W, 24, BLACK);      // remove the expression name label
+  }
+  lastDemoSeen = d;
+  if (d) {
+    if (!character.introActive() && now >= showAt) {
+      mochi::Expr e = (mochi::Expr)showIdx;
+      showIdx = (showIdx + 1) % mochi::E_COUNT;
+      if (e == mochi::E_TITLE) { e = (mochi::Expr)showIdx; showIdx = (showIdx + 1) % mochi::E_COUNT; }
+      character.setBase(e, now);
+      showAt = now + 2800;
+      gfx->fillRect(0, 262, LCD_W, 24, BLACK);
+      gfx->setTextSize(2); gfx->setTextColor(0x7BEF);
+      int16_t x1, y1; uint16_t w, h; const char *nm = mochi::exprName(e);
+      gfx->getTextBounds(nm, 0, 0, &x1, &y1, &w, &h);
+      gfx->setCursor((LCD_W - w) / 2, 264); gfx->print(nm);
+    }
+  } else {
+    if (moodChanged || entering) {
+      character.setBase(moodExpr(m), now);
+      if (lastMood == SLEEPY && m != SLEEPY) character.react(mochi::E_WAKE, 1000, now);   // car data is back: wake up
+    }
+    character.idleTick(now, mph == 0);
+  }
+  character.update(now);
+  character.render(canvas, now);
+  canvas->flush();
+
+  uint32_t dt = millis() - t0;
+  static uint32_t frames = 0, winStart = 0;
+  faceFrameMs = dt; frames++;
+  if (now - winStart >= 1000) { faceFps = frames; frames = 0; winStart = now; }
+}
+
+// Draws whatever the current page needs. Runs only in the UI task; the main task never touches the display.
 void uiTick() {
   static uint32_t lastTick = 0, gapWindowStart = 0, gapMax = 0;
   uint32_t t = millis();
@@ -503,10 +589,6 @@ void uiTick() {
   handleButton();
 
   uint32_t now = millis();
-  if (!blinking && now >= nextBlink) { blinking = true; blinkEnd = now + 150; }
-  if (blinking && now >= blinkEnd) { blinking = false; nextBlink = now + random(2500, 5500); }
-  bool open = !blinking;
-
   // Values the car has stopped answering must not linger on screen or drive the mood.
   if (!fresh(tsMph, FAST_FRESH_MS)) mph = 0;
   if (!fresh(tsRpm, FAST_FRESH_MS)) rpm = 0;
@@ -514,22 +596,41 @@ void uiTick() {
   bool moodChanged = (int)m != lastMood;
   if (moodChanged || forceDraw) setLedMood(m);   // LED follows the mood on every page
 
+  // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
+  static bool statusShown = false; static uint32_t shownStatusVer = 0;
+  bool introOn = MOCHI_FACE && MOCHI_INTRO && character.introActive() && page == PAGE_FACE;
+  if (statusActive && !introOn && !demo) {
+    if (!statusShown || statusVer != shownStatusVer) { drawStatusScreen(); shownStatusVer = statusVer; statusShown = true; }
+    drawnPage = -1;
+    lastMood = (int)m;
+    return;
+  }
+  if (statusShown) { statusShown = false; forceDraw = true; drawnPage = -1; }
+
   if (page == PAGE_FACE) {
+#if MOCHI_FACE
+    faceFrame(m, moodChanged, forceDraw || drawnPage != PAGE_FACE, now);
+#else
+    static bool blinkingOld = false; static uint32_t nextBlinkOld = 0, blinkEndOld = 0; static bool lastOpenOld = true;
+    if (!blinkingOld && now >= nextBlinkOld) { blinkingOld = true; blinkEndOld = now + 150; }
+    if (blinkingOld && now >= blinkEndOld) { blinkingOld = false; nextBlinkOld = now + random(2500, 5500); }
+    bool open = !blinkingOld;
     if (forceDraw || moodChanged || drawnPage != PAGE_FACE) {
-      gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);  // wipe status text / previous page
+      gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
       drawEyes(m, open);
       drawMouthFor(m);
-      lastOpen = open;
-    } else if (m != SLEEPY && open != lastOpen) {
-      drawEyes(m, open);                         // blink: only the eyes change
-      lastOpen = open;
+      lastOpenOld = open;
+    } else if (m != SLEEPY && open != lastOpenOld) {
+      drawEyes(m, open);
+      lastOpenOld = open;
     }
+#endif
   } else if (page == PAGE_DEBUG) {
     static uint32_t lastDbgDraw = 0;
     if (forceDraw || drawnPage != PAGE_DEBUG || now - lastDbgDraw >= 500) { drawDebugPage(); lastDbgDraw = now; }
   } else {
-    int val; bool valid; const char *t, *u; uint16_t c;
-    pageInfo(page, &val, &valid, &t, &u, &c);
+    int val; bool valid; const char *tt, *u; uint16_t c;
+    pageInfo(page, &val, &valid, &tt, &u, &c);
     bool stale = (m == SLEEPY);
     static bool shownOilUnsup = false;
     bool oilUns = (page == PAGE_OIL) && oilUnsupported();
@@ -543,6 +644,17 @@ void uiTick() {
   drawnPage = page;
   lastMood = (int)m;
   forceDraw = false;
+}
+
+// The UI task owns the display: it keeps animating no matter what the Bluetooth side is doing.
+static void uiTask(void *) {
+  for (;;) {
+    uint32_t t0 = millis();
+    uiTick();
+    uint32_t period = (page == PAGE_FACE) ? (1000 / UI_FPS) : 30;
+    uint32_t used = millis() - t0;
+    vTaskDelay(pdMS_TO_TICKS(used >= period ? 1 : period - used));
+  }
 }
 
 // ---------- Connection ----------
@@ -590,6 +702,7 @@ bool connectAdapter() {
   Serial.printf("init: filter=%s count=%s\n", useFilter ? "on" : "off", useCount ? "on" : "off");
   lastValidMs = 0;
   linked = true;
+  clearStatus();
   return true;
 }
 
@@ -601,13 +714,20 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), onButtonEdge, CHANGE);
   pinMode(PIN_LCD_BL, OUTPUT);
   digitalWrite(PIN_LCD_BL, HIGH);
-  gfx->begin();
+  gfx->begin(LCD_SPI_HZ);
   gfx->fillScreen(BLACK);
+  canvas = new Arduino_Canvas(mochi::W, mochi::H, gfx, 0, FACE_Y);
+  if (!canvas->begin(GFX_SKIP_OUTPUT_BEGIN)) Serial.println("canvas allocation failed");
+  character.begin(esp_random());
+#if MOCHI_FACE && MOCHI_INTRO
+  character.startIntro(millis());
+#endif
   led.begin();
   led.setBrightness(60);
   sdInit();
   NimBLEDevice::init("");
   Serial.printf("Tachi starting, demo mode %s\n", demo ? "ON" : "OFF");
+  xTaskCreatePinnedToCore(uiTask, "ui", 10240, nullptr, 2, nullptr, 1);   // display + button + animation
 }
 
 void loop() {
@@ -616,8 +736,8 @@ void loop() {
   if (demo) {
     if (client && client->isConnected()) client->disconnect();
     linked = false;
+    clearStatus();
     demoStep();
-    uiTick();
     delay(20);
     return;
   }
@@ -629,15 +749,14 @@ void loop() {
       setLed(60, 0, 0);
       // Wait out the reconnect delay without freezing the button (long press -> demo).
       uint32_t t0 = millis();
-      while (millis() - t0 < RECONNECT_WAIT_MS && !demo) { handleButton(); delay(10); }
+      while (millis() - t0 < RECONNECT_WAIT_MS && !demo) delay(10);
     }
     if (demo) return;
     if (!connectAdapter()) {
       showStatus("Not found", YELLOW);
       uint32_t t0 = millis();
-      while (millis() - t0 < 1500 && !demo) { handleButton(); delay(10); }
+      while (millis() - t0 < 1500 && !demo) delay(10);
     }
-    forceDraw = true;
     return;
   }
 
@@ -657,8 +776,8 @@ void loop() {
     Serial.printf("rpm=%d mph=%d coolant=%d%c oil=%s%d page=%d  (%lu req/s)\n", rpm, mph, tempOut(coolantC), TEMP_UNIT_F ? 'F' : 'C', oilValid ? "" : "n/a:", tempOut(oilC), page,
                   (unsigned long)(pollCount - lastCount));
     reqPerSec = pollCount - lastCount;
+    if (page == PAGE_FACE) reqPerSecFace = reqPerSec;   // polling rate while the animation is running
     lastCount = pollCount;
   }
   sdLogTick();
-  uiTick();
 }
