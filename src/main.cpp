@@ -32,6 +32,9 @@ static RTC_NOINIT_ATTR uint32_t rtcCookie;
 static const uint32_t RTC_COOKIE = 0x7AC41001;
 static bool bootQuickRestart = false;
 static char bootText[24] = "boot: ?";
+static uint8_t exciteWhy = 0;       // debug: why the face last turned excited (1 = revs, 2 = acceleration)
+static uint32_t exciteAt = 0;
+static const char *faceName = "-";   // debug: expression currently on the Face page
 static void detectBoot() {
   esp_reset_reason_t rr = esp_reset_reason();
   bool cookie = (rtcCookie == RTC_COOKIE);
@@ -386,14 +389,19 @@ Mood computeMood() {
   if (coolantC >= TEMP_UNEASY_C) return UNEASY;
 
   // Excited: high revs (with hysteresis so it doesn't flicker) or hard acceleration.
-  static bool highRev = false;
+  // Acceleration is judged only between two consecutive fresh speed samples, so the first reading after
+  // boot / a reconnect / a stale gap just seeds prevMph and can never look like a sudden jump.
+  static bool highRev = false, prevValid = false;
   static int prevMph = 0;
   static uint32_t lastSpeedSample = 0, excitedUntil = 0;
-  if (!highRev && rpm >= RPM_EXCITED_ON) highRev = true;
+  bool speedFresh = fresh(tsMph, FAST_FRESH_MS), rpmFresh = fresh(tsRpm, FAST_FRESH_MS);
+  if (!speedFresh) { prevValid = false; excitedUntil = 0; }
+  if (!rpmFresh) highRev = false;
+  if (rpmFresh && !highRev && rpm >= RPM_EXCITED_ON) { highRev = true; exciteWhy = 1; exciteAt = now; }
   else if (highRev && rpm < RPM_EXCITED_OFF) highRev = false;
-  if (now - lastSpeedSample >= 1000) {
-    if (mph - prevMph >= ACCEL_EXCITED_MPH_PER_S) excitedUntil = now + 3000;
-    prevMph = mph;
+  if (speedFresh && now - lastSpeedSample >= 1000) {
+    if (prevValid && mph - prevMph >= ACCEL_EXCITED_MPH_PER_S) { excitedUntil = now + 3000; exciteWhy = 2; exciteAt = now; }
+    prevMph = mph; prevValid = true;
     lastSpeedSample = now;
   }
   if (highRev || now < excitedUntil) return EXCITED;
@@ -647,8 +655,11 @@ void drawDebugPage() {
   gfx->setCursor(4, 137); gfx->print(supText[1]);
   gfx->setTextColor(0xFFE0);
   gfx->setCursor(4, 148); gfx->print(bootText);
+  gfx->setTextColor(0xFFFF);
+  gfx->setCursor(4, 158);
+  gfx->printf("mood:%d %s ex:%s %lds", lastMood, faceName, exciteWhy == 1 ? "rev" : exciteWhy == 2 ? "acc" : "-", exciteWhy ? (long)((now - exciteAt) / 1000) : 0L);
   gfx->setTextColor(0x7BEF);
-  int y = 162;
+  int y = 172;
   for (int k = 0; k < 5; k++) {   // oldest first
     DbgEntry &d = dbg[(dbgHead + k) % 5];
     if (!d.cmd[0]) continue;
@@ -753,6 +764,7 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
     character.idleTick(now, mph == 0);
   }
   character.update(now);
+  faceName = mochi::exprName(character.current());
   character.render(canvas, now);
   canvas->flush();
 

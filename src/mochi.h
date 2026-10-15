@@ -276,6 +276,7 @@ class Mochi {
   void runIntro(uint32_t now) {
     if (now - introT0 >= introEnd()) {       // hand over to the live face in the very pose the welcome ended in
       intro = false; blinks = true; blinkStart = 0; nextBlink = now + 1500;
+      nextIdle = now + (uint32_t)rng.range(8000, 14000);   // no random reaction right after the welcome
       cur = def(E_DEFAULT).pose; expr = E_DEFAULT; apply(base, now);
     }
   }
