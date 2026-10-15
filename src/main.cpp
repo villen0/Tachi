@@ -34,7 +34,8 @@ static bool bootQuickRestart = false;
 static char bootText[24] = "boot: ?";
 static uint8_t exciteWhy = 0;       // debug: why the face last turned excited (1 = revs, 2 = acceleration)
 static uint32_t exciteAt = 0;
-static const char *faceName = "-";   // debug: expression currently on the Face page
+static const char *faceName = "-";
+static uint32_t chgAt[3] = {0, 0, 0}; static const char *chgName[3] = {"-", "-", "-"}; static int chgHead = 0;   // debug: last expression changes   // debug: expression currently on the Face page
 static void detectBoot() {
   esp_reset_reason_t rr = esp_reset_reason();
   bool cookie = (rtcCookie == RTC_COOKIE);
@@ -677,8 +678,11 @@ void drawDebugPage() {
   gfx->setTextColor(0xFFFF);
   gfx->setCursor(4, 158);
   gfx->printf("mood:%d %s ex:%s %lds", lastMood, faceName, exciteWhy == 1 ? "rev" : exciteWhy == 2 ? "acc" : "-", exciteWhy ? (long)((now - exciteAt) / 1000) : 0L);
+  gfx->setTextColor(0xFFFF);
+  gfx->setCursor(4, 168); gfx->print("chg:");
+  for (int k = 0; k < 3; k++) { int i = (chgHead + k) % 3; if (chgAt[i]) gfx->printf(" %lus %s", (unsigned long)(chgAt[i] / 1000), chgName[i]); }
   gfx->setTextColor(0x7BEF);
-  int y = 172;
+  int y = 182;
   for (int k = 0; k < 5; k++) {   // oldest first
     DbgEntry &d = dbg[(dbgHead + k) % 5];
     if (!d.cmd[0]) continue;
@@ -750,10 +754,17 @@ static mochi::Expr moodExpr(Mood m) {
 static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   uint32_t t0 = millis();
   static int showIdx = 0; static uint32_t showAt = 0; static bool lastDemoSeen = false;
+  // After the welcome the face stays on the plain default face for a quiet period: no mood change and no idle
+  // reaction, so nothing can flash up while the link and the first readings are still settling.
+  static bool wasIntro = true; static uint32_t settleUntil = 0; static int appliedMood = -1;
+  bool introNow = character.introActive();
+  if (wasIntro && !introNow) { settleUntil = now + FACE_SETTLE_MS; appliedMood = -1; }
+  wasIntro = introNow;
+  bool settling = introNow || now < settleUntil;
   if (entering) {
     gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
     drawPageDots(300);
-    character.setBase(moodExpr(m), now);
+    if (!settling) character.setBase(moodExpr(m), now);
   }
   bool d = demo;
   if (d && !lastDemoSeen) { character.startIntro(now); showIdx = 0; showAt = now + 5200; }   // demo ON replays the welcome
@@ -776,14 +787,17 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
       gfx->setCursor((LCD_W - w) / 2, 264); gfx->print(nm);
     }
   } else {
-    if (moodChanged || entering) {
+    if (!settling && ((int)m != appliedMood || entering)) {
       character.setBase(moodExpr(m), now);
       if (lastMood == SLEEPY && m != SLEEPY) character.react(mochi::E_WAKE, 1000, now);   // car data is back: wake up
+      appliedMood = (int)m;
     }
-    character.idleTick(now, mph == 0);
+    if (!settling) character.idleTick(now, mph == 0);
   }
   character.update(now);
   faceName = mochi::exprName(character.current());
+  { static mochi::Expr lastE = mochi::E_COUNT;
+    if (character.current() != lastE) { lastE = character.current(); chgAt[chgHead] = now; chgName[chgHead] = faceName; chgHead = (chgHead + 1) % 3; } }
   character.render(canvas, now);
   canvas->flush();
 

@@ -53,6 +53,7 @@
 // Timing
 #define SLOW_EVERY         4      // one background poll (coolant / oil / extra gauges) every N speed+RPM polls
 #define STALE_AFTER_MS     5000   // no valid data this long -> sleepy
+#define FACE_SETTLE_MS     10000  // after the welcome the face stays default this long (no mood change, no idle reaction)
 #define BOOT_SLEEP_GRACE_MS 25000 // after power-up the face stays awake this long while waiting for the first data
 #define RECONNECT_WAIT_MS  3000
 #define CMD_TIMEOUT_MS     1000   // wait for one OBD reply (the UI keeps animating meanwhile)
