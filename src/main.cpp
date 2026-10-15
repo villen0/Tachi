@@ -382,11 +382,17 @@ void demoStep() {
 }
 
 // Mood priority: sleepy > worried > uneasy (engine health first), then excited > calm > happy.
-Mood computeMood() {
+static Mood rawMood() {
   uint32_t now = millis();
-  if (now - lastValidMs > STALE_AFTER_MS) return SLEEPY;   // engine off / no data
-  if (coolantC >= TEMP_WORRIED_C) return WORRIED;
-  if (coolantC >= TEMP_UNEASY_C) return UNEASY;
+  // No data yet right after power-up is NOT sleep: the link needs a few seconds to come up. Only a car that has
+  // been silent for a long time (or one that answered before and went quiet) makes the face sleepy.
+  static bool everData = false;
+  if (lastValidMs) everData = true;
+  if (now - lastValidMs > STALE_AFTER_MS && (everData || now > BOOT_SLEEP_GRACE_MS)) return SLEEPY;   // engine off / no data
+  // Coolant only counts when it is a recent, plausible reading (no stale / garbled value can turn the face angry).
+  bool coolOk = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30 && coolantC < 150;
+  if (coolOk && coolantC >= TEMP_WORRIED_C) return WORRIED;
+  if (coolOk && coolantC >= TEMP_UNEASY_C) return UNEASY;
 
   // Excited: high revs (with hysteresis so it doesn't flicker) or hard acceleration.
   // Acceleration is judged only between two consecutive fresh speed samples, so the first reading after
@@ -412,6 +418,19 @@ Mood computeMood() {
   else if (cruising && (mph < CRUISE_MPH_OFF || rpm >= CRUISE_RPM_MAX)) cruising = false;
   if (cruising) return CALM;
   return HAPPY;
+}
+
+// The face only changes mood once the new mood has held steadily for a moment, so a one-off odd reading, a
+// reconnect or a data gap can never flash another expression. Calm things settle slower than urgent ones.
+Mood computeMood() {
+  uint32_t now = millis();
+  Mood raw = rawMood();
+  static Mood cur = HAPPY, cand = HAPPY; static uint32_t candSince = 0;
+  if (raw == cur) { cand = cur; return cur; }
+  if (raw != cand) { cand = raw; candSince = now; }
+  uint32_t hold = (raw == WORRIED || raw == UNEASY) ? 3000 : raw == SLEEPY ? 1500 : raw == EXCITED ? 600 : 1500;
+  if (now - candSince >= hold) cur = raw;
+  return cur;
 }
 
 // ---------- microSD logging ----------
@@ -698,7 +717,7 @@ void handleButton() {
     demo = !demo;
     Serial.printf("demo mode %s\n", demo ? "ON" : "OFF");
     lastValidMs = 0;
-    if (!demo) { resetGauges(); oilValid = false; oilFails = 0; }   // drop the made-up demo values and pages
+    if (!demo) { coolantC = 0; tsCool = 0; resetGauges(); oilValid = false; oilFails = 0; }   // drop the made-up demo values and pages
     forceDraw = true;
   }
   noInterrupts();
