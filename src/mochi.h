@@ -617,7 +617,7 @@ class Mochi {
   // Visits every point of the hand-written "TACHI" that has been written so far (about 1 point per pixel of stroke).
   // f(x, y, letter, writingNow) is called per point; writingNow is true for the letter that is still being drawn.
   template <class F> void titleWalk(float T, float t0, int y0, F f) const {
-    const char *word = "TACHI"; const int lw = 22, lh = 30, gap = 8, n = 5;
+    const char *word = "TACHI"; const int lw = 22, lh = 32, gap = 9, n = 5;      // bold title: letters 22x32 px, 9 px apart
     const int x0 = (W - (n * lw + (n - 1) * gap)) / 2;
     for (int i = 0; i < n; i++) {
       float prog = smoothf((T - (t0 + 190.0f * i)) / 260.0f);
@@ -640,20 +640,20 @@ class Mochi {
   }
   // Glowing "TACHI" written on with a bright tip. alpha 0..1 fades it, shim 0..1 moves a bright band across the finished word.
   template <class G> void drawVectorTitle(G *g, float T, float t0, float alpha, float shim, int y0) const {
-    const int n = 5, total = n * 22 + (n - 1) * 8, x0 = (W - total) / 2;
+    const int n = 5, total = n * 22 + (n - 1) * 9, x0 = (W - total) / 2;
     auto glow = [&](float k) { return rgb((int)(50 * k * alpha), (int)(130 * k * alpha), (int)(255 * k * alpha)); };
     uint16_t wide = glow(26.0f / 255.0f), mid = glow(70.0f / 255.0f);
-    titleWalk(T, t0, y0, [&](float x, float y, int, bool) { g->fillCircle((int16_t)x, (int16_t)y, 6, wide); });
-    titleWalk(T, t0, y0, [&](float x, float y, int, bool) { g->fillCircle((int16_t)x, (int16_t)y, 4, mid); });
+    titleWalk(T, t0, y0, [&](float x, float y, int, bool) { g->fillCircle((int16_t)x, (int16_t)y, 8, wide); });
+    titleWalk(T, t0, y0, [&](float x, float y, int, bool) { g->fillCircle((int16_t)x, (int16_t)y, 5, mid); });
     float tx = 0, ty = 0; bool tip = false;
     titleWalk(T, t0, y0, [&](float x, float y, int, bool writing) {
       float sh = shim > 0 ? clampf(1.0f - fabsf(x - (x0 - 20 + (total + 40) * shim)) / 14.0f, 0, 1) * 0.75f : 0.0f;
-      g->fillCircle((int16_t)x, (int16_t)y, 2, rgb((int)((205 + 50 * sh) * alpha), (int)((235 + 20 * sh) * alpha), (int)(255 * alpha)));
+      g->fillCircle((int16_t)x, (int16_t)y, 3, rgb((int)((205 + 50 * sh) * alpha), (int)((235 + 20 * sh) * alpha), (int)(255 * alpha)));
       if (writing) { tx = x; ty = y; tip = true; }
     });
     if (tip) {
-      g->fillCircle((int16_t)tx, (int16_t)ty, 8, rgb((int)(120 * 90 / 255.0f * alpha), (int)(190 * 90 / 255.0f * alpha), (int)(255 * 90 / 255.0f * alpha)));
-      g->fillCircle((int16_t)tx, (int16_t)ty, 3, rgb((int)(255 * alpha), (int)(255 * alpha), (int)(255 * alpha)));
+      g->fillCircle((int16_t)tx, (int16_t)ty, 10, rgb((int)(120 * 90 / 255.0f * alpha), (int)(190 * 90 / 255.0f * alpha), (int)(255 * 90 / 255.0f * alpha)));
+      g->fillCircle((int16_t)tx, (int16_t)ty, 4, rgb((int)(255 * alpha), (int)(255 * alpha), (int)(255 * alpha)));
     }
   }
 
@@ -753,7 +753,7 @@ class Mochi {
       }
     }
     float ta = smootherf((T - 2850.0f) / 100.0f) * (1.0f - smootherf((T - 4800.0f) / 350.0f));
-    if (T >= 2850.0f && ta > 0.01f) drawVectorTitle(g, T, 2900.0f, ta, (T >= 4050.0f && T <= 4750.0f) ? clampf((T - 4050.0f) / 700.0f, 0, 1) : 0.0f, 118);
+    if (T >= 2850.0f && ta > 0.01f) drawVectorTitle(g, T, 2900.0f, ta, (T >= 4050.0f && T <= 4750.0f) ? clampf((T - 4050.0f) / 700.0f, 0, 1) : 0.0f, 116);
   }
 
   template <class G> void drawTitle(G *g, uint32_t now) const {
