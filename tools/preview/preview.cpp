@@ -76,6 +76,12 @@ int main(int argc, char **argv) {
   }
   // 3. a blink
   { mochi::Mochi m; m.begin(1); uint32_t t = 1000; m.update(t); for (int i = 0; i < 6; i++) { run(m, t, 40); m.render(&g, t); char n[400]; snprintf(n, sizeof n, "%s/b_%d.ppm", out.c_str(), i); savePPM(g, n); } }
+  // 4. the boot intro, sampled over time
+  { mochi::Mochi m; m.begin(5); uint32_t t = 1000; m.update(t); m.startIntro(t); uint32_t t0 = t;
+    uint32_t marks[] = {60, 200, 330, 460, 600, 900, 1200, 1500, 1800, 2150, 2400, 2700, 3200, 3800, 4100, 4500};
+    int i = 0;
+    for (uint32_t mk : marks) { while (t - t0 < mk) { t += 16; m.update(t); } m.render(&g, t); char n[400]; snprintf(n, sizeof n, "%s/i_%02d_%04u.ppm", out.c_str(), i++, (unsigned)(t - t0)); savePPM(g, n); }
+    printf("intro still active at the end: %d\n", (int)m.introActive()); }
   printf("done\n");
   return 0;
 }

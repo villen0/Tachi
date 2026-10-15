@@ -149,18 +149,24 @@ class Mochi {
   }
 
   // The mood the face returns to after a reaction ends.
-  void setBase(Expr e, uint32_t now) { base = e; if (reaction == E_COUNT) apply(e, now); }
+  void setBase(Expr e, uint32_t now) { base = e; if (reaction == E_COUNT && !intro) apply(e, now); }
   // One-off reaction; goes back to the base afterwards (holdMs == 0: stays until another call).
   void react(Expr e, uint32_t holdMs, uint32_t now) {
+    if (intro) return;
     reaction = e; reactionEnd = holdMs ? now + holdMs : 0; apply(e, now);
     if (!holdMs) base = e, reaction = E_COUNT;
   }
-  bool reacting() const { return reaction != E_COUNT; }
+  // Scripted welcome animation (about 4.4 s): glowing line -> eyes open -> look around -> happy eyes + "TACHI"
+  // written letter by letter -> settle into the normal face. Idle/reactions are held back while it runs.
+  void startIntro(uint32_t now) { intro = true; introT0 = now; introStep = -1; titleN = 0; titleA = 1.0f; reaction = E_COUNT; blinks = false; blinkStart = 0;
+    cur = def(E_WAKE).pose; cur.L.lidTop = cur.R.lidTop = 1.0f; tgt = cur; expr = E_WAKE; style = ES_RECT; mouth = M_NONE; ovl = O_NONE; }
+  bool introActive() const { return intro; }
+  bool reacting() const { return reaction != E_COUNT || intro; }
   Expr current() const { return expr; }
 
   // Occasionally picks a random idle reaction. parked = the car is not moving (wilder ones allowed).
   void idleTick(uint32_t now, bool parked) {
-    if (reaction != E_COUNT || base != E_DEFAULT) { if (now > nextIdle) nextIdle = now + 4000; return; }
+    if (intro || reaction != E_COUNT || base != E_DEFAULT) { if (now > nextIdle) nextIdle = now + 4000; return; }
     if (now < nextIdle) return;
     static const Expr calmPool[] = {E_LOOK_L, E_LOOK_R, E_LOOK_DOWN, E_SMIRK, E_SQUINT, E_DISTRACTED, E_UWU, E_COOKIE, E_SNEEZE,
                                     E_RASPBERRY, E_LOVE, E_LAUGH, E_STARS, E_SHRINK};
@@ -177,7 +183,8 @@ class Mochi {
     last = now;
     if (dt < 1) dt = 1;
     if (dt > 100) dt = 100;
-    if (reaction != E_COUNT && reactionEnd && now >= reactionEnd) { reaction = E_COUNT; apply(base, now); }
+    if (intro) runIntro(now);
+    if (!intro && reaction != E_COUNT && reactionEnd && now >= reactionEnd) { reaction = E_COUNT; apply(base, now); }
     if (expr == E_DISTRACTED && now >= wanderAt) {   // eyes wander around
       tgt.ox = (float)rng.range(-16, 16); tgt.oy = (float)rng.range(-8, 8);
       tgt.L.h = (float)rng.range(44, 54); tgt.R.h = (float)rng.range(44, 54);
@@ -202,6 +209,7 @@ class Mochi {
   // Draws the whole face into g (canvas coordinates 0..W-1, 0..H-1). Clears the canvas first.
   template <class G> void render(G *g, uint32_t now) const {
     g->fillRect(0, 0, W, H, 0);
+    if (intro && introStep < 0) { drawPowerBar(g, now - introT0); return; }
     if (ovl == O_GLITCH) drawGlitchBackground(g, now);
     if (ovl == O_STARS) drawStarfield(g, now);
     if (ovl == O_TITLE) { drawTitle(g, now); return; }
@@ -214,6 +222,7 @@ class Mochi {
     drawEye(g, p, p.R, rx, cy + p.R.y, false, breath, now);
     drawMouth(g, p, W / 2 + p.ox * 0.6f, cy + p.mouthY, now);
     drawOverlay(g, p, lx, rx, cy, now);
+    if (intro && titleN > 0) drawIntroTitle(g, now - introT0);
   }
 
  private:
@@ -223,6 +232,22 @@ class Mochi {
   EyeStyle style = ES_RECT; Mouth mouth = M_SMILE; Overlay ovl = O_NONE; bool blinks = true, flip = false;
   uint32_t reactionEnd = 0, last = 0, nextBlink = 0, blinkStart = 0, nextIdle = 0, wanderAt = 0;
   float blink = 1.0f;
+  // boot intro
+  bool intro = false; uint32_t introT0 = 0; int introStep = -1; int titleN = 0; float titleA = 1.0f;
+
+  void runIntro(uint32_t now) {
+    uint32_t t = now - introT0;
+    struct Step { uint32_t at; Expr e; };
+    static const Step steps[] = {{450, E_WAKE}, {1050, E_LOOK_L}, {1400, E_LOOK_R}, {1750, E_DEFAULT}, {2050, E_LAUGH}};
+    for (int i = 0; i < 5; i++) if (introStep < i && t >= steps[i].at) {
+      introStep = i; apply(steps[i].e, now); blinks = (i == 3);
+      if (steps[i].e == E_LAUGH) { tgt.oy = -26; tgt.mouthY = 22; }
+      if (i == 0) { cur.L.lidTop = cur.R.lidTop = 1.0f; }
+    }
+    titleN = t < 2250 ? 0 : (int)((t - 2250) / 150) + 1; if (titleN > 5) titleN = 5;
+    titleA = t < 3900 ? 1.0f : clampf(1.0f - (float)(t - 3900) / 400.0f, 0.0f, 1.0f);
+    if (t >= 4300) { intro = false; titleN = 0; blinks = true; nextBlink = now + 1200; apply(base, now); }
+  }
 
   void apply(Expr e, uint32_t now) {
     ExprDef d = def(e);
@@ -495,6 +520,36 @@ class Mochi {
     for (int y = 0; y < H; y += 3) {
       uint32_t h = (uint32_t)((y * 7919u) ^ (f * 2654435761u)); int v = 60 + (int)(h % 100);
       g->fillRect(0, (int16_t)y, W, 2, rgb(v, v / 3, 10));
+    }
+  }
+  template <class G> void drawPowerBar(G *g, uint32_t t) const {   // the glowing line that becomes the eyes
+    float k = clampf(t / 450.0f, 0.0f, 1.0f), e = 1.0f - (1.0f - k) * (1.0f - k);
+    Pose p = cur; p.glow = e;
+    float w = 4 + 104 * e, cy = H / 2 - 6, h = 5;
+    if (k < 0.25f) { float a = k / 0.25f; g->fillCircle(W / 2, (int16_t)cy, (int16_t)(2 + 3 * a), scaled(p, 0.4f + 0.6f * a)); return; }
+    glowRR(g, W / 2 - w / 2, cy - h / 2, w, h, 2.5f, p);
+  }
+  template <class G> void drawIntroTitle(G *g, uint32_t t) const {   // "TACHI" typed in with a pop and a sparkle per letter
+    const char *txt = "TACHI"; int sc = 5, gw = 5 * sc, gapw = sc, n = 5;
+    int total = n * gw + (n - 1) * gapw, x0 = (W - total) / 2, y0 = H / 2 + 44;
+    Pose p = cur; p.glow = 1.0f;
+    for (int i = 0; i < titleN && i < n; i++) {
+      const uint8_t *gl = glyph(txt[i]); if (!gl) continue;
+      int age = (int)t - (2250 + 150 * i);
+      float pop = age < 140 ? (1.0f - age / 140.0f) : 0.0f;
+      int dy = (int)(-10 * pop), lx0 = x0 + i * (gw + gapw);
+      float flash = pop;   // new letters start white, settle into the eye colour
+      for (int r = 0; r < 7; r++) for (int c = 0; c < 5; c++) if (gl[r] & (0x10 >> c)) {
+        int x = lx0 + c * sc, y = y0 + r * sc + dy;
+        g->fillRect((int16_t)(x - 2), (int16_t)(y - 2), (int16_t)(sc + 3), (int16_t)(sc + 3), glowc(p, 0.22f * titleA));
+      }
+      for (int r = 0; r < 7; r++) for (int c = 0; c < 5; c++) if (gl[r] & (0x10 >> c)) {
+        int x = lx0 + c * sc, y = y0 + r * sc + dy;
+        float k = titleA;
+        g->fillRect((int16_t)x, (int16_t)y, (int16_t)(sc - 1), (int16_t)(sc - 1),
+                    rgb((int)((p.cr + (255 - p.cr) * flash) * k), (int)((p.cg + (255 - p.cg) * flash) * k), (int)((p.cb + (255 - p.cb) * flash) * k)));
+      }
+      if (age >= 0 && age < 320) star4(g, (float)(lx0 + gw / 2), (float)(y0 - 8 + dy), 9.0f * (1.0f - age / 320.0f), rgb(255, 255, 255));
     }
   }
   template <class G> void drawTitle(G *g, uint32_t now) const {
