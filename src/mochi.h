@@ -697,7 +697,7 @@ class Mochi {
       }
     }
 
-    if (carA > 0.01f) {                                           // car front: cabin + body as one silhouette, grille smile, plate "TACHI"
+    if (carA > 0.01f) {                                           // car front: cabin + body as one silhouette, grille smile, blank plate
       float bw = 118, bh = 56 * sq, by = ly + 6 + (56 - bh);
       int bx0 = (int)(cx - bw / 2), bx1 = (int)(cx + bw / 2), byt = (int)(by - bh / 2 - 6), byb = (int)(by + bh / 2 + 6);
       int cb0 = cx - 40, cb1 = cx + 40, cbt = (int)(by - bh / 2 - 26), cbb = (int)(by - bh / 2 + 8);
@@ -712,15 +712,6 @@ class Mochi {
       int py = (int)(by + bh / 2 - 1);
       g->fillRoundRect(cx - 29, py - 1, 58, 19, 4, fc(120, 130, 150, 255 * carA));
       g->fillRoundRect(cx - 28, py, 56, 17, 3, fc(228, 233, 243, 255 * carA));
-      uint16_t ink = fc(30, 45, 90, 255 * carA);
-      for (int i = 0; i < 5; i++) {                                // tiny vector TACHI on the plate
-        const char *w = "TACHI"; float pts[16][2];
-        for (int s = 0; s < letterStrokes(w[i]); s++) {
-          int c = letterStroke(w[i], s, pts);
-          for (int k = 0; k + 1 < c; k++)
-            g->drawLine((int16_t)(cx - 22 + i * 9.5f + pts[k][0] * 7), (int16_t)(py + 4 + pts[k][1] * 9), (int16_t)(cx - 22 + i * 9.5f + pts[k + 1][0] * 7), (int16_t)(py + 4 + pts[k + 1][1] * 9), ink);
-        }
-      }
     }
 
     // lamps -> eyes -> thin line -> happy arches -> eyes again, face moving up for the title and back down
