@@ -35,8 +35,22 @@
 #define UI_FPS       30       // target frame rate of the Face page
 #define LCD_SPI_HZ   40000000 // panel SPI clock (ST7789 handles up to ~60 MHz; lower it if the picture shows noise)
 
+// Extra car-data pages: shown only if the car answers them (discovered at connect). Set 0 to hide a page.
+#define SHOW_PAGE_BATTERY   1
+#define SHOW_PAGE_INTAKE    1   // intake air temperature
+#define SHOW_PAGE_OUTSIDE   1   // outside air temperature
+#define SHOW_PAGE_FUEL      1
+#define SHOW_PAGE_THROTTLE  1
+#define SHOW_PAGE_LOAD      1   // calculated engine load
+// Battery colours: engine off (RPM ~0) yellow below BATT_LOW_OFF_V; engine running yellow below BATT_LOW_RUN_V; red below BATT_CRIT_V
+#define BATT_LOW_OFF_V   12.0f
+#define BATT_LOW_RUN_V   13.2f
+#define BATT_CRIT_V      11.5f
+#define FUEL_LOW_PCT     15
+#define GAUGE_FRESH_MS   40000   // an extra gauge older than this is shown as --
+
 // Timing
-#define SLOW_EVERY         6      // poll coolant/oil once every N fast (speed+RPM) polls
+#define SLOW_EVERY         4      // one background poll (coolant / oil / extra gauges) every N speed+RPM polls
 #define STALE_AFTER_MS     5000   // no valid data this long -> sleepy
 #define RECONNECT_WAIT_MS  3000
 #define CMD_TIMEOUT_MS     1000   // wait for one OBD reply (the UI keeps animating meanwhile)

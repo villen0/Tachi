@@ -32,11 +32,11 @@ adapter and shows a face whose mood follows the engine.
   calm (cruising >= 55 mph with RPM < 2600: half-closed eyes, small cyan smile, teal LED),
   happy (everything else). Eyes blink.
 - RGB LED color follows the mood.
-- Separate pages, cycled by a short press of the BOOT button: Face > MPH > RPM > Coolant > Oil temp > Debug > Face.
-  The Debug page shows link state, request rate, value ages and the last raw adapter replies, so problems can be diagnosed in the car without a computer.
-  The face page shows only the face; each data page is one big number. The LED shows the mood on every page.
-  Oil temp uses PID 015C. It is not known whether the 2025 Mazda 3 answers it: until a reply is parsed the page
-  shows `--` / `no reply` (retrying every 8 s after 5 failures) and the Debug page shows the last raw oil reply.
+- Separate pages, cycled by a short press of the BOOT button through the *visible* pages: Face, MPH, RPM, Coolant, then (only if the
+  car answers them) Battery, Intake air, Outside air, Fuel, Throttle, Engine load, Oil temp (only if it ever answered), and Debug last.
+  At connect the board reads which standard values the engine computer supports (bitmaps 0100/0120/0140/0160, shown as `sup:` on the Debug page).
+  Battery uses the adapter's own voltage reading (`ATRV`, works with the engine off), with the car's control-module voltage as fallback.
+  Hide any page with the `SHOW_PAGE_*` switches in `config.h`. The face page shows only the character; the LED shows the mood on every page.
 - Temperatures are shown in deg F (`TEMP_UNIT_F` in `config.h`, set 0 for deg C). Mood thresholds stay in deg C.
 - Long press (~1.5 s) toggles demo mode. One summary line per second goes to the serial monitor.
 - Status screens: scanning, connecting, not found, link lost.
@@ -44,7 +44,7 @@ adapter and shows a face whose mood follows the engine.
   during scans.
 
 - microSD logging: with a card in the TF slot, writes `tachi_000.csv`, `tachi_001.csv`, ... (one file per boot)
-  with `ms,rpm,mph,coolant_f,oil_f` (deg C if `TEMP_UNIT_F` is 0) once per second while data is valid. No card = no logging, no error. Use a
+  with `ms,rpm,mph,coolant_f,oil_f,batt_v,intake_f,ambient_f,fuel_pct,throttle_pct,load_pct` (deg C if `TEMP_UNIT_F` is 0; blank when unknown) once per second while data is valid. No card = no logging, no error. Use a
   FAT32 card. SD pins (CLK 14, CMD 15, D0 16, 1-bit mode) come from the same unconfirmed pin map.
 
 Not included yet: sound, motion sensing, Wi-Fi.

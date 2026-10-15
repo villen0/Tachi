@@ -7,6 +7,7 @@
 #include <SD_MMC.h>
 #include "config.h"
 #include "mochi.h"
+#include "obd_parse.h"
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -38,6 +39,7 @@ int rpm = 0, mph = 0, coolantC = 0, oilC = 0;
 uint32_t tsRpm = 0, tsMph = 0, tsCool = 0, tsOil = 0;   // when each value was last updated by the car
 #define FAST_FRESH_MS 3000   // speed / RPM older than this are treated as unknown (shown as --, counted as 0)
 #define SLOW_FRESH_MS 10000  // coolant / oil are polled less often
+static bool fresh(uint32_t ts, uint32_t maxAge) { return ts != 0 && millis() - ts < maxAge; }
 bool oilValid = false;       // oil temp PID (015C) answered at least once; many cars do not support it
 static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP we only retry occasionally
 
@@ -51,8 +53,42 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_DEBUG, PAGE_COUNT };
-volatile int page = PAGE_FACE;       // BOOT short press cycles: Face > MPH > RPM > Coolant > Oil temp > Debug
+enum Page { PAGE_FACE, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_COUNT };
+volatile int page = PAGE_FACE;       // BOOT short press cycles through the visible pages (see pageVisible)
+
+// ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load) ----------
+// Which of them the car answers is read at connect time (supported-PID bitmaps) and only those get a page.
+enum Gauge { G_BATT, G_INTAKE, G_AMBIENT, G_FUEL, G_THROTTLE, G_LOAD, G_COUNT };   // same order as PAGE_BATT..PAGE_LOAD
+struct GaugeDef { const char *title; uint8_t pid; bool show; };                    // pid 0 = adapter voltage (ATRV)
+static const GaugeDef GAUGES[G_COUNT] = {
+  {"BATTERY", 0, SHOW_PAGE_BATTERY}, {"INTAKE AIR", 0x0F, SHOW_PAGE_INTAKE}, {"OUTSIDE", 0x46, SHOW_PAGE_OUTSIDE},
+  {"FUEL", 0x2F, SHOW_PAGE_FUEL}, {"THROTTLE", 0x11, SHOW_PAGE_THROTTLE}, {"ENGINE LOAD", 0x04, SHOW_PAGE_LOAD}};
+static float gVal[G_COUNT];                       // battery V, temps in deg C, others in percent
+static uint32_t gTs[G_COUNT], gLastTry[G_COUNT];
+static uint8_t gFails[G_COUNT];
+static bool gSupported[G_COUNT], gOk[G_COUNT];    // gOk: answered at least once
+static obd::SupportSet sup;                       // supported PIDs of the engine computer
+static char supText[2][28] = {"sup: (not read yet)", ""};
+
+static void resetGauges() {
+  for (int g = 0; g < G_COUNT; g++) { gVal[g] = 0; gTs[g] = gLastTry[g] = 0; gFails[g] = 0; gSupported[g] = gOk[g] = false; }
+}
+static bool gaugeVisible(int g) { return GAUGES[g].show && gSupported[g] && (gOk[g] || gFails[g] < 5); }
+static bool pageVisible(int p) {
+  if (p >= PAGE_BATT && p <= PAGE_LOAD) return gaugeVisible(p - PAGE_BATT);
+  if (p == PAGE_OIL) return oilValid;               // the Mazda says NO DATA; only shown if it ever answers
+  return true;
+}
+static int nextPage(int p, int n) {
+  for (int k = 0; k < n; k++) {
+    int q = p;
+    for (int i = 0; i < PAGE_COUNT; i++) { q = (q + 1) % PAGE_COUNT; if (pageVisible(q)) break; }
+    p = q;
+  }
+  return p;
+}
+static int visibleCount() { int n = 0; for (int p = 0; p < PAGE_COUNT; p++) if (pageVisible(p)) n++; return n; }
+static int visibleIndex(int p) { int n = 0; for (int q = 0; q < p; q++) if (pageVisible(q)) n++; return n; }
 
 // ---------- UI state (shared by loop() and the wait loops inside sendCmd) ----------
 static int lastMood = -1;
@@ -117,13 +153,9 @@ int hexAt(const String &s, int pos) {
   return (int)strtol(s.substring(pos, pos + 2).c_str(), nullptr, 16);
 }
 
+// tag is "41" + PID in hex, e.g. "410C". Shared, unit-tested logic lives in obd_parse.h.
 bool parsePid(const String &r, const char *tag, int nBytes, int *out) {
-  int i = r.indexOf(tag);
-  if (i < 0) return false;
-  int p = i + strlen(tag);
-  if ((int)r.length() < p + 2 * nBytes) return false;
-  for (int k = 0; k < nBytes; k++) out[k] = hexAt(r, p + 2 * k);
-  return true;
+  return obd::dataBytes(r.c_str(), (int)strtol(tag + 2, nullptr, 16), nBytes, out);
 }
 
 // A two-PID reply is normally ONE message: "41 0C aa bb 0D cc" (the 41 appears once), but some
@@ -175,7 +207,7 @@ String obdQuery(const char *pid) {
 #define USE_COMBINED_PID 0
 static bool combinedOk = USE_COMBINED_PID;
 static uint8_t combinedFails = 0;
-static uint32_t pollCount = 0;   // completed requests, for the serial rate counter
+static uint32_t pollCount = 0;   // completed speed+RPM cycles (background polls are not counted), for the req/s figure
 
 bool pollRpm()   { int b[2]; if (parsePid(obdQuery("010C"), "410C", 2, b)) { rpm = (b[0] * 256 + b[1]) / 4; tsRpm = lastValidMs = millis(); return true; } return false; }
 bool pollSpeed() { int b[2]; if (parsePid(obdQuery("010D"), "410D", 1, b)) { mph = (int)(b[0] * 0.621f + 0.5f); tsMph = lastValidMs = millis(); return true; } return false; }
@@ -199,10 +231,35 @@ void pollFast() {
   }
 }
 
-void pollSlow(int which) {   // 0 coolant, 1 oil
-  pollCount++;
+// Items polled in the background: 0 coolant, 1 oil, 2+g extra gauge g.
+static void pollGauge(int g) {
+  gLastTry[g] = millis();
+  bool ok = false, carData = true;
   int b[2];
-  if (which == 0) {
+  if (g == G_BATT) {
+    float v = 0;
+    String r = sendCmd("ATRV");                       // the adapter measures the battery itself: works with the engine off
+    if (obd::parseAtrv(r.c_str(), &v)) { gVal[g] = v; ok = true; carData = false; }
+    else if (sup.supported(0x42)) {                   // fallback: control module voltage from the car
+      String r2 = obdQuery("0142");
+      if (obd::dataBytes(r2.c_str(), 0x42, 2, b)) { gVal[g] = obd::moduleVolts(b[0], b[1]); ok = true; }
+    }
+  } else {
+    char cmd[8]; snprintf(cmd, sizeof(cmd), "01%02X", GAUGES[g].pid);
+    String r = obdQuery(cmd);
+    if (obd::dataBytes(r.c_str(), GAUGES[g].pid, 1, b)) {
+      gVal[g] = (g == G_INTAKE || g == G_AMBIENT) ? (float)obd::tempC(b[0]) : obd::percent(b[0]);
+      ok = true;
+    }
+  }
+  if (ok) { gOk[g] = true; gFails[g] = 0; gTs[g] = millis(); if (carData) lastValidMs = millis(); }
+  else if (gFails[g] < 255) gFails[g]++;
+}
+
+static void pollItem(int it) {
+  if (it >= 2) { pollGauge(it - 2); return; }
+  int b[2];
+  if (it == 0) {
     if (parsePid(obdQuery("0105"), "4105", 1, b)) { coolantC = b[0] - 40; tsCool = lastValidMs = millis(); }
   } else {
     String r = obdQuery("015C");
@@ -220,6 +277,65 @@ bool oilDue() {
   return millis() - lastOilTry >= 8000;   // no answer so far: keep trying, but only every 8 s
 }
 
+// focus = the value of the page on screen (poll it often); otherwise background rotation (poll it only when due).
+static bool itemDue(int it, bool focus) {
+  if (it == 0) return true;
+  if (it == 1) return oilDue();
+  int g = it - 2;
+  if (!gSupported[g]) return false;
+  uint32_t now = millis();
+  if (gFails[g] >= 5) return now - gLastTry[g] >= 8000;                       // not answering: retry rarely
+  return focus || now - gLastTry[g] >= (g == G_BATT ? 4000u : 1500u);
+}
+static int focusItem() {
+  int p = page;
+  if (p == PAGE_COOLANT) return 0;
+  if (p == PAGE_OIL) return oilValid ? 1 : -1;
+  if (p >= PAGE_BATT && p <= PAGE_LOAD && gaugeVisible(p - PAGE_BATT)) return 2 + (p - PAGE_BATT);
+  return -1;
+}
+// Background rotation: coolant every second tick (the mood depends on it), the rest take turns.
+static void pollSlowNext() {
+  static bool coolTurn = true;
+  static int cursor = 0;                                   // over oil + gauges
+  if (coolTurn) { coolTurn = false; pollItem(0); return; }
+  coolTurn = true;
+  const int total = 1 + G_COUNT;
+  for (int i = 0; i < total; i++) {
+    int k = (cursor + i) % total;
+    if (itemDue(1 + k, false)) { cursor = (k + 1) % total; pollItem(1 + k); return; }
+  }
+}
+
+// Reads which standard values the engine computer supports (bitmaps 0100/0120/0140/0160), decides which
+// extra pages exist, and prepares the compact list shown on the Debug page.
+static void discoverPids(String r0) {
+  sup.clear();
+  for (int g = 0; g < G_COUNT; g++) gSupported[g] = gOk[g] = false;
+  uint32_t m = 0;
+  for (int attempt = 0; attempt < 3 && !obd::parseBitmap(r0.c_str(), 0x00, &m); attempt++) { delay(700); r0 = sendCmd("0100", 4000); }
+  if (obd::parseBitmap(r0.c_str(), 0x00, &m)) sup.set(0x00, m);
+  for (int base = 0x20; base <= 0x60; base += 0x20) {
+    if (!sup.supported(base)) break;                       // PID base set = the next block exists
+    char cmd[8]; snprintf(cmd, sizeof(cmd), "01%02X", base);
+    String r = sendCmd(cmd, INIT_TIMEOUT_MS);
+    if (obd::parseBitmap(r.c_str(), base, &m)) sup.set(base, m); else break;
+  }
+  for (int g = 0; g < G_COUNT; g++) gSupported[g] = (GAUGES[g].pid == 0) ? true : sup.supported(GAUGES[g].pid);   // battery: ATRV is tried
+  static const uint8_t listed[] = {0x04, 0x05, 0x0C, 0x0D, 0x0F, 0x11, 0x2F, 0x42, 0x46, 0x5C};
+  snprintf(supText[0], sizeof(supText[0]), "sup:%d", sup.count());
+  supText[1][0] = 0;
+  int n0 = 0;
+  for (uint8_t p : listed) {
+    if (!sup.supported(p)) continue;
+    char *dst = (n0++ < 5) ? supText[0] : supText[1];
+    size_t len = strlen(dst);
+    snprintf(dst + len, sizeof(supText[0]) - len, " %02X", p);
+  }
+  if (!sup.have[0]) snprintf(supText[0], sizeof(supText[0]), "sup: none read");
+  Serial.printf("discovery: %s%s%s\n", supText[0], supText[1][0] ? " |" : "", supText[1]);
+}
+
 // Fake data that sweeps through every mood: idle, driving, then a slow overheat.
 void demoStep() {
   float t = millis() / 1000.0f;
@@ -228,6 +344,15 @@ void demoStep() {
   float cyc = fmodf(t, 60.0f);                       // 60 s loop
   coolantC = 88 + (int)(cyc < 40 ? cyc * 0.2f : 8 + (cyc - 40) * 1.0f);   // 88 -> 96 -> 116
   oilC = 80 + (int)(cyc * 0.4f); oilValid = true;                           // 80 -> 104
+  float thr = (rpm - 800) / 3400.0f * 100.0f; if (thr < 0) thr = 0; if (thr > 100) thr = 100;
+  uint32_t nowMs = millis();
+  for (int g = 0; g < G_COUNT; g++) { gSupported[g] = gOk[g] = true; gTs[g] = nowMs; gFails[g] = 0; }
+  gVal[G_BATT] = rpm > 600 ? 14.1f + 0.15f * sinf(t) : 12.4f;
+  gVal[G_INTAKE] = 28 + 14 * (0.5f + 0.5f * sinf(t * 0.2f));
+  gVal[G_AMBIENT] = 21;
+  gVal[G_FUEL] = 100 - fmodf(t, 200.0f) * 0.4f;
+  gVal[G_THROTTLE] = thr;
+  gVal[G_LOAD] = 20 + thr * 0.6f;
   if (fmodf(t, 75.0f) <= 65.0f) tsRpm = tsMph = tsCool = tsOil = lastValidMs = millis();   // else: 10 s "engine off" gap
 }
 
@@ -275,7 +400,8 @@ void sdInit() {
   }
   logFile = SD_MMC.open(name, FILE_WRITE);
   if (!logFile) { Serial.println("SD: cannot create log file"); return; }
-  logFile.println(TEMP_UNIT_F ? "ms,rpm,mph,coolant_f,oil_f" : "ms,rpm,mph,coolant_c,oil_c");
+  logFile.println(TEMP_UNIT_F ? "ms,rpm,mph,coolant_f,oil_f,batt_v,intake_f,ambient_f,fuel_pct,throttle_pct,load_pct"
+                              : "ms,rpm,mph,coolant_c,oil_c,batt_v,intake_c,ambient_c,fuel_pct,throttle_pct,load_pct");
   logFile.flush();
   sdOk = true;
   Serial.printf("SD: logging to %s\n", name);
@@ -288,8 +414,18 @@ void sdLogTick() {
   uint32_t now = millis();
   if (now - lastLog < SD_LOG_INTERVAL_MS || now - lastValidMs > STALE_AFTER_MS) return;
   lastLog = now;
-  if (oilValid) logFile.printf("%lu,%d,%d,%d,%d\n", (unsigned long)now, rpm, mph, tempOut(coolantC), tempOut(oilC));
-  else          logFile.printf("%lu,%d,%d,%d,\n", (unsigned long)now, rpm, mph, tempOut(coolantC));
+  char row[160];
+  int len = snprintf(row, sizeof(row), "%lu,%d,%d,%d,", (unsigned long)now, rpm, mph, tempOut(coolantC));
+  if (oilValid) len += snprintf(row + len, sizeof(row) - len, "%d", tempOut(oilC));
+  for (int g = 0; g < G_COUNT; g++) {            // blank when unknown
+    row[len++] = ',';
+    if (!gOk[g] || !fresh(gTs[g], 60000)) continue;
+    if (g == G_BATT) len += snprintf(row + len, sizeof(row) - len, "%.1f", gVal[g]);
+    else if (g == G_INTAKE || g == G_AMBIENT) len += snprintf(row + len, sizeof(row) - len, "%d", tempOut((int)lroundf(gVal[g])));
+    else len += snprintf(row + len, sizeof(row) - len, "%d", (int)(gVal[g] + 0.5f));
+  }
+  row[len++] = '\n'; row[len] = 0;
+  logFile.print(row);
   if (millis() - lastFlush >= 5000) { lastFlush = millis(); uint32_t t = millis(); logFile.flush(); sdWriteMs = millis() - t; }
 }
 
@@ -398,27 +534,54 @@ void drawMouthFor(Mood m) {
 
 // Full-screen data page: title, one big number, unit. Mood is still shown by the LED, and the
 // coolant/oil numbers turn yellow/red at the uneasy/worried thresholds.
-static bool fresh(uint32_t ts, uint32_t maxAge) { return ts != 0 && millis() - ts < maxAge; }
 
-void pageInfo(int p, int *val, bool *valid, const char **title, const char **unit, uint16_t *color) {
+// One dot per visible page, the current one white. Spacing shrinks when there are many pages.
+static void drawPageDots(int y) {
+  int n = visibleCount(), cur = visibleIndex(page);
+  int step = n > 9 ? 12 : 16;
+  gfx->fillRect(0, y - 6, LCD_W, 12, BLACK);
+  for (int i = 0; i < n; i++)
+    gfx->fillCircle(LCD_W / 2 + (int)((i - (n - 1) / 2.0f) * step), y, 4, i == cur ? WHITE : 0x39E7);
+}
+
+// Text, colour and freshness for a data page. big = the number as shown ("54", "12.6").
+void pageInfo(int p, char *big, size_t n, bool *valid, const char **title, const char **unit, uint16_t *color) {
   *valid = true; *color = WHITE;
   switch (p) {
-    case PAGE_MPH:     *val = mph;      *title = "SPEED";     *unit = "MPH"; *valid = fresh(tsMph, FAST_FRESH_MS); break;
-    case PAGE_RPM:     *val = rpm;      *title = "ENGINE";    *unit = "RPM"; *valid = fresh(tsRpm, FAST_FRESH_MS); break;
-    case PAGE_COOLANT: *val = tempOut(coolantC); *title = "COOLANT";   *unit = tempUnit(); *valid = fresh(tsCool, SLOW_FRESH_MS);
+    case PAGE_MPH:     snprintf(big, n, "%d", mph); *title = "SPEED"; *unit = "MPH"; *valid = fresh(tsMph, FAST_FRESH_MS); break;
+    case PAGE_RPM:     snprintf(big, n, "%d", rpm); *title = "ENGINE"; *unit = "RPM"; *valid = fresh(tsRpm, FAST_FRESH_MS); break;
+    case PAGE_COOLANT: snprintf(big, n, "%d", tempOut(coolantC)); *title = "COOLANT"; *unit = tempUnit(); *valid = fresh(tsCool, SLOW_FRESH_MS);
       if (coolantC >= TEMP_WORRIED_C) *color = RED; else if (coolantC >= TEMP_UNEASY_C) *color = YELLOW; break;
-    default:           *val = tempOut(oilC); *title = "OIL TEMP";  *unit = oilUnsupported() ? "no reply" : tempUnit(); *valid = oilValid && fresh(tsOil, OIL_FRESH_MS); break;
+    case PAGE_OIL:     snprintf(big, n, "%d", tempOut(oilC)); *title = "OIL TEMP"; *unit = tempUnit(); *valid = oilValid && fresh(tsOil, OIL_FRESH_MS); break;
+    default: {         // extra gauges
+      int g = p - PAGE_BATT;
+      if (g < 0 || g >= G_COUNT) { snprintf(big, n, "--"); *title = "?"; *unit = ""; *valid = false; break; }
+      *title = GAUGES[g].title;
+      *valid = gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS);
+      float v = gVal[g];
+      switch (g) {
+        case G_BATT: {
+          snprintf(big, n, "%.1f", v); *unit = "VOLTS";
+          bool running = rpm > 600;
+          if (v < BATT_CRIT_V) *color = RED; else if (v < (running ? BATT_LOW_RUN_V : BATT_LOW_OFF_V)) *color = YELLOW;
+          break;
+        }
+        case G_INTAKE: case G_AMBIENT: snprintf(big, n, "%d", tempOut((int)lroundf(v))); *unit = tempUnit(); break;
+        case G_FUEL: snprintf(big, n, "%d", (int)(v + 0.5f)); *unit = "PERCENT"; if (v < FUEL_LOW_PCT) *color = YELLOW; if (v < FUEL_LOW_PCT / 2) *color = RED; break;
+        default: snprintf(big, n, "%d", (int)(v + 0.5f)); *unit = "PERCENT"; break;
+      }
+    }
   }
 }
 
 // full = also draw the static parts (title, unit, page dots); otherwise only the number is redrawn.
 void drawDataPage(bool stale, bool full) {
-  int val; bool valid; const char *title, *unit; uint16_t color;
-  pageInfo(page, &val, &valid, &title, &unit, &color);
+  char big[16]; bool valid; const char *title, *unit; uint16_t color;
+  pageInfo(page, big, sizeof(big), &valid, &title, &unit, &color);
   int16_t x1, y1; uint16_t w, h;
   if (full) {
     gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
-    gfx->setTextSize(3);
+    gfx->setTextSize(strlen(title) > 9 ? 2 : 3);      // long titles ("ENGINE LOAD") need the smaller size
     gfx->setTextColor(0x7BEF);
     gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
     gfx->setCursor((LCD_W - w) / 2, 40);
@@ -427,12 +590,9 @@ void drawDataPage(bool stale, bool full) {
     gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
     gfx->setCursor((LCD_W - w) / 2, 230);
     gfx->print(unit);
-    for (int i = 0; i < PAGE_COUNT; i++)   // page dots at the bottom
-      gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16 + 8, 300, 4, i == page ? WHITE : 0x39E7);
+    drawPageDots(300);
   }
-  char big[16];
   if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
-  else snprintf(big, sizeof(big), "%d", val);
   gfx->fillRect(0, 100, LCD_W, 110, BLACK);   // number area only
   gfx->setTextSize(strlen(big) <= 3 ? 8 : 6);
   gfx->setTextColor(color);
@@ -454,13 +614,17 @@ void drawDebugPage() {
   gfx->setCursor(4, 30);  gfx->printf("link:%s f:%s c:%s %lu req/s", linked ? "OK" : "--", useFilter ? "Y" : "N", useCount ? "Y" : "N", (unsigned long)reqPerSec);
   gfx->setCursor(4, 42);  gfx->printf("mph:%d  age:%ldms", mph, tsMph ? (long)(now - tsMph) : -1L);
   gfx->setCursor(4, 54);  gfx->printf("rpm:%d  age:%ldms", rpm, tsRpm ? (long)(now - tsRpm) : -1L);
-  gfx->setCursor(4, 66);  gfx->printf("cool:%d oil:%d %s", tempOut(coolantC), oilValid ? tempOut(oilC) : -999, TEMP_UNIT_F ? "F" : "C");
+  gfx->setCursor(4, 66);  gfx->printf("cool:%d oil:%d %s b:%.1fV", tempOut(coolantC), oilValid ? tempOut(oilC) : -999, TEMP_UNIT_F ? "F" : "C", gOk[G_BATT] ? gVal[G_BATT] : 0.0f);
   gfx->setTextColor(0x7BEF);
   gfx->setCursor(4, 78);  gfx->printf("cmd:%lums wr:%lums gap:%lums", (unsigned long)lastCmdMs, (unsigned long)lastWriteMs, (unsigned long)maxTickGapMs);
   gfx->setCursor(4, 90);  gfx->printf("sd:%s %lums", sdOk ? "on" : "off", (unsigned long)sdWriteMs);
   gfx->setCursor(4, 102); gfx->printf("oil: %s", oilReply);
   gfx->setCursor(4, 114); gfx->printf("face:%lufps %lums req:%lu", (unsigned long)faceFps, (unsigned long)faceFrameMs, (unsigned long)reqPerSecFace);
-  int y = 132;
+  gfx->setTextColor(0x07FF);
+  gfx->setCursor(4, 126); gfx->print(supText[0]);
+  gfx->setCursor(4, 137); gfx->print(supText[1]);
+  gfx->setTextColor(0x7BEF);
+  int y = 152;
   for (int k = 0; k < 5; k++) {   // oldest first
     DbgEntry &d = dbg[(dbgHead + k) % 5];
     if (!d.cmd[0]) continue;
@@ -471,8 +635,7 @@ void drawDebugPage() {
     }
     y += 4;
   }
-  for (int i = 0; i < PAGE_COUNT; i++)
-    gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16 + 8, 308, 4, i == page ? WHITE : 0x39E7);
+  drawPageDots(308);
 }
 
 // ---------- Input ----------
@@ -500,6 +663,7 @@ void handleButton() {
     demo = !demo;
     Serial.printf("demo mode %s\n", demo ? "ON" : "OFF");
     lastValidMs = 0;
+    if (!demo) { resetGauges(); oilValid = false; oilFails = 0; }   // drop the made-up demo values and pages
     forceDraw = true;
   }
   noInterrupts();
@@ -507,7 +671,7 @@ void handleButton() {
   btnShortPresses = 0;
   interrupts();
   if (n) {
-    page = (page + n) % PAGE_COUNT;
+    page = nextPage(page, n);
     forceDraw = true;
   }
 }
@@ -526,11 +690,6 @@ static mochi::Expr moodExpr(Mood m) {
     case CALM:    return mochi::E_SQUINT;
     default:      return mochi::E_DEFAULT;
   }
-}
-
-static void drawPageDots(int y) {
-  for (int i = 0; i < PAGE_COUNT; i++)
-    gfx->fillCircle(LCD_W / 2 + (i - PAGE_COUNT / 2) * 16 + 8, y, 4, i == page ? WHITE : 0x39E7);
 }
 
 // One animation frame. Demo mode shows every expression in turn (with its name) for checking at a desk.
@@ -587,6 +746,7 @@ void uiTick() {
   lastTick = t;
   if (t - gapWindowStart >= 5000) { maxTickGapMs = gapMax; gapMax = 0; gapWindowStart = t; }
   handleButton();
+  if (!pageVisible(page)) { page = nextPage(page, 1); forceDraw = true; }   // the page on screen vanished (e.g. demo ended)
 
   uint32_t now = millis();
   // Values the car has stopped answering must not linger on screen or drive the mood.
@@ -629,16 +789,15 @@ void uiTick() {
     static uint32_t lastDbgDraw = 0;
     if (forceDraw || drawnPage != PAGE_DEBUG || now - lastDbgDraw >= 500) { drawDebugPage(); lastDbgDraw = now; }
   } else {
-    int val; bool valid; const char *tt, *u; uint16_t c;
-    pageInfo(page, &val, &valid, &tt, &u, &c);
-    bool stale = (m == SLEEPY);
-    static bool shownOilUnsup = false;
-    bool oilUns = (page == PAGE_OIL) && oilUnsupported();
-    bool full = forceDraw || drawnPage != page || oilUns != shownOilUnsup;
-    shownOilUnsup = oilUns;
-    if (full || val != shownVal || valid != shownValid || stale != shownStale) {
+    char big[16]; bool valid; const char *tt, *u; uint16_t c;
+    pageInfo(page, big, sizeof(big), &valid, &tt, &u, &c);
+    bool stale = (m == SLEEPY) && page != PAGE_BATT;   // battery comes from the adapter, readable with the engine off
+    static char shownBig[16]; static uint16_t shownColor = 0;
+    bool full = forceDraw || drawnPage != page;
+    if (full || strcmp(big, shownBig) != 0 || valid != shownValid || stale != shownStale || c != shownColor) {
       drawDataPage(stale, full);
-      shownVal = val; shownValid = valid; shownStale = stale;
+      strncpy(shownBig, big, sizeof(shownBig) - 1); shownBig[sizeof(shownBig) - 1] = 0;
+      shownValid = valid; shownStale = stale; shownColor = c;
     }
   }
   drawnPage = page;
@@ -687,7 +846,7 @@ bool connectAdapter() {
 
   const char *init[] = {"ATZ", "ATE0", "ATL0", "ATH0", "ATS0", "ATSP0"};
   for (auto c : init) sendCmd(c, INIT_TIMEOUT_MS);
-  sendCmd("0100", 8000);                      // let the adapter find the car's protocol now (can take seconds)
+  discoverPids(sendCmd("0100", 8000));        // finds the car's protocol (can take seconds), then reads which values it supports
   useFilter = useCount = false;
 #if USE_ENGINE_FILTER
   String f = sendCmd("ATCRA7E8", INIT_TIMEOUT_MS);   // only listen to the engine computer
@@ -731,7 +890,7 @@ void setup() {
 }
 
 void loop() {
-  static int cycle = 0, slowIdx = 0;
+  static int cycle = 0;
 
   if (demo) {
     if (client && client->isConnected()) client->disconnect();
@@ -763,12 +922,12 @@ void loop() {
   // Back-to-back polling: next request goes out as soon as the previous reply is in.
   // Every SLOW_EVERY-th cycle one slow value (coolant, then oil) is polled instead of waiting a full round.
   pollFast();
-  if (++cycle >= SLOW_EVERY) {
-    cycle = 0;
-    if (slowIdx == 1 && !oilDue()) slowIdx = 0;
-    pollSlow(slowIdx);
-    slowIdx = (slowIdx + 1) % 2;
-  }
+  static uint32_t cyc = 0, lastDiscTry = 0;
+  cyc++;
+  int focus = focusItem();                                  // the value on screen stays live: polled every other cycle
+  if (focus >= 0 && (cyc & 1) && itemDue(focus, true)) pollItem(focus);
+  if (++cycle >= SLOW_EVERY) { cycle = 0; pollSlowNext(); } // everything else takes turns in the background
+  if (!sup.have[0] && millis() - lastDiscTry > 15000) { lastDiscTry = millis(); discoverPids(sendCmd("0100", 4000)); }   // car was not ready: ask again
   static uint32_t lastPrint = 0;
   if (millis() - lastPrint >= 1000) {   // one summary line per second on the serial monitor
     lastPrint = millis();
