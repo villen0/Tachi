@@ -32,6 +32,7 @@
 // Character (Mochi-style animated eyes on the Face page, see docs/mochi-plan.md)
 #define MOCHI_FACE   1        // 1 = animated character, 0 = the old simple face
 #define MOCHI_INTRO  1        // play the welcome animation at power-on
+#define INTRO_FORCE  0        // welcome type: 0 = auto (full on fresh power-up, short after a restart), 1 = always full, 2 = always short
 #define UI_FPS       30       // target frame rate of the Face page
 #define LCD_SPI_HZ   40000000 // panel SPI clock (ST7789 handles up to ~60 MHz; lower it if the picture shows noise)
 

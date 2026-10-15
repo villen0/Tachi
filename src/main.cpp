@@ -5,6 +5,7 @@
 #include <Arduino_GFX_Library.h>
 #include <Adafruit_NeoPixel.h>
 #include <SD_MMC.h>
+#include <esp_system.h>
 #include "config.h"
 #include "mochi.h"
 #include "obd_parse.h"
@@ -23,6 +24,27 @@ Arduino_DataBus *bus = new Arduino_ESP32SPI(PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK
 Arduino_GFX *gfx = new Arduino_ST7789(bus, PIN_LCD_RST, 0 /*rotation*/, true /*IPS*/, LCD_W, LCD_H,
                                       34, 0, 34, 0 /*col/row offsets for 172x320 panel*/);
 Adafruit_NeoPixel led(1, PIN_LED, NEO_GRB + NEO_KHZ800);
+
+// ---------- Boot type (welcome animation: full on a fresh power-up, short after a quick restart) ----------
+// The car's USB power can dip while the engine cranks and restart the board; replaying the long welcome each time would
+// be annoying. No clock is available, so we use the reset reason plus a cookie in RAM that survives a restart.
+static RTC_NOINIT_ATTR uint32_t rtcCookie;
+static const uint32_t RTC_COOKIE = 0x7AC41001;
+static bool bootQuickRestart = false;
+static char bootText[24] = "boot: ?";
+static void detectBoot() {
+  esp_reset_reason_t rr = esp_reset_reason();
+  bool cookie = (rtcCookie == RTC_COOKIE);
+  bootQuickRestart = (rr != ESP_RST_POWERON) || cookie;
+#if INTRO_FORCE == 1
+  bootQuickRestart = false;
+#elif INTRO_FORCE == 2
+  bootQuickRestart = true;
+#endif
+  rtcCookie = RTC_COOKIE;
+  snprintf(bootText, sizeof(bootText), "boot:%s r%d%s", bootQuickRestart ? "restart" : "power-on", (int)rr, cookie ? " k" : "");
+  Serial.printf("%s -> %s welcome\n", bootText, bootQuickRestart ? "short" : "full");
+}
 
 // ---------- BLE / OBD state ----------
 NimBLEClient *client = nullptr;
@@ -623,8 +645,10 @@ void drawDebugPage() {
   gfx->setTextColor(0x07FF);
   gfx->setCursor(4, 126); gfx->print(supText[0]);
   gfx->setCursor(4, 137); gfx->print(supText[1]);
+  gfx->setTextColor(0xFFE0);
+  gfx->setCursor(4, 148); gfx->print(bootText);
   gfx->setTextColor(0x7BEF);
-  int y = 152;
+  int y = 162;
   for (int k = 0; k < 5; k++) {   // oldest first
     DbgEntry &d = dbg[(dbgHead + k) % 5];
     if (!d.cmd[0]) continue;
@@ -755,6 +779,16 @@ void uiTick() {
   Mood m = computeMood();
   bool moodChanged = (int)m != lastMood;
   if (moodChanged || forceDraw) setLedMood(m);   // LED follows the mood on every page
+#if MOCHI_FACE && MOCHI_INTRO
+  {                                              // ...except during the welcome gauge, when it follows the needle
+    static bool ledFromIntro = false; static uint8_t lr = 0, lg = 0, lb = 0;
+    uint8_t r, g, b;
+    if (character.introLed(&r, &g, &b)) {
+      if (!ledFromIntro || r != lr || g != lg || b != lb) { setLed(r, g, b); lr = r; lg = g; lb = b; }
+      ledFromIntro = true;
+    } else if (ledFromIntro) { ledFromIntro = false; setLedMood(m); }
+  }
+#endif
 
   // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
   static bool statusShown = false; static uint32_t shownStatusVer = 0;
@@ -878,8 +912,9 @@ void setup() {
   canvas = new Arduino_Canvas(mochi::W, mochi::H, gfx, 0, FACE_Y);
   if (!canvas->begin(GFX_SKIP_OUTPUT_BEGIN)) Serial.println("canvas allocation failed");
   character.begin(esp_random());
+  detectBoot();
 #if MOCHI_FACE && MOCHI_INTRO
-  character.startIntro(millis());
+  character.startIntro(millis(), bootQuickRestart);
 #endif
   led.begin();
   led.setBrightness(60);

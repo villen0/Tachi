@@ -135,7 +135,17 @@ inline const uint8_t *glyph(char c) {
   static const uint8_t C[7] = {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E};
   static const uint8_t Hh[7] = {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11};
   static const uint8_t I[7] = {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E};
-  switch (c) { case 'T': return T; case 'A': return A; case 'C': return C; case 'H': return Hh; case 'I': return I; default: return nullptr; }
+  static const uint8_t R[7] = {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11};
+  static const uint8_t P[7] = {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10};
+  static const uint8_t M[7] = {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11};
+  static const uint8_t D[10][7] = {
+    {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}, {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}, {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F},
+    {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E}, {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}, {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},
+    {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}, {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}, {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},
+    {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}};
+  if (c >= '0' && c <= '9') return D[c - '0'];
+  switch (c) { case 'T': return T; case 'A': return A; case 'C': return C; case 'H': return Hh; case 'I': return I;
+               case 'R': return R; case 'P': return P; case 'M': return M; default: return nullptr; }
 }
 
 // ---- the character --------------------------------------------------------------------------------
@@ -158,9 +168,19 @@ class Mochi {
   }
   // Scripted welcome animation (about 4.4 s): glowing line -> eyes open -> look around -> happy eyes + "TACHI"
   // written letter by letter -> settle into the normal face. Idle/reactions are held back while it runs.
-  void startIntro(uint32_t now) { intro = true; introT0 = now; introStep = -1; titleN = 0; titleA = 1.0f; reaction = E_COUNT; blinks = false; blinkStart = 0;
+  void startIntro(uint32_t now, bool shortVersion = false) { intro = true; introShort = shortVersion; introT0 = now; introStep = -1; introBlinked = false; titleN = 0; titleA = 1.0f; reaction = E_COUNT; blinks = false; blinkStart = 0;
     cur = def(E_WAKE).pose; cur.L.lidTop = cur.R.lidTop = 1.0f; tgt = cur; expr = E_WAKE; style = ES_RECT; mouth = M_NONE; ovl = O_NONE; }
   bool introActive() const { return intro; }
+  // LED colour that follows the welcome gauge (blue -> green -> yellow -> red at the top); false once the gauge is gone.
+  bool introLed(uint8_t *r, uint8_t *g, uint8_t *b) const {
+    if (!intro || introStep >= 0) return false;
+    float v = needleAt(millis0());
+    v = v < 0 ? 0 : (v > 1 ? 1 : v);
+    if (v < 0.5f) { float t = v / 0.5f; *r = 0; *g = (uint8_t)(45 * t); *b = (uint8_t)(45 * (1 - t)); }
+    else { float t = (v - 0.5f) / 0.5f; *r = (uint8_t)(70 * t); *g = (uint8_t)(45 * (1 - 0.7f * t)); *b = 0; }
+    return true;
+  }
+  void setClock(uint32_t now) { clockNow = now; }   // the UI passes the current time so introLed() can be const
   bool reacting() const { return reaction != E_COUNT || intro; }
   Expr current() const { return expr; }
 
@@ -209,7 +229,14 @@ class Mochi {
   // Draws the whole face into g (canvas coordinates 0..W-1, 0..H-1). Clears the canvas first.
   template <class G> void render(G *g, uint32_t now) const {
     g->fillRect(0, 0, W, H, 0);
-    if (intro && introStep < 0) { drawPowerBar(g, now - introT0); return; }
+    if (intro && introStep < 0) {                          // welcome: gauge, then the glowing line
+      uint32_t t = now - introT0;
+      if (t < gaugeEnd()) { drawTach(g, W / 2, H / 2, 70, needleAt(now), 1.0f, t < 400 && !introShort ? t / 400.0f : 1.0f); return; }
+      float fade = 1.0f - (float)(t - gaugeEnd()) / 250.0f;
+      if (fade > 0) drawTach(g, W / 2, H / 2, 70, needleAt(now), fade, fade);
+      drawPowerBar(g, t - gaugeEnd());
+      return;
+    }
     if (ovl == O_GLITCH) drawGlitchBackground(g, now);
     if (ovl == O_STARS) drawStarfield(g, now);
     if (ovl == O_TITLE) { drawTitle(g, now); return; }
@@ -233,20 +260,40 @@ class Mochi {
   uint32_t reactionEnd = 0, last = 0, nextBlink = 0, blinkStart = 0, nextIdle = 0, wanderAt = 0;
   float blink = 1.0f;
   // boot intro
-  bool intro = false; uint32_t introT0 = 0; int introStep = -1; int titleN = 0; float titleA = 1.0f;
+  bool intro = false, introShort = false, introBlinked = false; uint32_t introT0 = 0, clockNow = 0; int introStep = -1; int titleN = 0; float titleA = 1.0f;
+  uint32_t millis0() const { return clockNow; }
 
+  // ---- welcome timeline -----------------------------------------------------------------------
+  // Full: gauge 0..1900 ms, glowing line 1900..2250, eyes wake 2250, happy eyes 2700, TACHI typed 2850.., fade 3750, end 4100.
+  // Short (after a quick restart): needle flick 0..600, line 600..800, eyes wake 800, end 1300.
+  uint32_t gaugeEnd() const { return introShort ? 600 : 1900; }
+  uint32_t barEnd() const { return introShort ? 800 : 2250; }
+  float needleAt(uint32_t now) const {   // 0..1 position of the welcome needle
+    float t = (float)(now - introT0), idle = 0.12f;
+    if (introShort) {
+      if (t < 300) { float x = t / 300.0f; return x * x * (3 - 2 * x); }
+      float x = (t - 300) / 300.0f; if (x > 1) x = 1;
+      return idle + (1 - idle) * expf(-5 * x) * cosf(5 * x);
+    }
+    if (t < 400) return 0;
+    if (t < 1300) { float x = (t - 400) / 900.0f; return x * x * (3 - 2 * x); }
+    float x = (t - 1300) / 600.0f; if (x > 1) x = 1;
+    return idle + (1 - idle) * expf(-4.5f * x) * cosf(7 * x);
+  }
   void runIntro(uint32_t now) {
     uint32_t t = now - introT0;
-    struct Step { uint32_t at; Expr e; };
-    static const Step steps[] = {{450, E_WAKE}, {1050, E_LOOK_L}, {1400, E_LOOK_R}, {1750, E_DEFAULT}, {2050, E_LAUGH}};
-    for (int i = 0; i < 5; i++) if (introStep < i && t >= steps[i].at) {
-      introStep = i; apply(steps[i].e, now); blinks = (i == 3);
-      if (steps[i].e == E_LAUGH) { tgt.oy = -26; tgt.mouthY = 22; }
-      if (i == 0) { cur.L.lidTop = cur.R.lidTop = 1.0f; }
+    if (t < barEnd()) { clockNow = now; return; }          // gauge / glowing line: drawn directly by render()
+    if (introStep < 0) { introStep = 0; apply(E_WAKE, now); blinks = false; cur.L.lidTop = cur.R.lidTop = 1.0f; }
+    if (introShort) {
+      if (!introBlinked && t >= 1000) { introBlinked = true; blinkStart = now ? now : 1; }
+      if (t >= 1300) { intro = false; blinks = true; nextBlink = now + 1500; apply(base, now); }
+      return;
     }
-    titleN = t < 2250 ? 0 : (int)((t - 2250) / 150) + 1; if (titleN > 5) titleN = 5;
-    titleA = t < 3900 ? 1.0f : clampf(1.0f - (float)(t - 3900) / 400.0f, 0.0f, 1.0f);
-    if (t >= 4300) { intro = false; titleN = 0; blinks = true; nextBlink = now + 1200; apply(base, now); }
+    if (!introBlinked && t >= 2500) { introBlinked = true; blinkStart = now ? now : 1; }
+    if (introStep < 1 && t >= 2700) { introStep = 1; apply(E_LAUGH, now); blinks = false; tgt.oy = -26; tgt.mouthY = 22; }
+    titleN = t < 2850 ? 0 : (int)((t - 2850) / 100) + 1; if (titleN > 5) titleN = 5;
+    titleA = t < 3750 ? 1.0f : clampf(1.0f - (float)(t - 3750) / 300.0f, 0.0f, 1.0f);
+    if (t >= 4100) { intro = false; titleN = 0; blinks = true; nextBlink = now + 1200; apply(base, now); }
   }
 
   void apply(Expr e, uint32_t now) {
@@ -522,8 +569,47 @@ class Mochi {
       g->fillRect(0, (int16_t)y, W, 2, rgb(v, v / 3, 10));
     }
   }
+  template <class G> static void text5x7(G *g, const char *txt, int cx, int cy, int sc, uint16_t col) {   // centered pixel text
+    int n = (int)strlen(txt), total = n * 5 * sc + (n - 1) * sc, x0 = cx - total / 2, y0 = cy - 7 * sc / 2;
+    for (int i = 0; i < n; i++) {
+      const uint8_t *gl = glyph(txt[i]); if (!gl) continue;
+      for (int r = 0; r < 7; r++) for (int c = 0; c < 5; c++) if (gl[r] & (0x10 >> c))
+        g->fillRect((int16_t)(x0 + i * 6 * sc + c * sc), (int16_t)(y0 + r * sc), (int16_t)sc, (int16_t)sc, col);
+    }
+  }
+  // Tachometer: 270 degree sweep from lower-left, value01 = needle position, alpha = overall brightness.
+  // Reusable for the RPM page (Mochi Phase 3).
+  template <class G> void drawTach(G *g, int cx, int cy, int R, float value01, float glow, float alpha) const {
+    const float START = 135.0f, SWEEP = 270.0f, D2R = 0.0174533f;
+    auto col = [&](int r, int gr, int b, float k) { return rgb((int)(r * k * alpha), (int)(gr * k * alpha), (int)(b * k * alpha)); };
+    for (int k = 0; k <= 16; k++) {                       // ticks: 8 majors (0..8) with one minor between
+      float v = k / 16.0f, a = (START + v * SWEEP) * D2R;
+      bool major = (k % 2 == 0), red = v >= 0.74f, lit = v <= value01 + 0.001f;
+      float r0 = R - (major ? 11.0f : 6.0f), r1 = (float)R;
+      float br = lit ? 1.0f : 0.30f;
+      uint16_t c = red ? col(255, 70, 60, br) : col(205, 235, 255, br);
+      dots(g, cx + cosf(a) * r0, cy + sinf(a) * r0, cx + cosf(a) * r1, cy + sinf(a) * r1, major ? 1 : 0, c);
+      if (major) {                                         // digit 0..8
+        char d[2] = {(char)('0' + k / 2), 0};
+        float rd = R - 24.0f;
+        text5x7(g, d, (int)(cx + cosf(a) * rd), (int)(cy + sinf(a) * rd), 2, red ? col(255, 90, 80, br) : col(205, 235, 255, br * 0.9f));
+      }
+    }
+    int steps = (int)(value01 * 54);                       // glowing trail behind the needle along the rim
+    for (int i = 0; i < steps; i++) {
+      float v = i / 54.0f, a = (START + v * SWEEP) * D2R, f = 0.25f + 0.75f * (float)i / (steps > 0 ? steps : 1);
+      g->fillCircle((int16_t)(cx + cosf(a) * (R + 4)), (int16_t)(cy + sinf(a) * (R + 4)), 1, v >= 0.74f ? col(255, 70, 60, f * glow) : col(50, 140, 255, f * glow));
+    }
+    float na = (START + clampf(value01, 0, 1) * SWEEP) * D2R;
+    float tx = cx + cosf(na) * (R - 14), ty = cy + sinf(na) * (R - 14);
+    dots(g, cx - cosf(na) * 8, cy - sinf(na) * 8, tx, ty, 1, value01 >= 0.74f ? col(255, 110, 90, 1) : col(255, 255, 255, 1));
+    g->fillCircle((int16_t)cx, (int16_t)cy, 7, col(40, 90, 180, 1));
+    g->fillCircle((int16_t)cx, (int16_t)cy, 4, col(205, 235, 255, 1));
+    text5x7(g, "RPM", cx, cy + (int)(R * 0.62f), 1, col(120, 170, 230, 1));
+  }
   template <class G> void drawPowerBar(G *g, uint32_t t) const {   // the glowing line that becomes the eyes
-    float k = clampf(t / 450.0f, 0.0f, 1.0f), e = 1.0f - (1.0f - k) * (1.0f - k);
+    float span = introShort ? 200.0f : 350.0f;
+    float k = clampf(t / span, 0.0f, 1.0f), e = 1.0f - (1.0f - k) * (1.0f - k);
     Pose p = cur; p.glow = e;
     float w = 4 + 104 * e, cy = H / 2 - 6, h = 5;
     if (k < 0.25f) { float a = k / 0.25f; g->fillCircle(W / 2, (int16_t)cy, (int16_t)(2 + 3 * a), scaled(p, 0.4f + 0.6f * a)); return; }
@@ -535,7 +621,7 @@ class Mochi {
     Pose p = cur; p.glow = 1.0f;
     for (int i = 0; i < titleN && i < n; i++) {
       const uint8_t *gl = glyph(txt[i]); if (!gl) continue;
-      int age = (int)t - (2250 + 150 * i);
+      int age = (int)t - (2850 + 100 * i);
       float pop = age < 140 ? (1.0f - age / 140.0f) : 0.0f;
       int dy = (int)(-10 * pop), lx0 = x0 + i * (gw + gapw);
       float flash = pop;   // new letters start white, settle into the eye colour

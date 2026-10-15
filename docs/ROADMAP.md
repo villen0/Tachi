@@ -24,6 +24,12 @@ Order agreed: Feature C -> Mochi Phases 2-4 -> navigation. Tire pressure dropped
 - SD log now has all columns. Demo mode simulates every gauge.
 - To check in the car: Debug `sup:` list, battery ~12-13 V off / ~13.5-14.5 V running, `req:` still ~5-6, new pages appear, values plausible vs dash.
 
+## BUILT: Feature D welcome v2 "gauge sweep" (waiting for desk/car check)
+- Full welcome (~4.1 s): tach ticks fade in, needle sweeps to full and back, LED follows the needle, gauge fades into the glowing line, eyes wake, happy eyes + "TACHI" typed in.
+- Short welcome (~1.3 s) after quick restarts (reset reason != power-on, or the RAM cookie survived). `INTRO_FORCE` 0/1/2 in `config.h`.
+- `drawTach()` in `mochi.h` is reusable for the Revs gauge page (Mochi Phase 3). Previews: `docs/preview/welcome_v2_*.png`.
+- To check: Debug page `boot:` line after a normal start and after cranking; note: flashing from the PC counts as a restart (short welcome); long-press demo replays the full one.
+
 ## WAITING ON USER (test in the car)
 - Phase 1 in the car: leave the Face page open ~1 min, photograph Debug page: `face` fps (target >= 20) and `req:` (must stay ~5-6).
 - Check moods against real driving (sleepy -> wake, sweat/angry at heat, turbo at high RPM, squint at highway).
