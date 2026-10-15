@@ -168,19 +168,25 @@ class Mochi {
   }
   // Scripted welcome animation (about 4.4 s): glowing line -> eyes open -> look around -> happy eyes + "TACHI"
   // written letter by letter -> settle into the normal face. Idle/reactions are held back while it runs.
-  void startIntro(uint32_t now, bool shortVersion = false) { intro = true; introShort = shortVersion; introT0 = now; introStep = -1; introBlinked = false; titleN = 0; titleA = 1.0f; reaction = E_COUNT; blinks = false; blinkStart = 0;
-    cur = def(E_WAKE).pose; cur.L.lidTop = cur.R.lidTop = 1.0f; tgt = cur; expr = E_WAKE; style = ES_RECT; mouth = M_NONE; ovl = O_NONE; }
+  void startIntro(uint32_t now, bool shortVersion = false) {
+    intro = true; introShort = shortVersion; introT0 = now; clockNow = now;
+    reaction = E_COUNT; blinks = false; blinkStart = 0;
+    cur = tgt = def(E_DEFAULT).pose; expr = E_DEFAULT; style = ES_RECT; mouth = M_SMILE; ovl = O_NONE;
+  }
   bool introActive() const { return intro; }
-  // LED colour that follows the welcome gauge (blue -> green -> yellow -> red at the top); false once the gauge is gone.
+  // Scripted welcome (headlights drive-in): lamps appear far away, a car drives in and brakes, the lamps flash and become the
+  // eyes, the eyes turn into happy arches while a glowing "TACHI" writes itself on, then the normal face returns.
+  // Full about 5.4 s; the short version (after a quick restart) plays only the drive-in part, about 0.9 s.
+  // LED colour that follows the headlights during the drive-in; false afterwards (the mood colour takes over).
   bool introLed(uint8_t *r, uint8_t *g, uint8_t *b) const {
-    if (!intro || introStep >= 0) return false;
-    float v = needleAt(millis0());
-    v = v < 0 ? 0 : (v > 1 ? 1 : v);
-    if (v < 0.5f) { float t = v / 0.5f; *r = 0; *g = (uint8_t)(45 * t); *b = (uint8_t)(45 * (1 - t)); }
-    else { float t = (v - 0.5f) / 0.5f; *r = (uint8_t)(70 * t); *g = (uint8_t)(45 * (1 - 0.7f * t)); *b = 0; }
+    if (!intro) return false;
+    float T = welcomeClock(clockNow - introT0);
+    if (T >= 2500.0f) return false;
+    float on = smoothf((T - 300.0f) / 170.0f), fl = flashAt(T);
+    float k = on * (1.0f - 0.7f * smootherf((T - 2080.0f) / 420.0f));
+    *r = (uint8_t)(clampf(40 * k + 100 * fl, 0, 140)); *g = (uint8_t)(clampf(70 * k + 90 * fl, 0, 160)); *b = (uint8_t)(clampf(100 * k + 70 * fl, 0, 170));
     return true;
   }
-  void setClock(uint32_t now) { clockNow = now; }   // the UI passes the current time so introLed() can be const
   bool reacting() const { return reaction != E_COUNT || intro; }
   Expr current() const { return expr; }
 
@@ -199,6 +205,7 @@ class Mochi {
   }
 
   void update(uint32_t now) {
+    clockNow = now;
     uint32_t dt = last ? now - last : 16;
     last = now;
     if (dt < 1) dt = 1;
@@ -229,14 +236,7 @@ class Mochi {
   // Draws the whole face into g (canvas coordinates 0..W-1, 0..H-1). Clears the canvas first.
   template <class G> void render(G *g, uint32_t now) const {
     g->fillRect(0, 0, W, H, 0);
-    if (intro && introStep < 0) {                          // welcome: gauge, then the glowing line
-      uint32_t t = now - introT0;
-      if (t < gaugeEnd()) { drawTach(g, W / 2, H / 2, 70, needleAt(now), 1.0f, t < 400 && !introShort ? t / 400.0f : 1.0f); return; }
-      float fade = 1.0f - (float)(t - gaugeEnd()) / 250.0f;
-      if (fade > 0) drawTach(g, W / 2, H / 2, 70, needleAt(now), fade, fade);
-      drawPowerBar(g, t - gaugeEnd());
-      return;
-    }
+    if (intro) { drawWelcome(g, now - introT0); return; }
     if (ovl == O_GLITCH) drawGlitchBackground(g, now);
     if (ovl == O_STARS) drawStarfield(g, now);
     if (ovl == O_TITLE) { drawTitle(g, now); return; }
@@ -249,7 +249,6 @@ class Mochi {
     drawEye(g, p, p.R, rx, cy + p.R.y, false, breath, now);
     drawMouth(g, p, W / 2 + p.ox * 0.6f, cy + p.mouthY, now);
     drawOverlay(g, p, lx, rx, cy, now);
-    if (intro && titleN > 0) drawIntroTitle(g, now - introT0);
   }
 
  private:
@@ -259,41 +258,26 @@ class Mochi {
   EyeStyle style = ES_RECT; Mouth mouth = M_SMILE; Overlay ovl = O_NONE; bool blinks = true, flip = false;
   uint32_t reactionEnd = 0, last = 0, nextBlink = 0, blinkStart = 0, nextIdle = 0, wanderAt = 0;
   float blink = 1.0f;
-  // boot intro
-  bool intro = false, introShort = false, introBlinked = false; uint32_t introT0 = 0, clockNow = 0; int introStep = -1; int titleN = 0; float titleA = 1.0f;
-  uint32_t millis0() const { return clockNow; }
+  // boot welcome
+  bool intro = false, introShort = false; uint32_t introT0 = 0, clockNow = 0;
 
-  // ---- welcome timeline -----------------------------------------------------------------------
-  // Full: gauge 0..1900 ms, glowing line 1900..2250, eyes wake 2250, happy eyes 2700, TACHI typed 2850.., fade 3750, end 4100.
-  // Short (after a quick restart): needle flick 0..600, line 600..800, eyes wake 800, end 1300.
-  uint32_t gaugeEnd() const { return introShort ? 600 : 1900; }
-  uint32_t barEnd() const { return introShort ? 800 : 2250; }
-  float needleAt(uint32_t now) const {   // 0..1 position of the welcome needle
-    float t = (float)(now - introT0), idle = 0.12f;
-    if (introShort) {
-      if (t < 300) { float x = t / 300.0f; return x * x * (3 - 2 * x); }
-      float x = (t - 300) / 300.0f; if (x > 1) x = 1;
-      return idle + (1 - idle) * expf(-5 * x) * cosf(5 * x);
-    }
-    if (t < 400) return 0;
-    if (t < 1300) { float x = (t - 400) / 900.0f; return x * x * (3 - 2 * x); }
-    float x = (t - 1300) / 600.0f; if (x > 1) x = 1;
-    return idle + (1 - idle) * expf(-4.5f * x) * cosf(7 * x);
+  // ---- welcome timeline (ms on the "full" clock; the short version plays the first 2500 ms about 2.8x faster) ----
+  float welcomeClock(uint32_t t) const { return introShort ? (float)t * (2500.0f / 900.0f) : (float)t; }
+  uint32_t introEnd() const { return introShort ? 900 : 5450; }
+  static float smoothf(float x) { x = clampf(x, 0, 1); return x * x * (3 - 2 * x); }
+  static float smootherf(float x) { x = clampf(x, 0, 1); return x * x * x * (x * (6 * x - 15) + 10); }
+  static float easeOut3(float x) { x = clampf(x, 0, 1); float q = 1 - x; return 1 - q * q * q; }
+  static float lerpf(float a, float b, float t) { return a + (b - a) * t; }
+  static float flashAt(float T) {   // two quick flashes while the lamps turn into eyes
+    float f = 0;
+    for (int i = 0; i < 2; i++) { float c = 2080.0f + 150.0f * i + 45.0f; float v = smoothf(1.0f - fabsf(T - c) / 80.0f); if (v > f) f = v; }
+    return f;
   }
   void runIntro(uint32_t now) {
-    uint32_t t = now - introT0;
-    if (t < barEnd()) { clockNow = now; return; }          // gauge / glowing line: drawn directly by render()
-    if (introStep < 0) { introStep = 0; apply(E_WAKE, now); blinks = false; cur.L.lidTop = cur.R.lidTop = 1.0f; }
-    if (introShort) {
-      if (!introBlinked && t >= 1000) { introBlinked = true; blinkStart = now ? now : 1; }
-      if (t >= 1300) { intro = false; blinks = true; nextBlink = now + 1500; apply(base, now); }
-      return;
+    if (now - introT0 >= introEnd()) {       // hand over to the live face in the very pose the welcome ended in
+      intro = false; blinks = true; blinkStart = 0; nextBlink = now + 1500;
+      cur = def(E_DEFAULT).pose; expr = E_DEFAULT; apply(base, now);
     }
-    if (!introBlinked && t >= 2500) { introBlinked = true; blinkStart = now ? now : 1; }
-    if (introStep < 1 && t >= 2700) { introStep = 1; apply(E_LAUGH, now); blinks = false; tgt.oy = -26; tgt.mouthY = 22; }
-    titleN = t < 2850 ? 0 : (int)((t - 2850) / 100) + 1; if (titleN > 5) titleN = 5;
-    titleA = t < 3750 ? 1.0f : clampf(1.0f - (float)(t - 3750) / 300.0f, 0.0f, 1.0f);
-    if (t >= 4100) { intro = false; titleN = 0; blinks = true; nextBlink = now + 1200; apply(base, now); }
   }
 
   void apply(Expr e, uint32_t now) {
@@ -607,37 +591,171 @@ class Mochi {
     g->fillCircle((int16_t)cx, (int16_t)cy, 4, col(205, 235, 255, 1));
     text5x7(g, "RPM", cx, cy + (int)(R * 0.62f), 1, col(120, 170, 230, 1));
   }
-  template <class G> void drawPowerBar(G *g, uint32_t t) const {   // the glowing line that becomes the eyes
-    float span = introShort ? 200.0f : 350.0f;
-    float k = clampf(t / span, 0.0f, 1.0f), e = 1.0f - (1.0f - k) * (1.0f - k);
-    Pose p = cur; p.glow = e;
-    float w = 4 + 104 * e, cy = H / 2 - 6, h = 5;
-    if (k < 0.25f) { float a = k / 0.25f; g->fillCircle(W / 2, (int16_t)cy, (int16_t)(2 + 3 * a), scaled(p, 0.4f + 0.6f * a)); return; }
-    glowRR(g, W / 2 - w / 2, cy - h / 2, w, h, 2.5f, p);
+  // ---- vector "TACHI" (strokes on a 0..1 grid) -------------------------------------------------------
+  static int letterStrokes(char c) { switch (c) { case 'T': return 2; case 'A': return 2; case 'C': return 1; case 'H': return 3; case 'I': return 3; default: return 0; } }
+  static int letterStroke(char c, int s, float (*p)[2]) {   // fills p with the polyline of stroke s, returns the point count
+    auto set = [&](int i, float x, float y) { p[i][0] = x; p[i][1] = y; };
+    switch (c) {
+      case 'T': if (s == 0) { set(0, 0, 0); set(1, 1, 0); return 2; } set(0, 0.5f, 0); set(1, 0.5f, 1); return 2;
+      case 'A': if (s == 0) { set(0, 0, 1); set(1, 0.5f, 0); set(2, 1, 1); return 3; } set(0, 0.2f, 0.68f); set(1, 0.8f, 0.68f); return 2;
+      case 'C': for (int i = 0; i <= 14; i++) { float a = (-42.0f - 276.0f * i / 14.0f) * 0.0174533f; set(i, 0.55f + 0.5f * cosf(a), 0.5f + 0.5f * sinf(a)); } return 15;
+      case 'H': if (s == 0) { set(0, 0, 0); set(1, 0, 1); } else if (s == 1) { set(0, 1, 0); set(1, 1, 1); } else { set(0, 0, 0.5f); set(1, 1, 0.5f); } return 2;
+      case 'I': if (s == 0) { set(0, 0.15f, 0); set(1, 0.85f, 0); } else if (s == 1) { set(0, 0.5f, 0); set(1, 0.5f, 1); } else { set(0, 0.15f, 1); set(1, 0.85f, 1); } return 2;
+    }
+    return 0;
   }
-  template <class G> void drawIntroTitle(G *g, uint32_t t) const {   // "TACHI" typed in with a pop and a sparkle per letter
-    const char *txt = "TACHI"; int sc = 5, gw = 5 * sc, gapw = sc, n = 5;
-    int total = n * gw + (n - 1) * gapw, x0 = (W - total) / 2, y0 = H / 2 + 44;
-    Pose p = cur; p.glow = 1.0f;
-    for (int i = 0; i < titleN && i < n; i++) {
-      const uint8_t *gl = glyph(txt[i]); if (!gl) continue;
-      int age = (int)t - (2850 + 100 * i);
-      float pop = age < 140 ? (1.0f - age / 140.0f) : 0.0f;
-      int dy = (int)(-10 * pop), lx0 = x0 + i * (gw + gapw);
-      float flash = pop;   // new letters start white, settle into the eye colour
-      for (int r = 0; r < 7; r++) for (int c = 0; c < 5; c++) if (gl[r] & (0x10 >> c)) {
-        int x = lx0 + c * sc, y = y0 + r * sc + dy;
-        g->fillRect((int16_t)(x - 2), (int16_t)(y - 2), (int16_t)(sc + 3), (int16_t)(sc + 3), glowc(p, 0.22f * titleA));
+  static float polyLen(float (*p)[2], int n) { float L = 0; for (int i = 0; i + 1 < n; i++) L += hypotf(p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]); return L; }
+  static int polyUpTo(float (*p)[2], int n, float len, float (*out)[2]) {   // copies the polyline up to a length (out holds n+1)
+    int m = 1; out[0][0] = p[0][0]; out[0][1] = p[0][1];
+    for (int i = 0; i + 1 < n; i++) {
+      float d = hypotf(p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]);
+      if (len >= d) { out[m][0] = p[i + 1][0]; out[m][1] = p[i + 1][1]; m++; len -= d; }
+      else { float t = d > 0 ? len / d : 0; out[m][0] = lerpf(p[i][0], p[i + 1][0], t); out[m][1] = lerpf(p[i][1], p[i + 1][1], t); m++; break; }
+    }
+    return m;
+  }
+  // Visits every point of the hand-written "TACHI" that has been written so far (about 1 point per pixel of stroke).
+  // f(x, y, letter, writingNow) is called per point; writingNow is true for the letter that is still being drawn.
+  template <class F> void titleWalk(float T, float t0, int y0, F f) const {
+    const char *word = "TACHI"; const int lw = 22, lh = 30, gap = 8, n = 5;
+    const int x0 = (W - (n * lw + (n - 1) * gap)) / 2;
+    for (int i = 0; i < n; i++) {
+      float prog = smoothf((T - (t0 + 190.0f * i)) / 260.0f);
+      if (prog <= 0) continue;
+      float pts[16][2], part[17][2], totalLen = 0; int ns = letterStrokes(word[i]);
+      for (int s = 0; s < ns; s++) { int c = letterStroke(word[i], s, pts); totalLen += polyLen(pts, c); }
+      float want = prog * totalLen;
+      for (int s = 0; s < ns; s++) {
+        int c = letterStroke(word[i], s, pts); float L = polyLen(pts, c), take = want < L ? want : L; want -= take;
+        if (take <= 0) continue;
+        int m = polyUpTo(pts, c, take, part);
+        for (int k = 0; k + 1 < m; k++) {
+          float ax = x0 + i * (lw + gap) + part[k][0] * lw, ay = y0 + part[k][1] * lh;
+          float bx = x0 + i * (lw + gap) + part[k + 1][0] * lw, by = y0 + part[k + 1][1] * lh;
+          int steps = (int)(hypotf(bx - ax, by - ay) * 1.2f) + 1;
+          for (int q = 0; q <= steps; q++) f(lerpf(ax, bx, (float)q / steps), lerpf(ay, by, (float)q / steps), i, prog > 0.04f && prog < 1.0f);
+        }
       }
-      for (int r = 0; r < 7; r++) for (int c = 0; c < 5; c++) if (gl[r] & (0x10 >> c)) {
-        int x = lx0 + c * sc, y = y0 + r * sc + dy;
-        float k = titleA;
-        g->fillRect((int16_t)x, (int16_t)y, (int16_t)(sc - 1), (int16_t)(sc - 1),
-                    rgb((int)((p.cr + (255 - p.cr) * flash) * k), (int)((p.cg + (255 - p.cg) * flash) * k), (int)((p.cb + (255 - p.cb) * flash) * k)));
-      }
-      if (age >= 0 && age < 320) star4(g, (float)(lx0 + gw / 2), (float)(y0 - 8 + dy), 9.0f * (1.0f - age / 320.0f), rgb(255, 255, 255));
     }
   }
+  // Glowing "TACHI" written on with a bright tip. alpha 0..1 fades it, shim 0..1 moves a bright band across the finished word.
+  template <class G> void drawVectorTitle(G *g, float T, float t0, float alpha, float shim, int y0) const {
+    const int n = 5, total = n * 22 + (n - 1) * 8, x0 = (W - total) / 2;
+    auto glow = [&](float k) { return rgb((int)(50 * k * alpha), (int)(130 * k * alpha), (int)(255 * k * alpha)); };
+    uint16_t wide = glow(26.0f / 255.0f), mid = glow(70.0f / 255.0f);
+    titleWalk(T, t0, y0, [&](float x, float y, int, bool) { g->fillCircle((int16_t)x, (int16_t)y, 6, wide); });
+    titleWalk(T, t0, y0, [&](float x, float y, int, bool) { g->fillCircle((int16_t)x, (int16_t)y, 4, mid); });
+    float tx = 0, ty = 0; bool tip = false;
+    titleWalk(T, t0, y0, [&](float x, float y, int, bool writing) {
+      float sh = shim > 0 ? clampf(1.0f - fabsf(x - (x0 - 20 + (total + 40) * shim)) / 14.0f, 0, 1) * 0.75f : 0.0f;
+      g->fillCircle((int16_t)x, (int16_t)y, 2, rgb((int)((205 + 50 * sh) * alpha), (int)((235 + 20 * sh) * alpha), (int)(255 * alpha)));
+      if (writing) { tx = x; ty = y; tip = true; }
+    });
+    if (tip) {
+      g->fillCircle((int16_t)tx, (int16_t)ty, 8, rgb((int)(120 * 90 / 255.0f * alpha), (int)(190 * 90 / 255.0f * alpha), (int)(255 * 90 / 255.0f * alpha)));
+      g->fillCircle((int16_t)tx, (int16_t)ty, 3, rgb((int)(255 * alpha), (int)(255 * alpha), (int)(255 * alpha)));
+    }
+  }
+
+  // ---- the headlights drive-in welcome ---------------------------------------------------------------
+  template <class G> void drawWelcome(G *g, uint32_t tms) const {
+    const float T = welcomeClock(tms);
+    const int cx = W / 2;
+    auto fc = [&](int r, int gr, int b, float a255) { float k = a255 / 255.0f; return rgb((int)(r * k), (int)(gr * k), (int)(b * k)); };
+    float on = smoothf((T - 300.0f) / 170.0f);
+    float p = easeOut3((T - 300.0f) / 1150.0f);
+    float half = lerpf(7, 33, p), r = lerpf(3, 17, p), ly = lerpf(82, 100, p);
+    float carA = smootherf((T - 1250.0f) / 380.0f) * (1.0f - smootherf((T - 2080.0f) / 420.0f));
+    float morph = smootherf((T - 2080.0f) / 420.0f);
+    float scene = on * (1.0f - smootherf((T - 2050.0f) / 380.0f));
+    float flash = flashAt(T);
+    float sq = 1.0f;
+    if (T >= 1750.0f && T < 2080.0f) { float x = (T - 1750.0f) / 330.0f; sq = 1.0f - 0.10f * sinf(x * 3.14159f) * (1.0f - 0.25f * x); }
+
+    if (scene > 0.01f) {
+      // road lines streaming outward from the vanishing point
+      const float vpx = (float)cx, vpy = 70.0f; static const float angs[6] = {-1.2f, -0.65f, -0.3f, 0.3f, 0.65f, 1.2f};
+      for (int a = 0; a < 6; a++) for (int k = 0; k < 6; k++) {
+        float ph = fmodf(T / 420.0f + k / 6.0f, 1.0f), d0 = powf(ph, 1.7f), d1 = fminf(1.0f, d0 + 0.1f);
+        float al = 140.0f * scene * fminf(1.0f, d0 * 3.0f) * (1.0f - 0.55f * p);
+        uint16_t col = fc(150, 190, 255, al);
+        float x0 = vpx + sinf(angs[a]) * 120 * d0, y0 = vpy + cosf(angs[a]) * 110 * d0, x1 = vpx + sinf(angs[a]) * 120 * d1, y1 = vpy + cosf(angs[a]) * 110 * d1;
+        g->drawLine((int16_t)x0, (int16_t)y0, (int16_t)x1, (int16_t)y1, col);
+        if (d0 > 0.5f) g->drawLine((int16_t)x0 + 1, (int16_t)y0, (int16_t)x1 + 1, (int16_t)y1, col);
+      }
+      // pool of light on the road (widest and dimmest first)
+      static const int prx[3] = {70, 56, 42}, pry[3] = {22, 17, 12}; static const float pa[3] = {20, 46, 76};
+      for (int i = 0; i < 3; i++) g->fillEllipse(cx, H - 16, prx[i], pry[i], fc(60, 120, 255, pa[i] * scene * p));
+      // layered light cones = soft gradient
+      float spread = lerpf(14, 78, p); static const float sp[6] = {1.0f, 0.86f, 0.72f, 0.58f, 0.44f, 0.30f}, ca[6] = {22, 44, 66, 90, 114, 140};
+      for (int layer = 0; layer < 6; layer++) for (int side = -1; side <= 1; side += 2) {
+        float x = cx + side * half, s = spread * sp[layer];
+        float ax = x - side * 2, ay = ly - 2, bx = x - side * 2, by = ly + 4, cx2 = x + side * s * 1.05f, cy2 = ly + s * 1.35f, dx = x + side * s * 0.15f, dy = ly + s * 1.5f;
+        uint16_t col = fc(190, 225, 255, ca[layer] * scene);
+        g->fillTriangle((int16_t)ax, (int16_t)ay, (int16_t)bx, (int16_t)by, (int16_t)cx2, (int16_t)cy2, col);
+        g->fillTriangle((int16_t)ax, (int16_t)ay, (int16_t)cx2, (int16_t)cy2, (int16_t)dx, (int16_t)dy, col);
+      }
+    }
+
+    if (carA > 0.01f) {                                           // car front: cabin + body as one silhouette, grille smile, plate "TACHI"
+      float bw = 118, bh = 56 * sq, by = ly + 6 + (56 - bh);
+      int bx0 = (int)(cx - bw / 2), bx1 = (int)(cx + bw / 2), byt = (int)(by - bh / 2 - 6), byb = (int)(by + bh / 2 + 6);
+      int cb0 = cx - 40, cb1 = cx + 40, cbt = (int)(by - bh / 2 - 26), cbb = (int)(by - bh / 2 + 8);
+      uint16_t outl = fc(70, 95, 140, 255 * carA), fill = fc(24, 28, 40, 255 * carA);
+      g->fillRoundRect(cb0 - 2, cbt - 2, cb1 - cb0 + 4, cbb - cbt + 4, 16, outl);
+      g->fillRoundRect(bx0 - 2, byt - 2, bx1 - bx0 + 4, byb - byt + 4, 20, outl);
+      g->fillRoundRect(cb0, cbt, cb1 - cb0, cbb - cbt, 14, fill);
+      g->fillRoundRect(bx0, byt, bx1 - bx0, byb - byt, 18, fill);
+      g->fillRoundRect(cx - 30, (int)(by - bh / 2 - 21), 60, 23, 9, fc(14, 18, 28, 255 * carA));        // windshield
+      g->fillRoundRect(cx - 26, (int)by + 4, 52, 5, 2, fc(58, 70, 98, 255 * carA));                      // grille bar
+      for (int k = -2; k <= 2; k++) g->drawLine(cx + k * 9, (int)by + 4, cx + k * 9, (int)by + 9, fill);
+      int py = (int)(by + bh / 2 - 1);
+      g->fillRoundRect(cx - 29, py - 1, 58, 19, 4, fc(120, 130, 150, 255 * carA));
+      g->fillRoundRect(cx - 28, py, 56, 17, 3, fc(228, 233, 243, 255 * carA));
+      uint16_t ink = fc(30, 45, 90, 255 * carA);
+      for (int i = 0; i < 5; i++) {                                // tiny vector TACHI on the plate
+        const char *w = "TACHI"; float pts[16][2];
+        for (int s = 0; s < letterStrokes(w[i]); s++) {
+          int c = letterStroke(w[i], s, pts);
+          for (int k = 0; k + 1 < c; k++)
+            g->drawLine((int16_t)(cx - 22 + i * 9.5f + pts[k][0] * 7), (int16_t)(py + 4 + pts[k][1] * 9), (int16_t)(cx - 22 + i * 9.5f + pts[k + 1][0] * 7), (int16_t)(py + 4 + pts[k + 1][1] * 9), ink);
+        }
+      }
+    }
+
+    // lamps -> eyes -> thin line -> happy arches -> eyes again, face moving up for the title and back down
+    float up = smootherf((T - 2500.0f) / 450.0f) * (1.0f - smootherf((T - 4850.0f) / 500.0f));
+    float squash = smootherf((T - 2480.0f) / 230.0f) * (1.0f - smootherf((T - 5100.0f) / 260.0f));
+    float arch = smootherf((T - 2700.0f) / 260.0f) * (1.0f - smootherf((T - 4850.0f) / 260.0f));
+    float eyesY = lerpf(ly, 84.0f, morph) - 20.0f * up;
+    if (on > 0.01f) {
+      Pose pw = basePose();
+      pw.cr = lerpf(pw.cr, 255, flash) * on; pw.cg = lerpf(pw.cg, 255, flash) * on; pw.cb = lerpf(pw.cb, 255, flash) * on;
+      pw.gr = lerpf(pw.gr, 255, flash * 0.7f) * on; pw.gg = lerpf(pw.gg, 255, flash * 0.7f) * on; pw.gb = lerpf(pw.gb, 255, flash * 0.7f) * on;
+      pw.glow = 1.0f + flash;
+      for (int side = -1; side <= 1; side += 2) {
+        float x = cx + side * half, w = 2 * r, h = lerpf(2 * r, 54, morph), rad = lerpf(r, 14, morph);
+        h = lerpf(h, 9, squash); rad = lerpf(rad, 4.5f, squash);
+        if (arch <= 0.001f) {
+          glowRR(g, x - w / 2, eyesY - h / 2, w, h, rad, pw);
+        } else {                                                   // ^ arch (grows out of the thin line)
+          float amp = 11.0f * arch; float px[17], py[17];
+          for (int i = 0; i <= 16; i++) { float u = -1 + 2.0f * i / 16; px[i] = x + u * w / 2; py[i] = eyesY + 2 - amp * (1 - u * u) + amp * 0.35f; }
+          for (int i = 0; i <= 16; i++) g->fillCircle((int16_t)px[i], (int16_t)py[i], 6, glowc(pw, 0.10f * pw.glow));
+          for (int i = 0; i <= 16; i++) g->fillCircle((int16_t)px[i], (int16_t)py[i], 5, glowc(pw, 0.25f * pw.glow));
+          for (int i = 0; i <= 16; i++) g->fillCircle((int16_t)px[i], (int16_t)py[i], 3, scaled(pw, 1.0f));
+        }
+      }
+      if (morph > 0.35f) {                                         // smile: grows out of the grille smile, same place as the live face's smile
+        float a = smootherf((morph - 0.35f) / 0.65f), wd = lerpf(8, 12, up), my = 84.0f + 22.0f - 20.0f * up;
+        uint16_t col = fc(205, 235, 255, 255 * a);
+        for (int i = 0; i <= 24; i++) { float u = -1 + 2.0f * i / 24; g->fillCircle((int16_t)(cx + u * wd), (int16_t)(my + 5 * (1 - u * u)), 1, col); }
+      }
+    }
+    float ta = smootherf((T - 2850.0f) / 100.0f) * (1.0f - smootherf((T - 4800.0f) / 350.0f));
+    if (T >= 2850.0f && ta > 0.01f) drawVectorTitle(g, T, 2900.0f, ta, (T >= 4050.0f && T <= 4750.0f) ? clampf((T - 4050.0f) / 700.0f, 0, 1) : 0.0f, 118);
+  }
+
   template <class G> void drawTitle(G *g, uint32_t now) const {
     const char *txt = "TACHI"; int sc = 5, gw = 5 * sc, gapw = sc, n = 5;
     int total = n * gw + (n - 1) * gapw, x0 = (W - total) / 2, y0 = H / 2 - 7 * sc / 2;

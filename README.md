@@ -20,9 +20,10 @@ adapter and shows a face whose mood follows the engine.
   (`ATZ ATE0 ATL0 ATH0 ATS0 ATSP0`), reconnects automatically if the link drops.
 - Polls back-to-back with separate requests for speed (`010D`) and RPM (`010C`) every cycle, and coolant (`0105`) / oil temp (`015C`) alternately every 6th cycle (about 5-6 cycles/s on the Mazda 3). Tested on the car and found NOT to help, so they are off: the combined `010C0D` request (`USE_COMBINED_PID`), the engine-only filter `ATCRA7E8` (`USE_ENGINE_FILTER`, not accepted) and the trailing-`1` reply count (`USE_COUNT_SUFFIX`, made requests much slower). Two modules answer every request (replies come back twice, e.g. `410D00410D00`); the first one is used.
 - **Animated character (Face page, `src/mochi.h`):** Mochi-style glowing eyes that morph between 27 expressions
-  (see `docs/preview/` for pictures of all of them), a welcome at power-on: a tachometer sweeps to the red zone and back
-  (the RGB LED follows the needle), then the eyes open and "TACHI" is typed in (about 4 s). After a quick restart (the car's USB
-  power can dip while cranking) a short 1.3 s version plays instead; `INTRO_FORCE` in `config.h` forces full or short. The Debug page
+  (see `docs/preview/` for pictures of all of them), a welcome at power-on, the "headlights drive-in": two lamps appear far away, a car drives in and brakes (its plate reads TACHI),
+  the lamps flash and become the eyes, the eyes turn into happy arches while a glowing hand-drawn "TACHI" writes itself on, then the
+  normal face returns (about 5.4 s; the RGB LED follows the headlights). After a quick restart (the car's USB
+  power can dip while cranking) a short 0.9 s version plays instead; `INTRO_FORCE` in `config.h` forces full or short. The Debug page
   shows `boot: power-on|restart rN` so you can see which kind the board saw,
   random idle behaviour (looks around, smirks, squints, sneezes, ...; Police/Headlights/Glitch only while parked),
   and moods that follow the car (below). It runs in its own task so Bluetooth polling cannot stall it. The Debug page

@@ -76,16 +76,17 @@ int main(int argc, char **argv) {
   }
   // 3. a blink
   { mochi::Mochi m; m.begin(1); uint32_t t = 1000; m.update(t); for (int i = 0; i < 6; i++) { run(m, t, 40); m.render(&g, t); char n[400]; snprintf(n, sizeof n, "%s/b_%d.ppm", out.c_str(), i); savePPM(g, n); } }
-  // 4. the boot welcome (full and short), sampled over time
+  // 4. the boot welcome (headlights drive-in): full and short, sampled over time, plus a 4x title zoom
   for (int variant = 0; variant < 2; variant++) {
     mochi::Mochi m; m.begin(5); uint32_t t = 1000; m.update(t); m.startIntro(t, variant == 1); uint32_t t0 = t;
-    std::vector<uint32_t> full = {100, 300, 500, 700, 900, 1100, 1300, 1500, 1700, 1850, 2000, 2150, 2300, 2500, 2750, 3000, 3300, 3700, 3950, 4300};
-    std::vector<uint32_t> shrt = {80, 200, 320, 440, 560, 680, 800, 950, 1100, 1400};
+    std::vector<uint32_t> full = {300, 600, 900, 1200, 1500, 1750, 1950, 2100, 2200, 2350, 2500, 2650, 2800, 2950, 3250, 3600, 4000, 4400, 4900, 5200, 5400, 5700};
+    std::vector<uint32_t> shrt = {40, 150, 280, 400, 520, 640, 760, 880, 1000};
     int i = 0;
     for (uint32_t mk : (variant ? shrt : full)) {
       while (t - t0 < mk) { t += 16; m.update(t); }
       m.render(&g, t); uint8_t lr = 0, lg = 0, lb = 0; bool led = m.introLed(&lr, &lg, &lb);
       char n[400]; snprintf(n, sizeof n, "%s/%c_%02d_%04u%s.ppm", out.c_str(), variant ? 's' : 'i', i++, (unsigned)(t - t0), led ? "_led" : ""); savePPM(g, n);
+      if (!variant && mk == 4400) { snprintf(n, sizeof n, "%s/z_title.ppm", out.c_str()); savePPM(g, n); }
     }
     printf("%s welcome still active at the end: %d\n", variant ? "short" : "full", (int)m.introActive());
   }
