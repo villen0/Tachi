@@ -8,6 +8,7 @@
 #include <esp_system.h>
 #include "config.h"
 #include "mochi.h"
+#include "cluster.h"
 #include "obd_parse.h"
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
@@ -79,7 +80,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_COUNT };
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_COUNT };
 volatile int page = PAGE_FACE;       // BOOT short press cycles through the visible pages (see pageVisible)
 
 // ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load) ----------
@@ -100,7 +101,9 @@ static void resetGauges() {
   for (int g = 0; g < G_COUNT; g++) { gVal[g] = 0; gTs[g] = gLastTry[g] = 0; gFails[g] = 0; gSupported[g] = gOk[g] = false; }
 }
 static bool gaugeVisible(int g) { return GAUGES[g].show && gSupported[g] && (gOk[g] || gFails[g] < 5); }
+static bool clusterFailed = false;               // the landscape canvas could not be allocated
 static bool pageVisible(int p) {
+  if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !clusterFailed;
   if (p >= PAGE_BATT && p <= PAGE_LOAD) return gaugeVisible(p - PAGE_BATT);
   if (p == PAGE_OIL) return oilValid;               // the Mazda says NO DATA; only shown if it ever answers
   return true;
@@ -807,6 +810,37 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   if (now - winStart >= 1000) { faceFps = frames; frames = 0; winStart = now; }
 }
 
+// ---------- Rally cluster page (landscape 320x172, own canvas allocated on first use) ----------
+static Arduino_Canvas *clusterCanvas = nullptr;
+static bool landscape = false;                      // the panel is currently rotated for the cluster
+static void clusterFrame(uint32_t now) {
+  if (!clusterCanvas) {
+    clusterCanvas = new Arduino_Canvas(cluster::W, cluster::H, gfx, 0, 0);
+    if (!clusterCanvas->begin(GFX_SKIP_OUTPUT_BEGIN)) { Serial.println("cluster canvas allocation failed"); clusterFailed = true; delete clusterCanvas; clusterCanvas = nullptr; page = nextPage(PAGE_CLUSTER, 1); forceDraw = true; return; }
+  }
+  // Values ease toward the real ones so the sweep and the digits glide instead of jumping at the 5 Hz poll rate.
+  static float dRpm = 0, dMph = 0; static uint32_t lastT = 0, runStart = 0;
+  float k = lastT ? 1.0f - expf(-(float)(now - lastT) / 90.0f) : 1.0f; lastT = now;
+  dRpm += ((float)rpm - dRpm) * k; dMph += ((float)mph - dMph) * k;
+  bool engineOn = fresh(tsRpm, FAST_FRESH_MS) && rpm > 400;
+  if (engineOn) { if (!runStart) runStart = now; } else runStart = 0;
+  cluster::Data d;
+  d.rpm = (int)lroundf(dRpm); d.mph = (int)lroundf(dMph);
+  d.haveCool = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30; d.coolF = tempOut(coolantC); d.hotF = tempOut(TEMP_UNEASY_C);
+  auto have = [&](int g) { return gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS); };
+  d.haveIntake = have(G_INTAKE); d.intakeF = tempOut((int)lroundf(gVal[G_INTAKE]));
+  d.haveAmb = have(G_AMBIENT);   d.ambF = tempOut((int)lroundf(gVal[G_AMBIENT]));
+  d.haveFuel = have(G_FUEL);     d.fuelPct = (int)lroundf(gVal[G_FUEL]);
+  d.haveBatt = have(G_BATT);     d.battV = gVal[G_BATT];
+  d.haveLoad = have(G_LOAD);     d.loadPct = (int)lroundf(gVal[G_LOAD]);
+  d.haveThr = have(G_THROTTLE);  d.thrPct = (int)lroundf(gVal[G_THROTTLE]);
+  d.runSec = runStart ? (int)((now - runStart) / 1000) : 0;
+  d.live = now - lastValidMs <= STALE_AFTER_MS;
+  d.redline = RPM_REDLINE; d.rate = (int)reqPerSec; d.tempF = TEMP_UNIT_F;
+  cluster::draw(clusterCanvas, d, now);
+  clusterCanvas->flush();
+}
+
 // Draws whatever the current page needs. Runs only in the UI task; the main task never touches the display.
 void uiTick() {
   static uint32_t lastTick = 0, gapWindowStart = 0, gapMax = 0;
@@ -838,6 +872,10 @@ void uiTick() {
   // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
   static bool statusShown = false; static uint32_t shownStatusVer = 0;
   bool introOn = MOCHI_FACE && MOCHI_INTRO && character.introActive() && page == PAGE_FACE;
+  {                                                // the cluster page is landscape; every other screen is portrait
+    bool wantLand = page == PAGE_CLUSTER && !(statusActive && !demo);
+    if (wantLand != landscape) { gfx->setRotation(wantLand ? CLUSTER_ROTATION : 0); landscape = wantLand; forceDraw = true; drawnPage = -1; }
+  }
   if (statusActive && !introOn && !demo) {
     if (!statusShown || statusVer != shownStatusVer) { drawStatusScreen(); shownStatusVer = statusVer; statusShown = true; }
     drawnPage = -1;
@@ -864,6 +902,8 @@ void uiTick() {
       lastOpenOld = open;
     }
 #endif
+  } else if (page == PAGE_CLUSTER) {
+    clusterFrame(now);
   } else if (page == PAGE_DEBUG) {
     static uint32_t lastDbgDraw = 0;
     if (forceDraw || drawnPage != PAGE_DEBUG || now - lastDbgDraw >= 500) { drawDebugPage(); lastDbgDraw = now; }
@@ -889,7 +929,7 @@ static void uiTask(void *) {
   for (;;) {
     uint32_t t0 = millis();
     uiTick();
-    uint32_t period = (page == PAGE_FACE) ? (1000 / UI_FPS) : 30;
+    uint32_t period = (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER) ? (1000 / CLUSTER_FPS) : 30;
     uint32_t used = millis() - t0;
     vTaskDelay(pdMS_TO_TICKS(used >= period ? 1 : period - used));
   }

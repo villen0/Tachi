@@ -6,7 +6,7 @@
 int main(int argc, char **argv) {
   std::string out = argc > 1 ? argv[1] : "out";
   if (system(("mkdir -p " + out).c_str())) return 1;
-  struct Case { const char *name; int rpm, mph; } cases[] = {{"idle", 780, 0}, {"cruise", 2300, 46}, {"pull", 4400, 38}, {"redline", 6600, 62}};
+  struct Case { const char *name; int rpm, mph; } cases[] = {{"idle", 780, 0}, {"cruise", 2300, 46}, {"pull", 4400, 38}, {"redline", 6600, 62}, {"fast", 3100, 118}};
   for (auto &c : cases) {
     MockGfx g(cluster::W, cluster::H);
     cluster::Data d; d.rpm = c.rpm; d.mph = c.mph; d.live = true; d.rate = 5;

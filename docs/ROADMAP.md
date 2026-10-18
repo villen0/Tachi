@@ -39,6 +39,7 @@ Order agreed: Feature C -> Mochi Phases 2-4 -> navigation. Tire pressure dropped
 
 ## APPROVED, NOT STARTED (Mochi)
 - Phase 2: car-driven reactions (hard braking -> startle/stars, pull-away -> headlights, speed >= threshold -> gentle warning, etc.; no flashing lights while moving).
+- Rally cluster page (landscape, built, waiting for the user's desk test): gear estimate, sweep, tiles; see README.
 - Phase 3: Revs gauge on the RPM page (needle = real RPM) and parked Pong easter egg.
 - Phase 4: double-press BOOT = random reaction (single press still = next page; 300 ms wait only on the Face page).
 

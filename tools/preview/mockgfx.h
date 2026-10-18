@@ -10,6 +10,7 @@
 struct MockGfx {
   int w, h; std::vector<uint16_t> px;
   MockGfx(int w_, int h_) : w(w_), h(h_), px(w_ * h_, 0) {}
+  uint16_t *getFramebuffer() { return px.data(); }
   void put(int x, int y, uint16_t c) { if (x >= 0 && y >= 0 && x < w && y < h) px[y * w + x] = c; }
   void fillRect(int x, int y, int ww, int hh, uint16_t c) { for (int j = 0; j < hh; j++) for (int i = 0; i < ww; i++) put(x + i, y + j, c); }
   void fillCircle(int cx, int cy, int r, uint16_t c) { for (int j = -r; j <= r; j++) for (int i = -r; i <= r; i++) if (i * i + j * j <= r * r) put(cx + i, cy + j, c); }

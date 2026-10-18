@@ -53,6 +53,13 @@ adapter and shows a face whose mood follows the engine.
 
 Not included yet: sound, motion sensing, Wi-Fi.
 
+### Rally cluster page
+Page 2 (after Face) is a landscape digital rally cluster modelled on a reference dash: big estimated gear, speed, RPM, shift lights,
+a curved RPM sweep, tiles for load / throttle / run time / coolant / intake / ambient / fuel / battery, and a LIVE footer.
+The panel is turned 90 degrees while this page is shown (`CLUSTER_ROTATION` 1 or 3 picks the direction), so mount the stick sideways.
+Text uses anti-aliased Krona One glyph bitmaps (`src/cluster_font.h`, regenerate with `tools/fontgen/fontgen.py`, SIL OFL font);
+the gear is estimated from RPM/speed (ratios in `cluster.h`, tune from a drive log). Preview: `tools/preview/cluster_preview.cpp`, picture in `docs/preview/cluster_mockup.png`.
+
 ## Files
 
 - `platformio.ini`: board, platform and libraries (NimBLE-Arduino 2.x, GFX Library for Arduino, Adafruit NeoPixel).

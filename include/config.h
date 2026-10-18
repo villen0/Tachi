@@ -36,6 +36,12 @@
 #define UI_FPS       30       // target frame rate of the Face page
 #define LCD_SPI_HZ   40000000 // panel SPI clock (ST7789 handles up to ~60 MHz; lower it if the picture shows noise)
 
+// Rally cluster page (landscape: the panel is turned sideways while this page is shown, see docs/preview/cluster_mockup.png)
+#define SHOW_PAGE_CLUSTER  1
+#define CLUSTER_ROTATION   1      // 1 or 3: which way the picture is turned (swap if it shows upside down)
+#define CLUSTER_FPS        24
+#define RPM_REDLINE        6500   // shift lights and the red zone of the sweep
+
 // Extra car-data pages: shown only if the car answers them (discovered at connect). Set 0 to hide a page.
 #define SHOW_PAGE_BATTERY   1
 #define SHOW_PAGE_INTAKE    1   // intake air temperature
