@@ -813,13 +813,19 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   if (now - winStart >= 1000) { faceFps = frames; frames = 0; winStart = now; }
 }
 
-// ---------- Rally cluster page (landscape 320x172, own canvas allocated on first use) ----------
-static Arduino_Canvas *clusterCanvas = nullptr;
+// ---------- Rally cluster page (landscape 320x172, drawn in two 320x86 strips) ----------
+// No full-frame canvas: that needs a 110 KB contiguous block that the heap does not have next to the face canvas.
+// The 62 KB face canvas buffer is reused as the strip buffer (the face is not drawn while this page is shown).
+static uint16_t *clusterBuf = nullptr;
+static const int CLUSTER_STRIP = 86;
 static bool landscape = false;                      // the panel is currently rotated for the cluster
 static void clusterFrame(uint32_t now) {
-  if (!clusterCanvas) {
-    clusterCanvas = new Arduino_Canvas(cluster::W, cluster::H, gfx, 0, 0);
-    if (!clusterCanvas->begin(GFX_SKIP_OUTPUT_BEGIN)) { Serial.println("cluster canvas allocation failed"); clusterFailed = true; delete clusterCanvas; clusterCanvas = nullptr; page = nextPage(PAGE_CLUSTER, 1); forceDraw = true; return; }
+  if (!clusterBuf) {
+#if MOCHI_FACE
+    if (canvas) clusterBuf = canvas->getFramebuffer();
+#endif
+    if (!clusterBuf) clusterBuf = (uint16_t *)heap_caps_malloc(cluster::W * CLUSTER_STRIP * 2, MALLOC_CAP_8BIT);
+    if (!clusterBuf) { Serial.println("cluster buffer allocation failed"); clusterFailed = true; page = nextPage(PAGE_CLUSTER, 1); forceDraw = true; return; }
   }
   // Values ease toward the real ones so the sweep and the digits glide instead of jumping at the 5 Hz poll rate.
   static float dRpm = 0, dMph = 0; static uint32_t lastT = 0, runStart = 0;
@@ -840,8 +846,12 @@ static void clusterFrame(uint32_t now) {
   d.runSec = runStart ? (int)((now - runStart) / 1000) : 0;
   d.live = now - lastValidMs <= STALE_AFTER_MS;
   d.redline = RPM_REDLINE; d.rate = (int)reqPerSec; d.tempF = TEMP_UNIT_F;
-  cluster::draw(clusterCanvas, d, now);
-  clusterCanvas->flush();
+  for (int y0 = 0; y0 < cluster::H; y0 += CLUSTER_STRIP) {
+    int rows = cluster::H - y0 < CLUSTER_STRIP ? cluster::H - y0 : CLUSTER_STRIP;
+    cluster::Raster r(clusterBuf, rows, y0);
+    cluster::draw(&r, d, now);
+    gfx->draw16bitRGBBitmap(0, y0, clusterBuf, cluster::W, rows);
+  }
 }
 
 // Draws whatever the current page needs. Runs only in the UI task; the main task never touches the display.

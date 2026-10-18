@@ -8,13 +8,18 @@ int main(int argc, char **argv) {
   if (system(("mkdir -p " + out).c_str())) return 1;
   struct Case { const char *name; int rpm, mph; } cases[] = {{"idle", 780, 0}, {"cruise", 2300, 46}, {"pull", 4400, 38}, {"redline", 6600, 62}, {"fast", 3100, 118}};
   for (auto &c : cases) {
-    MockGfx g(cluster::W, cluster::H);
+    MockGfx img(cluster::W, cluster::H);
+    cluster::Raster g(img.px.data(), cluster::H, 0);
     cluster::Data d; d.rpm = c.rpm; d.mph = c.mph; d.live = true; d.rate = 5;
     d.haveAmb = true; d.ambF = 71; d.thrPct = c.rpm > 4000 ? 64 : 12; d.haveThr = true;
     d.haveCool = d.haveIntake = d.haveFuel = d.haveBatt = d.haveLoad = true;
     d.coolF = 198; d.intakeF = 88; d.fuelPct = 62; d.battV = 14.1f; d.loadPct = c.rpm > 4000 ? 78 : 24; d.runSec = 312;
     cluster::draw(&g, d, 1000);
-    savePPM(g, out + "/c_" + c.name + ".ppm");
+    { std::vector<uint16_t> a(cluster::W * 86), b(cluster::W * 86); cluster::Raster s0(a.data(), 86, 0), s1(b.data(), 86, 86);
+      cluster::draw(&s0, d, 1000); cluster::draw(&s1, d, 1000);
+      int bad = 0; for (int i = 0; i < cluster::W * 86; i++) { if (a[i] != img.px[i]) bad++; if (b[i] != img.px[cluster::W * 86 + i]) bad++; }
+      printf("%s strips match: %s (%d diffs)\n", c.name, bad ? "NO" : "yes", bad); }
+    savePPM(img, out + "/c_" + c.name + ".ppm");
   }
   return 0;
 }

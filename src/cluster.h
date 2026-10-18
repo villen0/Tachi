@@ -37,11 +37,37 @@ inline uint16_t mix(uint16_t bg, uint16_t fg, int a) {   // a = 0..255 coverage 
   int br = bg >> 11, bgc = (bg >> 5) & 63, bb = bg & 31, fr = fg >> 11, fgc = (fg >> 5) & 63, fb = fg & 31;
   return (uint16_t)(((br + (fr - br) * a / 255) << 11) | ((bgc + (fgc - bgc) * a / 255) << 5) | (bb + (fb - bb) * a / 255));
 }
-template <class G> inline void blendPx(G *g, int x, int y, uint16_t col, int a) {
-  if (x < 0 || y < 0 || x >= W || y >= H || a <= 0) return;
-  uint16_t *fb = g->getFramebuffer(); uint16_t &p = fb[y * W + x];
-  p = a >= 255 ? col : mix(p, col, a);
-}
+// Software raster target covering rows y0 .. y0+h-1 of the 320 x 172 picture (so the page can be drawn in strips and needs
+// only a 320 x h buffer instead of a 110 KB full-frame canvas). All coordinates are picture coordinates.
+struct Raster {
+  uint16_t *fb; int h, y0;
+  Raster(uint16_t *buf, int rows, int top) : fb(buf), h(rows), y0(top) {}
+  bool rows(int ya, int yb) const { return yb >= y0 && ya < y0 + h; }          // does the span ya..yb touch this strip?
+  void px(int x, int y, uint16_t c) { y -= y0; if (x >= 0 && x < W && y >= 0 && y < h) fb[y * W + x] = c; }
+  void blend(int x, int y, uint16_t c, int a) {
+    y -= y0; if (a <= 0 || x < 0 || x >= W || y < 0 || y >= h) return;
+    uint16_t &p = fb[y * W + x]; p = a >= 255 ? c : mix(p, c, a);
+  }
+  void fillRect(int x, int y, int w, int hh, uint16_t c) {
+    int ya = y - y0, yb = ya + hh, xa = x < 0 ? 0 : x, xb = x + w > W ? W : x + w;
+    if (ya < 0) ya = 0; if (yb > h) yb = h;
+    for (int r = ya; r < yb; r++) for (int q = xa; q < xb; q++) fb[r * W + q] = c;
+  }
+  void fillRoundRect(int x, int y, int w, int hh, int r, uint16_t c) {
+    if (r > w / 2) r = w / 2; if (r > hh / 2) r = hh / 2;
+    for (int j = 0; j < hh; j++) {
+      int yy = y + j; if (yy < y0 || yy >= y0 + h) continue;
+      int inset = 0;
+      if (j < r) { float dy = r - j - 0.5f; inset = r - (int)sqrtf((float)r * r - dy * dy + 0.25f); }
+      else if (j >= hh - r) { float dy = j - (hh - r) + 0.5f; inset = r - (int)sqrtf((float)r * r - dy * dy + 0.25f); }
+      fillRect(x + inset, yy, w - 2 * inset, 1, c);
+    }
+  }
+  void fillCircle(int cx, int cy, int r, uint16_t c) {
+    for (int j = -r; j <= r; j++) { int yy = cy + j; if (yy < y0 || yy >= y0 + h) continue; int dx = (int)sqrtf((float)(r * r - j * j)); fillRect(cx - dx, yy, 2 * dx + 1, 1, c); }
+  }
+};
+template <class G> inline void blendPx(G *g, int x, int y, uint16_t col, int a) { g->blend(x, y, col, a); }
 inline int glyphIndex(const Cls &c, char ch) { if (ch >= 'a' && ch <= 'z') ch -= 32; const char *p = strchr(c.chars, ch); return (p && ch) ? (int)(p - c.chars) : -1; }
 inline int textW(const Cls &c, const char *s) { int w = 0, n = (int)strlen(s); for (int i = 0; i < n; i++) { int k = glyphIndex(c, s[i]); if (k >= 0) w += c.g[k].adv; } return w > 0 ? w - 1 : 0; }
 template <class G> void text(G *g, const Cls &c, const char *s, int x, int y, uint16_t col) {
@@ -51,7 +77,7 @@ template <class G> void text(G *g, const Cls &c, const char *s, int x, int y, ui
     // digits are tabular (shared advance): centre the narrower ones inside it
     int ox = 0; if (s[i] >= '0' && s[i] <= '9' && gl.adv > gl.w + 1) ox = (gl.adv - 1 - gl.w) / 2;
     const uint8_t *d = c.d + gl.off;
-    for (int r = 0; r < c.h; r++) for (int q = 0; q < gl.w; q++) { int a = d[r * gl.w + q]; if (a) blendPx(g, x + ox + q, y + r, col, a); }
+    if (g->rows(y, y + c.h - 1)) for (int r = 0; r < c.h; r++) for (int q = 0; q < gl.w; q++) { int a = d[r * gl.w + q]; if (a) blendPx(g, x + ox + q, y + r, col, a); }
     x += gl.adv;
   }
 }
@@ -141,7 +167,7 @@ template <class G> void draw(G *g, const Data &d, uint32_t now) {
   strip(0, sfill < sred ? sfill : sred, WHITE);
   strip(sred, sfill, RED);
   g->fillRect(xc, ytop, W - xc, 2, ORANGE);
-  for (int y = ytop - 1; y <= cy; y++) for (int x = 0; x <= xc; x++) {   // the curved part, per pixel
+  for (int y = ytop - 1; y <= cy; y++) if (g->rows(y, y)) for (int x = 0; x <= xc; x++) {   // the curved part, per pixel
     float dx = x + 0.5f - xc, dy = y + 0.5f - cy, r = sqrtf(dx * dx + dy * dy);
     if (dx > 0.5f || dy > 0.5f) continue;
     float cover = clamp01(r - (R - bandH) + 0.5f) * clamp01(R - r + 0.5f);
