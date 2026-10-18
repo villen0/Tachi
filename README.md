@@ -67,6 +67,8 @@ the gear is estimated from RPM/speed (ratios in `cluster.h`, tune from a drive l
 - `src/main.cpp`: everything else.
 
 ## Build and upload
+After pulling new code run `pio run -t clean` once before `pio run -t upload`. The Debug page shows the build time and a feature tag in its top right corner (also printed on Serial at boot), so a photo proves which firmware is on the board.
+
 
 1. Install VS Code and the PlatformIO extension, open this folder.
 2. Plug the board into the computer. If no serial port appears, hold BOOT while plugging in.

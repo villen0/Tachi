@@ -662,6 +662,9 @@ void drawDebugPage() {
   gfx->setCursor(8, 6);
   gfx->print("DEBUG");
   gfx->setTextSize(1);
+  gfx->setTextColor(0xFFE0);
+  gfx->setCursor(86, 6);  gfx->print(FW_TAG);
+  gfx->setCursor(86, 17); gfx->print(__DATE__ " " __TIME__);
   gfx->setTextColor(WHITE);
   uint32_t now = millis();
   gfx->setCursor(4, 30);  gfx->printf("link:%s f:%s c:%s %lu req/s", linked ? "OK" : "--", useFilter ? "Y" : "N", useCount ? "Y" : "N", (unsigned long)reqPerSec);
@@ -1005,7 +1008,7 @@ void setup() {
   led.setBrightness(60);
   sdInit();
   NimBLEDevice::init("");
-  Serial.printf("Tachi starting, demo mode %s\n", demo ? "ON" : "OFF");
+  Serial.printf("Tachi starting [%s, built %s %s], demo mode %s\n", FW_TAG, __DATE__, __TIME__, demo ? "ON" : "OFF");
   xTaskCreatePinnedToCore(uiTask, "ui", 10240, nullptr, 2, nullptr, 1);   // display + button + animation
 }
 

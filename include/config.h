@@ -1,5 +1,6 @@
 #pragma once
 // ===== User settings =====
+#define FW_TAG "cluster"   // short feature tag shown with the build time on the Debug page (proves which firmware is flashed)
 // Part of the BLE adapter's name (check with the nRF Connect app or the scan log).
 #define ADAPTER_NAME_SUBSTR "CodeReader"   // seen in nRF Connect as "CodeReader31B"
 
