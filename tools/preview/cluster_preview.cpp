@@ -10,6 +10,7 @@ int main(int argc, char **argv) {
   for (auto &c : cases) {
     MockGfx g(cluster::W, cluster::H);
     cluster::Data d; d.rpm = c.rpm; d.mph = c.mph; d.live = true; d.rate = 5;
+    d.haveAmb = true; d.ambF = 71; d.thrPct = c.rpm > 4000 ? 64 : 12; d.haveThr = true;
     d.haveCool = d.haveIntake = d.haveFuel = d.haveBatt = d.haveLoad = true;
     d.coolF = 198; d.intakeF = 88; d.fuelPct = 62; d.battV = 14.1f; d.loadPct = c.rpm > 4000 ? 78 : 24; d.runSec = 312;
     cluster::draw(&g, d, 1000);
