@@ -1,15 +1,17 @@
 // Tachi: ESP32-S3 OBD-II desk/dash pet for the Waveshare 1.47" display board.
 // STATUS: compiles (PlatformIO); not yet run on hardware. See README.md.
 #include <Arduino.h>
-#ifdef BOARD_ROUND28
-#error "Round 2.8C board: display (ST7701 RGB) and touch (GT911) drivers are not written yet; see include/board_round28.h"
-#endif
 #include <NimBLEDevice.h>
 #include <Arduino_GFX_Library.h>
-#include <Adafruit_NeoPixel.h>
 #include <SD_MMC.h>
 #include <esp_system.h>
 #include "config.h"
+#if PIN_LED >= 0
+#include <Adafruit_NeoPixel.h>
+#endif
+#ifdef BOARD_ROUND28
+#include "display_round28.h"   // ST7701 RGB panel + GT911 touch of the round 2.8C board
+#endif
 #include "mochi.h"
 #include "cluster.h"
 #include "obd_parse.h"
@@ -23,11 +25,21 @@
 
 enum Mood { HAPPY, UNEASY, WORRIED, SLEEPY, EXCITED, CALM };
 
+#ifdef BOARD_ROUND28
+// ---------- Display (round 480x480 RGB panel) ----------
+// Everything draws into a full-frame canvas in PSRAM and is pushed to the panel with flush() once per frame, so the
+// panel never scans out a half-drawn picture.
+Arduino_GFX *gfx = nullptr;                    // the canvas, created in setup()
+static Arduino_Canvas *fullCanvas = nullptr;
+#else
 // ---------- Display (ST7789 172x320, column offset 34) ----------
 Arduino_DataBus *bus = new Arduino_ESP32SPI(PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI, GFX_NOT_DEFINED);
 Arduino_GFX *gfx = new Arduino_ST7789(bus, PIN_LCD_RST, 0 /*rotation*/, true /*IPS*/, LCD_W, LCD_H,
                                       34, 0, 34, 0 /*col/row offsets for 172x320 panel*/);
+#endif
+#if PIN_LED >= 0
 Adafruit_NeoPixel led(1, PIN_LED, NEO_GRB + NEO_KHZ800);
+#endif
 
 // ---------- Boot type (welcome animation: full on a fresh power-up, short after a quick restart) ----------
 // The car's USB power can dip while the engine cranks and restart the board; replaying the long welcome each time would
@@ -487,8 +499,12 @@ void sdLogTick() {
 
 // ---------- LED ----------
 void setLed(uint8_t r, uint8_t g, uint8_t b) {
+#if PIN_LED >= 0
   led.setPixelColor(0, led.Color(r, g, b));
   led.show();
+#else
+  (void)r; (void)g; (void)b;                    // this board has no RGB LED
+#endif
 }
 
 void setLedMood(Mood m) {
@@ -524,6 +540,23 @@ void showStatus(const char *msg, uint16_t color) {
 }
 void clearStatus() { if (!statusActive) return; statusActive = false; forceDraw = true; }   // no-op when nothing is shown (no needless redraws)
 
+#ifdef BOARD_ROUND28
+static void drawStatusScreen() {
+  char msg[24]; uint16_t col;
+  portENTER_CRITICAL(&statusMux);
+  memcpy(msg, statusMsg, sizeof(msg)); col = statusColor;
+  portEXIT_CRITICAL(&statusMux);
+  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
+  gfx->setTextSize(4);
+  gfx->setTextColor(col);
+  int16_t x1, y1; uint16_t w, h;
+  gfx->getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
+  gfx->setCursor((LCD_W - w) / 2 - x1, 214);
+  gfx->print(msg);
+  gfx->flush();
+}
+
+#else
 static void drawStatusScreen() {
   char msg[24]; uint16_t col;
   portENTER_CRITICAL(&statusMux);
@@ -538,6 +571,7 @@ static void drawStatusScreen() {
   gfx->print(msg);
 }
 
+#endif
 // Draw a smile (curve > 0), flat line (0) or frown (curve < 0).
 void drawMouth(int cx, int cy, int width, int curve, uint16_t color) {
   for (int t = -width / 2; t <= width / 2; t++) {
@@ -592,6 +626,18 @@ void drawMouthFor(Mood m) {
 // coolant/oil numbers turn yellow/red at the uneasy/worried thresholds.
 
 // One dot per visible page, the current one white. Spacing shrinks when there are many pages.
+#ifdef BOARD_ROUND28
+// The round panel clips the corners, so the dots sit on a short row at the top (y is ignored).
+static void drawPageDots(int) {
+  int n = visibleCount(), cur = visibleIndex(page);
+  int step = n > 9 ? 14 : 18;
+  const int y = 28;
+  gfx->fillRect(120, y - 8, 240, 16, BLACK);
+  for (int i = 0; i < n; i++)
+    gfx->fillCircle(LCD_W / 2 + (int)((i - (n - 1) / 2.0f) * step), y, 5, i == cur ? WHITE : 0x39E7);
+}
+
+#else
 static void drawPageDots(int y) {
   int n = visibleCount(), cur = visibleIndex(page);
   int step = n > 9 ? 12 : 16;
@@ -600,6 +646,7 @@ static void drawPageDots(int y) {
     gfx->fillCircle(LCD_W / 2 + (int)((i - (n - 1) / 2.0f) * step), y, 4, i == cur ? WHITE : 0x39E7);
 }
 
+#endif
 // Text, colour and freshness for a data page. big = the number as shown ("54", "12.6").
 void pageInfo(int p, char *big, size_t n, bool *valid, const char **title, const char **unit, uint16_t *color) {
   *valid = true; *color = WHITE;
@@ -631,6 +678,35 @@ void pageInfo(int p, char *big, size_t n, bool *valid, const char **title, const
 }
 
 // full = also draw the static parts (title, unit, page dots); otherwise only the number is redrawn.
+#ifdef BOARD_ROUND28
+void drawDataPage(bool stale, bool full) {
+  char big[16]; bool valid; const char *title, *unit; uint16_t color;
+  pageInfo(page, big, sizeof(big), &valid, &title, &unit, &color);
+  int16_t x1, y1; uint16_t w, h;
+  if (full) {
+    gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
+    gfx->setTextSize(strlen(title) > 9 ? 4 : 5);      // long titles ("ENGINE LOAD") need the smaller size
+    gfx->setTextColor(0x7BEF);
+    gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+    gfx->setCursor((LCD_W - w) / 2 - x1, 84);
+    gfx->print(title);
+    gfx->setTextSize(5);
+    gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
+    gfx->setCursor((LCD_W - w) / 2 - x1, 336);
+    gfx->print(unit);
+    drawPageDots(0);
+  }
+  if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
+  gfx->fillRect(0, 150, LCD_W, 170, BLACK);   // number area only
+  gfx->setTextSize(strlen(big) <= 3 ? 14 : 11);
+  gfx->setTextColor(color);
+  gfx->getTextBounds(big, 0, 0, &x1, &y1, &w, &h);
+  gfx->setCursor((LCD_W - w) / 2 - x1, 235 - h / 2 - y1);
+  gfx->print(big);
+  gfx->flush();
+}
+
+#else
 void drawDataPage(bool stale, bool full) {
   char big[16]; bool valid; const char *title, *unit; uint16_t color;
   pageInfo(page, big, sizeof(big), &valid, &title, &unit, &color);
@@ -657,7 +733,58 @@ void drawDataPage(bool stale, bool full) {
   gfx->print(big);
 }
 
+#endif
 // Debug page: link state and the last raw adapter exchanges (newest at the bottom).
+#ifdef BOARD_ROUND28
+void drawDebugPage() {
+  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
+  gfx->setTextSize(3);
+  gfx->setTextColor(0x07FF);
+  gfx->setCursor(195, 50);
+  gfx->print("DEBUG");
+  gfx->setTextSize(1);
+  gfx->setTextColor(0xFFE0);
+  gfx->setCursor(150, 78); gfx->print(FW_TAG " " __DATE__ " " __TIME__);
+  uint32_t now = millis();
+  const int X = 84, P = 18;                       // text size 2 (12 px glyphs), 27 chars fit inside the circle
+  int y = 96;
+  gfx->setTextSize(2);
+  gfx->setTextColor(WHITE);
+  gfx->setCursor(X, y); gfx->printf("link:%s f:%s c:%s %lu req/s", linked ? "OK" : "--", useFilter ? "Y" : "N", useCount ? "Y" : "N", (unsigned long)reqPerSec); y += P;
+  gfx->setCursor(X, y); gfx->printf("mph:%d  age:%ldms", mph, tsMph ? (long)(now - tsMph) : -1L); y += P;
+  gfx->setCursor(X, y); gfx->printf("rpm:%d  age:%ldms", rpm, tsRpm ? (long)(now - tsRpm) : -1L); y += P;
+  gfx->setCursor(X, y); gfx->printf("cool:%d oil:%d %s b:%.1fV", tempOut(coolantC), oilValid ? tempOut(oilC) : -999, TEMP_UNIT_F ? "F" : "C", gOk[G_BATT] ? gVal[G_BATT] : 0.0f); y += P;
+  gfx->setTextColor(0x7BEF);
+  gfx->setCursor(X, y); gfx->printf("cmd:%lums gap:%lums", (unsigned long)lastCmdMs, (unsigned long)maxTickGapMs); y += P;
+  gfx->setCursor(X, y); gfx->printf("sd:%s %lums", sdOk ? "on" : "off", (unsigned long)sdWriteMs); y += P;
+  gfx->setCursor(X, y); gfx->printf("oil: %s", oilReply); y += P;
+  gfx->setCursor(X, y); gfx->printf("face:%lufps %lums", (unsigned long)faceFps, (unsigned long)faceFrameMs); y += P;
+  gfx->setTextColor(0x07FF);
+  gfx->setCursor(X, y); gfx->print(supText[0]); y += P;
+  gfx->setCursor(X, y); gfx->print(supText[1]); y += P;
+  gfx->setTextColor(0xFFE0);
+  gfx->setCursor(X, y); gfx->print(bootText); y += P;
+  gfx->setTextColor(0xFFFF);
+  gfx->setCursor(X, y); gfx->printf("mood:%d %s", lastMood, faceName); y += P;
+  gfx->setTextSize(1);
+  gfx->setCursor(X, y); gfx->print("chg:");
+  for (int k = 0; k < 3; k++) { int i = (chgHead + k) % 3; if (chgAt[i]) gfx->printf(" %lus %s", (unsigned long)(chgAt[i] / 1000), chgName[i]); }
+  y += 16;
+  for (int k = 0; k < 5 && y < 424; k++) {        // last adapter exchanges, oldest first
+    DbgEntry &d = dbg[(dbgHead + k) % 5];
+    if (!d.cmd[0]) continue;
+    gfx->setCursor(120, y); gfx->setTextColor(0xFFE0); gfx->printf("> %s%s", d.cmd, d.timeout ? " (timeout)" : ""); y += 10;
+    for (int off = 0; off < (int)strlen(d.reply) && off < 76 && y < 424; off += 38) {   // wrap reply at 38 chars
+      char line[39]; strncpy(line, d.reply + off, 38); line[38] = 0;
+      gfx->setCursor(120, y); gfx->setTextColor(WHITE); gfx->print(line); y += 10;
+    }
+    y += 4;
+  }
+  drawPageDots(0);
+  gfx->flush();
+}
+
+#else
 void drawDebugPage() {
   gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
   gfx->setTextSize(2);
@@ -705,6 +832,7 @@ void drawDebugPage() {
   drawPageDots(308);
 }
 
+#endif
 // ---------- Input ----------
 // Short press: next page (Face > MPH > RPM > Coolant > Oil temp). Long press (LONG_PRESS_MS): toggle demo mode.
 // Edges are caught by an interrupt, so a quick click is never missed while the main loop is busy
@@ -724,7 +852,30 @@ void IRAM_ATTR onButtonEdge() {
   }
 }
 
+#ifdef BOARD_ROUND28
+// The touch screen acts as the button: a tap is a short press, holding a finger down LONG_PRESS_MS toggles demo mode.
+static void pollTouch() {
+  static uint32_t lastPoll = 0, lastReport = 0;
+  uint32_t ms = millis();
+  if (ms - lastPoll < 15) return;
+  lastPoll = ms;
+  bool dn = false; int x = 0, y = 0;
+  bool got = touchPoll(&dn, &x, &y);
+  if (got) lastReport = ms;
+  bool release = (got && !dn) || (btnDown && !got && ms - lastReport > 250);   // no report for a while also counts as lifted
+  if (got && dn) {
+    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; }
+  } else if (release && btnDown) {
+    btnDown = false;
+    if (!btnLongFired && btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;
+  }
+}
+#endif
+
 void handleButton() {
+#ifdef BOARD_ROUND28
+  pollTouch();
+#endif
   if (btnDown && !btnLongFired && millis() - btnDownMs >= LONG_PRESS_MS) {
     btnLongFired = true;
     demo = !demo;
@@ -745,7 +896,10 @@ void handleButton() {
 
 // ---------- Face page (animated character) ----------
 static mochi::Mochi character;
-static Arduino_Canvas *canvas = nullptr;
+static Arduino_Canvas *canvas = nullptr;   // stick: 172x180 face canvas pushed to the panel; round board: unused (the face is drawn scaled into the full-frame canvas)
+#ifdef BOARD_ROUND28
+#include "scaled_gfx.h"
+#endif
 static const int FACE_Y = (LCD_H - mochi::H) / 2;    // canvas position on the panel (centered)
 
 static mochi::Expr moodExpr(Mood m) {
@@ -779,7 +933,7 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   if (d && !lastDemoSeen) { character.startIntro(now); showIdx = 0; showAt = now + 5200; }   // demo ON replays the welcome
   if (!d && lastDemoSeen) {                       // demo just turned OFF: back to the real mood face
     character.setBase(moodExpr(m), now);
-    gfx->fillRect(0, 262, LCD_W, 24, BLACK);      // remove the expression name label
+    gfx->fillRect(UI_LABEL_X0, UI_LABEL_Y, UI_LABEL_W, UI_LABEL_H, BLACK);      // remove the expression name label
   }
   lastDemoSeen = d;
   if (d) {
@@ -789,11 +943,11 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
       if (e == mochi::E_TITLE) { e = (mochi::Expr)showIdx; showIdx = (showIdx + 1) % mochi::E_COUNT; }
       character.setBase(e, now);
       showAt = now + 2800;
-      gfx->fillRect(0, 262, LCD_W, 24, BLACK);
-      gfx->setTextSize(2); gfx->setTextColor(0x7BEF);
+      gfx->fillRect(UI_LABEL_X0, UI_LABEL_Y, UI_LABEL_W, UI_LABEL_H, BLACK);
+      gfx->setTextSize(UI_LABEL_SIZE); gfx->setTextColor(0x7BEF);
       int16_t x1, y1; uint16_t w, h; const char *nm = mochi::exprName(e);
       gfx->getTextBounds(nm, 0, 0, &x1, &y1, &w, &h);
-      gfx->setCursor((LCD_W - w) / 2, 264); gfx->print(nm);
+      gfx->setCursor((LCD_W - w) / 2, UI_LABEL_TY); gfx->print(nm);
     }
   } else {
     if (!settling && ((int)m != appliedMood || entering)) {
@@ -807,8 +961,13 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   faceName = mochi::exprName(character.current());
   { static mochi::Expr lastE = mochi::E_COUNT;
     if (character.current() != lastE) { lastE = character.current(); chgAt[chgHead] = now; chgName[chgHead] = faceName; chgHead = (chgHead + 1) % 3; } }
+#ifdef BOARD_ROUND28
+  { ScaledGfx<Arduino_GFX> sg{gfx, FACE_SCALE, (LCD_W - mochi::W * FACE_SCALE) / 2, (LCD_H - mochi::H * FACE_SCALE) / 2}; character.render(&sg, now); }
+  gfx->flush();
+#else
   character.render(canvas, now);
   canvas->flush();
+#endif
 
   uint32_t dt = millis() - t0;
   static uint32_t frames = 0, winStart = 0;
@@ -824,10 +983,16 @@ static const int CLUSTER_STRIP = 86;
 static bool landscape = false;                      // the panel is currently rotated for the cluster
 static void clusterFrame(uint32_t now) {
   if (!clusterBuf) {
+#ifdef BOARD_ROUND28
+    // Round board: the whole 320x172 picture in one buffer (internal RAM if it fits, else PSRAM), then scaled 1.25x into the canvas.
+    clusterBuf = (uint16_t *)heap_caps_malloc(cluster::W * cluster::H * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!clusterBuf) clusterBuf = (uint16_t *)heap_caps_malloc(cluster::W * cluster::H * 2, MALLOC_CAP_SPIRAM);
+#else
 #if MOCHI_FACE
     if (canvas) clusterBuf = canvas->getFramebuffer();
 #endif
     if (!clusterBuf) clusterBuf = (uint16_t *)heap_caps_malloc(cluster::W * CLUSTER_STRIP * 2, MALLOC_CAP_8BIT);
+#endif
     if (!clusterBuf) { Serial.println("cluster buffer allocation failed"); clusterFailed = true; page = nextPage(PAGE_CLUSTER, 1); forceDraw = true; return; }
   }
   // Values ease toward the real ones so the sweep and the digits glide instead of jumping at the 5 Hz poll rate.
@@ -849,12 +1014,30 @@ static void clusterFrame(uint32_t now) {
   d.runSec = runStart ? (int)((now - runStart) / 1000) : 0;
   d.live = now - lastValidMs <= STALE_AFTER_MS;
   d.redline = RPM_REDLINE; d.rate = (int)reqPerSec; d.tempF = TEMP_UNIT_F;
+#ifdef BOARD_ROUND28
+  cluster::Raster r(clusterBuf, cluster::H, 0);
+  cluster::draw(&r, d, now);
+  // Nearest-neighbour 1.25x (4 of every 5 source pixels, one repeated), centred; the 400x215 picture fits inside the circle.
+  const int DW = cluster::W * 5 / 4, DH = cluster::H * 5 / 4;
+  const int X0 = (LCD_W - DW) / 2, Y0 = (LCD_H - DH) / 2;
+  static uint16_t xmap[cluster::W * 5 / 4];
+  static bool mapped = false;
+  if (!mapped) { for (int x = 0; x < DW; x++) xmap[x] = x * 4 / 5; mapped = true; }
+  uint16_t *fb = fullCanvas->getFramebuffer();
+  for (int y = 0; y < DH; y++) {
+    const uint16_t *src = clusterBuf + (y * 4 / 5) * cluster::W;
+    uint16_t *dst = fb + (Y0 + y) * LCD_W + X0;
+    for (int x = 0; x < DW; x++) dst[x] = src[xmap[x]];
+  }
+  gfx->flush();
+#else
   for (int y0 = 0; y0 < cluster::H; y0 += CLUSTER_STRIP) {
     int rows = cluster::H - y0 < CLUSTER_STRIP ? cluster::H - y0 : CLUSTER_STRIP;
     cluster::Raster r(clusterBuf, rows, y0);
     cluster::draw(&r, d, now);
     gfx->draw16bitRGBBitmap(0, y0, clusterBuf, cluster::W, rows);
   }
+#endif
 }
 
 // Draws whatever the current page needs. Runs only in the UI task; the main task never touches the display.
@@ -888,10 +1071,12 @@ void uiTick() {
   // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
   static bool statusShown = false; static uint32_t shownStatusVer = 0;
   bool introOn = MOCHI_FACE && MOCHI_INTRO && character.introActive() && page == PAGE_FACE;
+#ifndef BOARD_ROUND28
   {                                                // the cluster page is landscape; every other screen is portrait
     bool wantLand = page == PAGE_CLUSTER && !(statusActive && !demo);
     if (wantLand != landscape) { gfx->setRotation(wantLand ? CLUSTER_ROTATION : 0); landscape = wantLand; forceDraw = true; drawnPage = -1; }
   }
+#endif
   if (statusActive && !introOn && !demo) {
     if (!statusShown || statusVer != shownStatusVer) { drawStatusScreen(); shownStatusVer = statusVer; statusShown = true; }
     drawnPage = -1;
@@ -919,6 +1104,9 @@ void uiTick() {
     }
 #endif
   } else if (page == PAGE_CLUSTER) {
+#ifdef BOARD_ROUND28
+    if (forceDraw || drawnPage != PAGE_CLUSTER) gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);   // clear what the previous page left around the picture
+#endif
     clusterFrame(now);
   } else if (page == PAGE_DEBUG) {
     static uint32_t lastDbgDraw = 0;
@@ -1006,19 +1194,31 @@ void setup() {
   Serial.setTxTimeoutMs(0);   // never stall when nothing is reading the USB serial port (car power)
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), onButtonEdge, CHANGE);
+#ifdef BOARD_ROUND28
+  if (!roundDisplayInit()) Serial.println("display init failed");
+  fullCanvas = new Arduino_Canvas(LCD_W, LCD_H, rgbDisp, 0, 0);
+  if (!fullCanvas->begin(GFX_SKIP_OUTPUT_BEGIN)) Serial.println("canvas allocation failed");
+  gfx = fullCanvas;
+  gfx->fillScreen(BLACK);
+  gfx->flush();
+  touchInit();
+#else
   pinMode(PIN_LCD_BL, OUTPUT);
   digitalWrite(PIN_LCD_BL, HIGH);
   gfx->begin(LCD_SPI_HZ);
   gfx->fillScreen(BLACK);
   canvas = new Arduino_Canvas(mochi::W, mochi::H, gfx, 0, FACE_Y);
   if (!canvas->begin(GFX_SKIP_OUTPUT_BEGIN)) Serial.println("canvas allocation failed");
+#endif
   character.begin(esp_random());
   detectBoot();
 #if MOCHI_FACE && MOCHI_INTRO
   character.startIntro(millis(), bootQuickRestart);
 #endif
+#if PIN_LED >= 0
   led.begin();
   led.setBrightness(60);
+#endif
   sdInit();
   NimBLEDevice::init("");
   Serial.printf("Tachi starting [%s, built %s %s], demo mode %s\n", FW_TAG, __DATE__, __TIME__, demo ? "ON" : "OFF");

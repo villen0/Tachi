@@ -60,3 +60,12 @@
 #define PIN_SD_CLK  2
 #define PIN_SD_CMD  1
 #define PIN_SD_D0   42
+
+// UI layout (the face art is drawn 2x at the centre; dots sit at the top, the demo label at the bottom, both inside the circle)
+#define UI_LABEL_X0   100
+#define UI_LABEL_Y    424
+#define UI_LABEL_W    280
+#define UI_LABEL_H    32
+#define UI_LABEL_SIZE 3
+#define UI_LABEL_TY   428
+#define FACE_SCALE    2

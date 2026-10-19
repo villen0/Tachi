@@ -23,3 +23,11 @@
 #define PIN_SD_CLK  14
 #define PIN_SD_CMD  15
 #define PIN_SD_D0   16
+
+// UI layout: label under the character that names the expression in demo mode (Face page)
+#define UI_LABEL_X0   0
+#define UI_LABEL_Y    262
+#define UI_LABEL_W    LCD_W
+#define UI_LABEL_H    24
+#define UI_LABEL_SIZE 2
+#define UI_LABEL_TY   264

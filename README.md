@@ -14,13 +14,19 @@ adapter and shows a face whose mood follows the engine.
   This firmware uses its BLE side only (the ESP32-S3 has no Bluetooth Classic).
 - **Car power:** 2025 Mazda 3 USB-C port, through a USB-C to USB-A adapter cable.
 
-### Second board: round 2.8" touch (bring-up stage)
+### Second board: round 2.8" touch
 
-A Waveshare ESP32-S3-Touch-LCD-2.8C (480x480 round IPS, ST7701 on 16-bit parallel RGB, GT911 touch, TCA9554 expander) is supported alongside the 1.47" stick.
-Board pins live in `include/board_stick147.h` (default) and `include/board_round28.h` (pins and panel timings from Waveshare's demo).
-PlatformIO env `waveshare_s3_round28` builds `src/round28_bringup.cpp` only: a test picture on the panel, backlight, and a dot drawn at each touch,
-with the I2C scan and touch coordinates on Serial. It has not been run on hardware yet. If the screen stays dark or shows noise, check the Serial log first
-(expander address, GT911 found). The Tachi UI (Face, gauges, BLE) is not ported to the round board yet; `main.cpp` is still stick-only.
+A Waveshare ESP32-S3-Touch-LCD-2.8C (480x480 round IPS, ST7701 on 16-bit parallel RGB, GT911 touch, TCA9554 expander) runs the same firmware as the 1.47" stick.
+Pins and panel timings are in `include/board_round28.h` (the stick's are in `include/board_stick147.h`); the display and touch driver is `src/display_round28.h`.
+Two PlatformIO envs: `waveshare_s3_round28_test` (test picture and a dot at each touch, flash this first) and `waveshare_s3_round28` (full firmware).
+**Not run on hardware yet**; the first thing to check is the Serial log (expander address found, GT911 found).
+
+How the UI maps to the round screen (everything is drawn into a 480x480 canvas in PSRAM and pushed to the panel once per frame):
+- Face: the existing 172x180 character art, drawn 2x at the centre (`src/scaled_gfx.h`; `tools/preview/round_preview.cpp` renders it on the host). Page dots sit in a short row at the top, the demo expression name at the bottom.
+- Data pages (speed, RPM, coolant, ...): re-laid out for the circle with larger text. Status and Debug pages too (Debug shows fewer lines).
+- Rally cluster: the 320x172 picture is rendered as before and scaled 1.25x (nearest neighbour, so slightly blocky) to 400x215 in the centre. The panel is not rotated.
+- Input: touch replaces the BOOT button. Tap = next page, hold a finger down about 1.5 s = demo mode. BOOT still works too.
+- No RGB LED on this board, so the mood colour is not shown; SD logging is off (`SD_LOG_ENABLED 0`).
 The stick build is unchanged.
 
 ## What it does
