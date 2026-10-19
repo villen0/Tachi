@@ -14,12 +14,14 @@ adapter and shows a face whose mood follows the engine.
   This firmware uses its BLE side only (the ESP32-S3 has no Bluetooth Classic).
 - **Car power:** 2025 Mazda 3 USB-C port, through a USB-C to USB-A adapter cable.
 
-### Second board: round 2.8" touch (in progress)
+### Second board: round 2.8" touch (bring-up stage)
 
-A Waveshare ESP32-S3-Touch-LCD-2.8C (480x480 round IPS, ST7701 on parallel RGB, GT911 touch) is planned alongside the 1.47" stick.
-Board pins live in `include/board_stick147.h` (default) and `include/board_round28.h`; PlatformIO env `waveshare_s3_round28` selects the round one.
-Scaffold only: the round build stops with an `#error` until the display and touch drivers exist. Still needed: the 16 RGB data pins,
-panel timings and ST7701 init sequence from Waveshare's demo. The stick build is unchanged.
+A Waveshare ESP32-S3-Touch-LCD-2.8C (480x480 round IPS, ST7701 on 16-bit parallel RGB, GT911 touch, TCA9554 expander) is supported alongside the 1.47" stick.
+Board pins live in `include/board_stick147.h` (default) and `include/board_round28.h` (pins and panel timings from Waveshare's demo).
+PlatformIO env `waveshare_s3_round28` builds `src/round28_bringup.cpp` only: a test picture on the panel, backlight, and a dot drawn at each touch,
+with the I2C scan and touch coordinates on Serial. It has not been run on hardware yet. If the screen stays dark or shows noise, check the Serial log first
+(expander address, GT911 found). The Tachi UI (Face, gauges, BLE) is not ported to the round board yet; `main.cpp` is still stick-only.
+The stick build is unchanged.
 
 ## What it does
 
