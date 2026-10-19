@@ -1,6 +1,9 @@
 // Tachi: ESP32-S3 OBD-II desk/dash pet for the Waveshare 1.47" display board.
 // STATUS: compiles (PlatformIO); not yet run on hardware. See README.md.
 #include <Arduino.h>
+#ifdef BOARD_ROUND28
+#error "Round 2.8C board: display (ST7701 RGB) and touch (GT911) drivers are not written yet; see include/board_round28.h"
+#endif
 #include <NimBLEDevice.h>
 #include <Arduino_GFX_Library.h>
 #include <Adafruit_NeoPixel.h>

@@ -14,6 +14,13 @@ adapter and shows a face whose mood follows the engine.
   This firmware uses its BLE side only (the ESP32-S3 has no Bluetooth Classic).
 - **Car power:** 2025 Mazda 3 USB-C port, through a USB-C to USB-A adapter cable.
 
+### Second board: round 2.8" touch (in progress)
+
+A Waveshare ESP32-S3-Touch-LCD-2.8C (480x480 round IPS, ST7701 on parallel RGB, GT911 touch) is planned alongside the 1.47" stick.
+Board pins live in `include/board_stick147.h` (default) and `include/board_round28.h`; PlatformIO env `waveshare_s3_round28` selects the round one.
+Scaffold only: the round build stops with an `#error` until the display and touch drivers exist. Still needed: the 16 RGB data pins,
+panel timings and ST7701 init sequence from Waveshare's demo. The stick build is unchanged.
+
 ## What it does
 
 - Scans for the adapter by name, connects over BLE, sets it up
