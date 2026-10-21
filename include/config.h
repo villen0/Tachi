@@ -43,6 +43,13 @@
 #define CLUSTER_FPS        24
 #define RPM_REDLINE        6500   // shift lights and the red zone of the sweep
 
+// One-off reactions of the face on the Face page: engine start (sparkle), hard braking (startle), low battery / low fuel (crying).
+#define CAR_EVENTS            1
+#define EVENT_ENGINE_OFF_MS   3000   // engine must have been off (RPM under 400, data fresh) this long before a start counts
+#define EVENT_BRAKE_MIN_MPH   15     // hard braking: speed before the stop ...
+#define EVENT_BRAKE_DROP_MPH  10     // ... and the drop within one second
+#define EVENT_FUEL_LOW_PCT    7      // low fuel reaction below this percent
+
 // Extra car-data pages: shown only if the car answers them (discovered at connect). Set 0 to hide a page.
 #define SHOW_PAGE_BATTERY   1
 #define SHOW_PAGE_INTAKE    1   // intake air temperature

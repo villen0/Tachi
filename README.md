@@ -50,6 +50,10 @@ The stick build is unchanged.
   excited (RPM >= 3500, or speed rising >= 8 mph/s: big sparkly eyes, open grin, magenta LED),
   calm (cruising >= 55 mph with RPM < 2600: half-closed eyes, small cyan smile, teal LED),
   happy (everything else). Eyes blink.
+- Short reactions to one-off car events on the Face page (`CAR_EVENTS` and the thresholds in `config.h`, logic in `src/car_events.h`, tested by `tools/tests/car_events_test.cpp`):
+  engine start (RPM was low for 3 s, now above 500: sparkle), hard braking (speed 15+ mph drops 10+ mph in a second: startle),
+  low battery (engine running, under 11.5 V: crying, at most once a minute) and low fuel (under 7 %: crying, at most once in 2 minutes).
+  They are skipped during the welcome and the settle period and in demo mode.
 - RGB LED color follows the mood.
 - Separate pages, cycled by a short press of the BOOT button through the *visible* pages: Face, MPH, RPM, Coolant, then (only if the
   car answers them) Battery, Intake air, Outside air, Fuel, Throttle, Engine load, Oil temp (only if it ever answered), and Debug last.

@@ -15,6 +15,7 @@
 #include "mochi.h"
 #include "cluster.h"
 #include "obd_parse.h"
+#include "car_events.h"
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -913,6 +914,34 @@ static mochi::Expr moodExpr(Mood m) {
   }
 }
 
+#if CAR_EVENTS
+// Short face reactions to one-off car events (engine start, hard braking, low battery / fuel). The detector keeps
+// sampling during the welcome / settle period (so its state stays right) but nothing is played until the face is settled.
+static void carEventReact(uint32_t now, bool settling) {
+  static carevents::Detector det([] {
+    carevents::Config c;
+    c.engineOffMs = EVENT_ENGINE_OFF_MS; c.brakeMinMph = EVENT_BRAKE_MIN_MPH; c.brakeDropMph = EVENT_BRAKE_DROP_MPH;
+    c.battCritV = BATT_CRIT_V; c.fuelLowPct = EVENT_FUEL_LOW_PCT;
+    return c;
+  }());
+  carevents::Input in;
+  in.now = now;
+  in.rpmFresh = fresh(tsRpm, FAST_FRESH_MS);   in.rpm = rpm;
+  in.speedFresh = fresh(tsMph, FAST_FRESH_MS); in.mph = mph;
+  in.battFresh = gOk[G_BATT] && fresh(gTs[G_BATT], GAUGE_FRESH_MS); in.battV = gVal[G_BATT];
+  in.fuelFresh = gOk[G_FUEL] && fresh(gTs[G_FUEL], GAUGE_FRESH_MS); in.fuelPct = gVal[G_FUEL];
+  carevents::Event ev = det.update(in);
+  if (settling) return;
+  switch (ev) {
+    case carevents::EV_ENGINE_START: character.react(mochi::E_STARS, 1800, now); break;
+    case carevents::EV_HARD_BRAKE:   character.react(mochi::E_STARTLE, 1200, now); break;
+    case carevents::EV_LOW_BATTERY:
+    case carevents::EV_LOW_FUEL:     character.react(mochi::E_CRYING, 2500, now); break;
+    default: break;
+  }
+}
+#endif
+
 // One animation frame. Demo mode shows every expression in turn (with its name) for checking at a desk.
 static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   uint32_t t0 = millis();
@@ -956,6 +985,9 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
       appliedMood = (int)m;
     }
     if (!settling) character.idleTick(now, mph == 0);
+#if CAR_EVENTS
+    carEventReact(now, settling);
+#endif
   }
   character.update(now);
   faceName = mochi::exprName(character.current());
