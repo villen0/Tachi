@@ -33,9 +33,12 @@ static bool exInit() {
     if (a == 0x3F) return false;
   }
   Serial.printf("expander found at 0x%02X\n", exAddr);
-  exOut = 0xFF;                    // CS high, LCD reset high, touch reset high, others high
-  exWrite(0x01, exOut);
-  exWrite(0x03, 0x00);             // all pins outputs
+  // Only the three pins we know are driven (LCD reset, touch reset, LCD chip-select; all start high). The other five
+  // (the buzzer is one of them) stay inputs, exactly as at power-up, so nothing else on the board gets switched on.
+  const uint8_t mine = (1u << (EXIO_LCD_RST - 1)) | (1u << (EXIO_TOUCH_RST - 1)) | (1u << (EXIO_LCD_CS - 1));
+  exOut = mine;
+  exWrite(0x01, exOut);            // output register first, so the pins start high
+  exWrite(0x03, (uint8_t)~mine);   // configuration: 0 = output, 1 = input
   return true;
 }
 
