@@ -4,8 +4,16 @@
 // Pins and timings: include/board_round28.h. Not yet run on hardware.
 #include <Arduino.h>
 #include <Wire.h>
+#include <esp_timer.h>
+#ifdef BOARD_ROUND28
+#define private public    // Arduino_ESP32RGBPanel keeps its panel handle private; the vsync hook below needs it (main.cpp does the same)
+#endif
 #include <Arduino_GFX_Library.h>
+#ifdef BOARD_ROUND28
+#undef private
+#endif
 #include "config.h"
+#include "round28_init.h"
 
 static bool i2cStarted = false;
 static bool exFound = false, dispBeginOk = false;   // status flags, printed by the bring-up sketch
@@ -44,62 +52,29 @@ static bool exInit() {
   return true;
 }
 
-// ---- ST7701 init sequence (from Waveshare Display_ST7701.cpp, 2.8 inch) ----
-static const uint8_t st7701_init[] = {
-    BEGIN_WRITE,
-    WRITE_COMMAND_8, 0xFF, WRITE_BYTES, 5, 0x77, 0x01, 0x00, 0x00, 0x13,
-    WRITE_C8_D8, 0xEF, 0x08,
-    WRITE_COMMAND_8, 0xFF, WRITE_BYTES, 5, 0x77, 0x01, 0x00, 0x00, 0x10,
-    WRITE_C8_D16, 0xC0, 0x3B, 0x00,
-    WRITE_C8_D16, 0xC1, 0x10, 0x0C,
-    WRITE_C8_D16, 0xC2, 0x07, 0x0A,
-    WRITE_C8_D8, 0xC7, 0x00,
-    WRITE_C8_D8, 0xCC, 0x10,
-    WRITE_C8_D8, 0xCD, 0x08,
-    WRITE_COMMAND_8, 0xB0, WRITE_BYTES, 16,
-    0x05, 0x12, 0x98, 0x0E, 0x0F, 0x07, 0x07, 0x09, 0x09, 0x23, 0x05, 0x52, 0x0F, 0x67, 0x2C, 0x11,
-    WRITE_COMMAND_8, 0xB1, WRITE_BYTES, 16,
-    0x0B, 0x11, 0x97, 0x0C, 0x12, 0x06, 0x06, 0x08, 0x08, 0x22, 0x03, 0x51, 0x11, 0x66, 0x2B, 0x0F,
-    WRITE_COMMAND_8, 0xFF, WRITE_BYTES, 5, 0x77, 0x01, 0x00, 0x00, 0x11,
-    WRITE_C8_D8, 0xB0, 0x5D,
-    WRITE_C8_D8, 0xB1, 0x3E,
-    WRITE_C8_D8, 0xB2, 0x81,
-    WRITE_C8_D8, 0xB3, 0x80,
-    WRITE_C8_D8, 0xB5, 0x4E,
-    WRITE_C8_D8, 0xB7, 0x85,
-    WRITE_C8_D8, 0xB8, 0x20,
-    WRITE_C8_D8, 0xC1, 0x78,
-    WRITE_C8_D8, 0xC2, 0x78,
-    WRITE_C8_D8, 0xD0, 0x88,
-    WRITE_COMMAND_8, 0xE0, WRITE_BYTES, 3, 0x00, 0x00, 0x02,
-    WRITE_COMMAND_8, 0xE1, WRITE_BYTES, 11, 0x06, 0x30, 0x08, 0x30, 0x05, 0x30, 0x07, 0x30, 0x00, 0x33, 0x33,
-    WRITE_COMMAND_8, 0xE2, WRITE_BYTES, 12, 0x11, 0x11, 0x33, 0x33, 0xF4, 0x00, 0x00, 0x00, 0xF4, 0x00, 0x00, 0x00,
-    WRITE_COMMAND_8, 0xE3, WRITE_BYTES, 4, 0x00, 0x00, 0x11, 0x11,
-    WRITE_C8_D16, 0xE4, 0x44, 0x44,
-    WRITE_COMMAND_8, 0xE5, WRITE_BYTES, 16,
-    0x0D, 0xF5, 0x30, 0xF0, 0x0F, 0xF7, 0x30, 0xF0, 0x09, 0xF1, 0x30, 0xF0, 0x0B, 0xF3, 0x30, 0xF0,
-    WRITE_COMMAND_8, 0xE6, WRITE_BYTES, 4, 0x00, 0x00, 0x11, 0x11,
-    WRITE_C8_D16, 0xE7, 0x44, 0x44,
-    WRITE_COMMAND_8, 0xE8, WRITE_BYTES, 16,
-    0x0C, 0xF4, 0x30, 0xF0, 0x0E, 0xF6, 0x30, 0xF0, 0x08, 0xF0, 0x30, 0xF0, 0x0A, 0xF2, 0x30, 0xF0,
-    WRITE_C8_D16, 0xE9, 0x36, 0x01,
-    WRITE_COMMAND_8, 0xEB, WRITE_BYTES, 7, 0x00, 0x01, 0xE4, 0xE4, 0x44, 0x88, 0x40,
-    WRITE_COMMAND_8, 0xED, WRITE_BYTES, 16,
-    0xFF, 0x10, 0xAF, 0x76, 0x54, 0x2B, 0xCF, 0xFF, 0xFF, 0xFC, 0xB2, 0x45, 0x67, 0xFA, 0x01, 0xFF,
-    WRITE_COMMAND_8, 0xEF, WRITE_BYTES, 6, 0x08, 0x08, 0x08, 0x45, 0x3F, 0x54,
-    WRITE_COMMAND_8, 0xFF, WRITE_BYTES, 5, 0x77, 0x01, 0x00, 0x00, 0x00,
-    WRITE_COMMAND_8, 0x11,
-    END_WRITE,
-    DELAY, 120,
-    BEGIN_WRITE,
-    WRITE_C8_D8, 0x3A, 0x66,   // pixel format used with the RGB interface (as in Waveshare's demo)
-    WRITE_C8_D8, 0x36, 0x00,
-    WRITE_C8_D8, 0x35, 0x00,
-    WRITE_COMMAND_8, 0x29,     // display on
-    END_WRITE};
+// ---- ST7701 init: the command list from Waveshare's board config (src/round28_init.h), sent over the 3-wire 9-bit SPI ----
+// The chip-select (on the expander) must go low and high around EACH command. Holding it low for the whole sequence
+// (as Arduino_GFX's batch init does) leaves the panel blank, found on hardware.
+static inline void sckPulse(int v) { digitalWrite(PIN_LCD_SPI_SCL, v); delayMicroseconds(2); }
+static void spiBit9(bool dc, uint8_t b) {            // mode 0, MSB first, D/C bit first
+  uint16_t w = ((uint16_t)dc << 8) | b;
+  for (int i = 8; i >= 0; i--) { digitalWrite(PIN_LCD_SPI_SDA, (w >> i) & 1); delayMicroseconds(2); sckPulse(1); sckPulse(0); }
+}
+static void st7701Send(const InitCmd &c) {
+  exSet(EXIO_LCD_CS, false); delayMicroseconds(5);
+  spiBit9(false, c.cmd);
+  for (int i = 0; i < c.n; i++) spiBit9(true, c.d[i]);
+  exSet(EXIO_LCD_CS, true);
+  if (c.delayMs) delay(c.delayMs);
+}
+static void st7701Init() {
+  pinMode(PIN_LCD_SPI_SCL, OUTPUT); pinMode(PIN_LCD_SPI_SDA, OUTPUT);
+  digitalWrite(PIN_LCD_SPI_SCL, LOW); digitalWrite(PIN_LCD_SPI_SDA, LOW);
+  exSet(EXIO_LCD_RST, false); delay(10);
+  exSet(EXIO_LCD_RST, true);  delay(120);
+  for (const InitCmd &c : OFFICIAL_INIT) st7701Send(c);
+}
 
-static Arduino_DataBus *bus = new Arduino_SWSPI(GFX_NOT_DEFINED /*9-bit mode*/, GFX_NOT_DEFINED /*CS on expander*/,
-                                                PIN_LCD_SPI_SCL, PIN_LCD_SPI_SDA, GFX_NOT_DEFINED);
 static Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
     PIN_LCD_DE, PIN_LCD_VSYNC, PIN_LCD_HSYNC, PIN_LCD_PCLK,
     PIN_LCD_R0, PIN_LCD_R1, PIN_LCD_R2, PIN_LCD_R3, PIN_LCD_R4,
@@ -110,7 +85,7 @@ static Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
     0 /*pclk_active_neg*/, LCD_PCLK_HZ, false /*big endian*/, 0, 0, LCD_BOUNCE_PX);
 static Arduino_RGB_Display *rgbDisp = new Arduino_RGB_Display(
     LCD_W, LCD_H, rgbpanel, 0 /*rotation*/, true /*auto flush*/,
-    bus, GFX_NOT_DEFINED /*reset is on the expander*/, st7701_init, sizeof(st7701_init));
+    nullptr /*no bus: init is sent by st7701Init()*/, GFX_NOT_DEFINED /*reset is on the expander*/, nullptr, 0);
 
 // ---- GT911 touch ----
 static bool touchOk = false;
@@ -158,16 +133,44 @@ static bool touchPoll(bool *down, int *x, int *y) {
   return true;
 }
 
+// ---- vsync tracking: lets the dial pages update a row only right after the panel's scan has passed it (no tearing) ----
+static volatile uint32_t vsyncUs = 0, framePeriodUs = 0;
+static volatile bool vsyncHooked = false;
+static bool IRAM_ATTR onVsync(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
+  uint32_t now = (uint32_t)esp_timer_get_time(), dt = now - vsyncUs;
+  if (vsyncUs && dt > 4000 && dt < 120000) framePeriodUs = framePeriodUs ? (framePeriodUs * 7 + dt) / 8 : dt;   // measured frame time
+  vsyncUs = now;
+  return false;
+}
+static void hookVsync() {
+  esp_lcd_panel_handle_t h = rgbpanel->_panel_handle;
+  if (!h) { Serial.println("vsync hook: no panel handle (updates are not synchronised)"); return; }
+  esp_lcd_rgb_panel_event_callbacks_t cbs = {};
+  cbs.on_vsync = onVsync;
+  vsyncHooked = esp_lcd_rgb_panel_register_event_callbacks(h, &cbs, nullptr) == ESP_OK;
+  Serial.printf("vsync hook: %s\n", vsyncHooked ? "ok" : "FAILED (updates are not synchronised)");
+}
+// Returns once the panel's scan has passed picture row y in the current frame (or immediately between frames / without a hook).
+static void waitBeamPast(int y) {
+  uint32_t period = framePeriodUs;
+  if (!vsyncHooked || !period) return;
+  const uint32_t lineUs = period / (LCD_H + LCD_VPW + LCD_VBP + LCD_VFP), passAt = (uint32_t)(LCD_VBP + y + 6) * lineUs;
+  for (;;) {
+    uint32_t t = (uint32_t)esp_timer_get_time() - vsyncUs;
+    if (t >= period || t >= passAt) return;
+    uint32_t need = passAt - t;
+    if (need > 2000) vTaskDelay(1); else if (need > 80) delayMicroseconds(need - 40); else taskYIELD();
+  }
+}
+
 // Whole bring-up of the round board: I2C, expander, panel reset, ST7701 init, RGB panel, backlight.
 static bool roundDisplayInit() {
   i2cBegin();
   if (!exInit()) Serial.println("ERROR: TCA9554 expander not found, display reset/CS cannot be controlled");
-  exSet(EXIO_LCD_RST, false); delay(10);          // panel reset pulse, then chip-select low for the whole init (as in Waveshare's demo)
-  exSet(EXIO_LCD_RST, true);  delay(50);
-  exSet(EXIO_LCD_CS, false);  delay(10);
+  st7701Init();                                   // reset pulse + init commands, chip-select toggled per command
   bool ok = rgbDisp->begin();
-  exSet(EXIO_LCD_CS, true);
   dispBeginOk = ok;
+  if (ok) hookVsync();
   Serial.printf("display begin: %s, PSRAM %u bytes (free %u)\n", ok ? "ok" : "FAILED", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
   if (!ok) Serial.println("ERROR: display begin failed (PSRAM frame buffer / RGB panel)");
   ledcAttach(PIN_LCD_BL, 20000, 10);

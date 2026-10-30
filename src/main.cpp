@@ -2,7 +2,13 @@
 // STATUS: compiles (PlatformIO); not yet run on hardware. See README.md.
 #include <Arduino.h>
 #include <NimBLEDevice.h>
+#ifdef BOARD_ROUND28
+#define private public    // see display_round28.h: the vsync hook needs Arduino_ESP32RGBPanel's panel handle
+#endif
 #include <Arduino_GFX_Library.h>
+#ifdef BOARD_ROUND28
+#undef private
+#endif
 #include <SD_MMC.h>
 #include <esp_system.h>
 #include "config.h"
@@ -14,6 +20,9 @@
 #endif
 #include "mochi.h"
 #include "cluster.h"
+#ifdef BOARD_ROUND28
+#include "round_ui.h"   // round dial pages: sport cluster, analog tach / speedo, vitals rings
+#endif
 #include "obd_parse.h"
 #include "car_events.h"
 
@@ -96,7 +105,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_COUNT };
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_COUNT };
 volatile int page = PAGE_FACE;       // BOOT short press cycles through the visible pages (see pageVisible)
 
 // ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load) ----------
@@ -118,8 +127,15 @@ static void resetGauges() {
 }
 static bool gaugeVisible(int g) { return GAUGES[g].show && gSupported[g] && (gOk[g] || gFails[g] < 5); }
 static bool clusterFailed = false;               // the landscape canvas could not be allocated
+static bool dialFailed = false;                  // round board: the dial pages' buffers could not be allocated
 static bool pageVisible(int p) {
+#ifdef BOARD_ROUND28
+  if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !dialFailed;
+  if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
+#else
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !clusterFailed;
+  if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return false;   // round board only
+#endif
   if (p >= PAGE_BATT && p <= PAGE_LOAD) return gaugeVisible(p - PAGE_BATT);
   if (p == PAGE_OIL) return oilValid;               // the Mazda says NO DATA; only shown if it ever answers
   return true;
@@ -128,6 +144,14 @@ static int nextPage(int p, int n) {
   for (int k = 0; k < n; k++) {
     int q = p;
     for (int i = 0; i < PAGE_COUNT; i++) { q = (q + 1) % PAGE_COUNT; if (pageVisible(q)) break; }
+    p = q;
+  }
+  return p;
+}
+static int prevPage(int p, int n) {
+  for (int k = 0; k < n; k++) {
+    int q = p;
+    for (int i = 0; i < PAGE_COUNT; i++) { q = (q + PAGE_COUNT - 1) % PAGE_COUNT; if (pageVisible(q)) break; }
     p = q;
   }
   return p;
@@ -626,6 +650,31 @@ void drawMouthFor(Mood m) {
 // Full-screen data page: title, one big number, unit. Mood is still shown by the LED, and the
 // coolant/oil numbers turn yellow/red at the uneasy/worried thresholds.
 
+// ---------- Face-page background (round board): a soft vertical gradient, dithered so it shows no bands ----------
+#ifdef BOARD_ROUND28
+static void paintFaceBg(int x0, int y0, int w, int h) {
+  static const uint8_t bay[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  uint16_t *fb = fullCanvas->getFramebuffer();
+  if (x0 < 0) { w += x0; x0 = 0; } if (y0 < 0) { h += y0; y0 = 0; }
+  if (x0 + w > LCD_W) w = LCD_W - x0; if (y0 + h > LCD_H) h = LCD_H - y0;
+  for (int y = y0; y < y0 + h; y++) {
+    float f = (float)y / (LCD_H - 1);
+    int r12 = (int)((5 + 15 * f) * 16), g12 = (int)((10 + 2 * f) * 16), b12 = (int)((26 + 20 * f) * 16);   // deep navy at the top, indigo at the bottom (x16)
+    uint16_t *row = fb + y * LCD_W;
+    for (int x = x0; x < x0 + w; x++) {
+      int d = bay[y & 3][x & 3];
+      int rq = (r12 + d * 8) >> 7, gq = (g12 + d * 4) >> 6, bq = (b12 + d * 8) >> 7;
+      row[x] = (uint16_t)(((rq > 31 ? 31 : rq) << 11) | ((gq > 63 ? 63 : gq) << 5) | (bq > 31 ? 31 : bq));
+    }
+  }
+}
+// Clears a rectangle to the page's background: the gradient on the face page, black elsewhere.
+static void clearBg(int x, int y, int w, int h) { if (page == PAGE_FACE) paintFaceBg(x, y, w, h); else gfx->fillRect(x, y, w, h, BLACK); }
+#else
+static void paintFaceBg(int x, int y, int w, int h) { gfx->fillRect(x, y, w, h, BLACK); }
+static void clearBg(int x, int y, int w, int h) { gfx->fillRect(x, y, w, h, BLACK); }
+#endif
+
 // One dot per visible page, the current one white. Spacing shrinks when there are many pages.
 #ifdef BOARD_ROUND28
 // The round panel clips the corners, so the dots sit on a short row at the top (y is ignored).
@@ -633,7 +682,7 @@ static void drawPageDots(int) {
   int n = visibleCount(), cur = visibleIndex(page);
   int step = n > 9 ? 14 : 18;
   const int y = 28;
-  gfx->fillRect(120, y - 8, 240, 16, BLACK);
+  clearBg(120, y - 8, 240, 16);
   for (int i = 0; i < n; i++)
     gfx->fillCircle(LCD_W / 2 + (int)((i - (n - 1) / 2.0f) * step), y, 5, i == cur ? WHITE : 0x39E7);
 }
@@ -840,7 +889,7 @@ void drawDebugPage() {
 // talking to the adapter or redrawing. handleButton() then acts on what the interrupt recorded.
 static volatile bool btnDown = false, btnLongFired = false;
 static volatile uint32_t btnDownMs = 0, btnLastEdgeMs = 0;
-static volatile uint8_t btnShortPresses = 0;
+static volatile uint8_t btnShortPresses = 0, btnPrevPresses = 0;   // taps / right swipes (previous page)
 
 void IRAM_ATTR onButtonEdge() {
   uint32_t ms = millis();
@@ -854,9 +903,12 @@ void IRAM_ATTR onButtonEdge() {
 }
 
 #ifdef BOARD_ROUND28
-// The touch screen acts as the button: a tap is a short press, holding a finger down LONG_PRESS_MS toggles demo mode.
+// The touch screen acts as the button: a tap is a short press, holding a finger down LONG_PRESS_MS toggles demo mode, and a
+// horizontal swipe changes the page: swipe left = next page, swipe right = previous page.
+static const int SWIPE_MIN_PX = 60, TAP_MAX_PX = 24;
 static void pollTouch() {
   static uint32_t lastPoll = 0, lastReport = 0;
+  static int sx = 0, sy = 0, lx = 0, ly = 0;
   uint32_t ms = millis();
   if (ms - lastPoll < 15) return;
   lastPoll = ms;
@@ -865,10 +917,18 @@ static void pollTouch() {
   if (got) lastReport = ms;
   bool release = (got && !dn) || (btnDown && !got && ms - lastReport > 250);   // no report for a while also counts as lifted
   if (got && dn) {
-    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; }
+    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; }
+    lx = x; ly = y;
+    if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
   } else if (release && btnDown) {
     btnDown = false;
-    if (!btnLongFired && btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;
+    int dx = lx - sx, dy = ly - sy;
+    Serial.printf("touch: from %d,%d to %d,%d (dx %d dy %d) -> %s\n", sx, sy, lx, ly, dx, dy, (abs(dx) >= SWIPE_MIN_PX && abs(dx) * 2 > abs(dy) * 3) ? (((dx < 0) != (SWIPE_NEXT_ON_RIGHT != 0)) ? "swipe next" : "swipe previous") : (btnLongFired ? "ignored" : "tap"));
+    if (abs(dx) >= SWIPE_MIN_PX && abs(dx) * 2 > abs(dy) * 3) {                 // mostly horizontal
+      bool next = (dx < 0) != (SWIPE_NEXT_ON_RIGHT != 0);                    // SWIPE_NEXT_ON_RIGHT flips the direction (config.h)
+      if (next) { if (btnShortPresses < 5) btnShortPresses = btnShortPresses + 1; }
+      else      { if (btnPrevPresses < 5) btnPrevPresses = btnPrevPresses + 1; }
+    } else if (!btnLongFired && btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;   // a tap
   }
 }
 #endif
@@ -886,11 +946,11 @@ void handleButton() {
     forceDraw = true;
   }
   noInterrupts();
-  uint8_t n = btnShortPresses;
-  btnShortPresses = 0;
+  uint8_t n = btnShortPresses, pv = btnPrevPresses;
+  btnShortPresses = 0; btnPrevPresses = 0;
   interrupts();
-  if (n) {
-    page = nextPage(page, n);
+  if (n || pv) {
+    if (n > pv) page = nextPage(page, n - pv); else if (pv > n) page = prevPage(page, pv - n);   // opposite swipes cancel out
     forceDraw = true;
   }
 }
@@ -954,7 +1014,7 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   wasIntro = introNow;
   bool settling = introNow || now < settleUntil;
   if (entering) {
-    gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
+    paintFaceBg(0, 0, LCD_W, LCD_H);
     drawPageDots(300);
     if (!settling) character.setBase(moodExpr(m), now);
   }
@@ -962,7 +1022,7 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   if (d && !lastDemoSeen) { character.startIntro(now); showIdx = 0; showAt = now + 5200; }   // demo ON replays the welcome
   if (!d && lastDemoSeen) {                       // demo just turned OFF: back to the real mood face
     character.setBase(moodExpr(m), now);
-    gfx->fillRect(UI_LABEL_X0, UI_LABEL_Y, UI_LABEL_W, UI_LABEL_H, BLACK);      // remove the expression name label
+    clearBg(UI_LABEL_X0, UI_LABEL_Y, UI_LABEL_W, UI_LABEL_H);      // remove the expression name label
   }
   lastDemoSeen = d;
   if (d) {
@@ -972,7 +1032,7 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
       if (e == mochi::E_TITLE) { e = (mochi::Expr)showIdx; showIdx = (showIdx + 1) % mochi::E_COUNT; }
       character.setBase(e, now);
       showAt = now + 2800;
-      gfx->fillRect(UI_LABEL_X0, UI_LABEL_Y, UI_LABEL_W, UI_LABEL_H, BLACK);
+      clearBg(UI_LABEL_X0, UI_LABEL_Y, UI_LABEL_W, UI_LABEL_H);
       gfx->setTextSize(UI_LABEL_SIZE); gfx->setTextColor(0x7BEF);
       int16_t x1, y1; uint16_t w, h; const char *nm = mochi::exprName(e);
       gfx->getTextBounds(nm, 0, 0, &x1, &y1, &w, &h);
@@ -994,7 +1054,17 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   { static mochi::Expr lastE = mochi::E_COUNT;
     if (character.current() != lastE) { lastE = character.current(); chgAt[chgHead] = now; chgName[chgHead] = faceName; chgHead = (chgHead + 1) % 3; } }
 #ifdef BOARD_ROUND28
-  { ScaledGfx<Arduino_GFX> sg{gfx, FACE_SCALE, (LCD_W - mochi::W * FACE_SCALE) / 2, (LCD_H - mochi::H * FACE_SCALE) / 2}; character.render(&sg, now); }
+  {
+    static bool wasIntroDraw = false;
+    bool introDraw = character.introActive();
+    const int FX = (LCD_W - mochi::W * FACE_SCALE) / 2, FY = (LCD_H - mochi::H * FACE_SCALE) / 2;
+    if (introDraw) paintFaceBg(0, 0, LCD_W, LCD_H);                  // the welcome's road lines reach past the character's own canvas: repaint everything
+    else if (wasIntroDraw) { paintFaceBg(0, 0, LCD_W, LCD_H); drawPageDots(300); }   // welcome over: bring the page dots back
+    else paintFaceBg(FX, FY, mochi::W * FACE_SCALE, mochi::H * FACE_SCALE);
+    wasIntroDraw = introDraw;
+    ScaledGfx<Arduino_GFX> sg{gfx, FACE_SCALE, FX, FY};
+    character.render(&sg, now, false);                              // the gradient is the background
+  }
   gfx->flush();
 #else
   character.render(canvas, now);
@@ -1072,6 +1142,42 @@ static void clusterFrame(uint32_t now) {
 #endif
 }
 
+#ifdef BOARD_ROUND28
+// Round-board dial pages (src/round_ui.h): sport cluster, analog tach, analog speedo, vitals rings.
+static void roundDialFrame(int p, uint32_t now) {
+  static bool started = false;
+  if (!started) {
+    started = true;
+    if (!rui::begin()) { Serial.println("round UI buffers failed"); dialFailed = true; forceDraw = true; page = nextPage(page, 1); return; }
+  }
+  rui::Data d;
+  d.rpm = (float)rpm; d.mph = (float)mph;
+  d.haveCool = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30; d.coolC = coolantC; d.coolShown = tempOut(coolantC);
+  auto have = [&](int g) { return gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS); };
+  d.haveFuel = have(G_FUEL); d.fuelPct = (int)lroundf(gVal[G_FUEL]);
+  d.haveBatt = have(G_BATT); d.battV = gVal[G_BATT];
+  d.haveLoad = have(G_LOAD); d.loadPct = (int)lroundf(gVal[G_LOAD]);
+  d.redline = RPM_REDLINE; d.hotC = TEMP_UNEASY_C; d.worryC = TEMP_WORRIED_C; d.fuelLowPct = FUEL_LOW_PCT;
+  d.battCritV = BATT_CRIT_V; d.battLowV = BATT_LOW_OFF_V; d.unitF = TEMP_UNIT_F;
+  d.dotN = visibleCount(); d.dotCur = visibleIndex(page);
+  int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : rui::PG_VITALS;
+  uint32_t t0 = micros();
+  uint16_t *fb = fullCanvas->getFramebuffer();
+  rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen
+  uint32_t t1 = micros();
+  // Send only the rows / spans that changed to the panel: a full 480x480 copy takes ~39 ms and tears while the panel scans out.
+  // Rows go out in order, each one only after the panel's scan has passed it, so a row never shows two different versions.
+  rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); rgbDisp->draw16bitRGBBitmap(x, y, fb + y * LCD_W + x, w, 1); });
+  uint32_t t2 = micros();
+  static uint32_t frames = 0, sumDraw = 0, sumFlush = 0, win = 0;   // timing line on the serial monitor, once per 2 s
+  frames++; sumDraw += t1 - t0; sumFlush += t2 - t1;
+  if (now - win >= 2000) {
+    if (win) Serial.printf("dial %d: %u fps, draw %u us, flush %u us per frame\n", pg, (unsigned)(frames * 1000 / (now - win)), (unsigned)(sumDraw / frames), (unsigned)(sumFlush / frames));
+    frames = sumDraw = sumFlush = 0; win = now;
+  }
+}
+#endif
+
 // Draws whatever the current page needs. Runs only in the UI task; the main task never touches the display.
 void uiTick() {
   static uint32_t lastTick = 0, gapWindowStart = 0, gapMax = 0;
@@ -1135,11 +1241,12 @@ void uiTick() {
       lastOpenOld = open;
     }
 #endif
-  } else if (page == PAGE_CLUSTER) {
+  } else if (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_DIAL_VITALS)) {
 #ifdef BOARD_ROUND28
-    if (forceDraw || drawnPage != PAGE_CLUSTER) gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);   // clear what the previous page left around the picture
-#endif
+    roundDialFrame(page, now);
+#else
     clusterFrame(now);
+#endif
   } else if (page == PAGE_DEBUG) {
     static uint32_t lastDbgDraw = 0;
     if (forceDraw || drawnPage != PAGE_DEBUG || now - lastDbgDraw >= 500) { drawDebugPage(); lastDbgDraw = now; }
@@ -1165,7 +1272,7 @@ static void uiTask(void *) {
   for (;;) {
     uint32_t t0 = millis();
     uiTick();
-    uint32_t period = (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER) ? (1000 / CLUSTER_FPS) : 30;
+    uint32_t period = (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_DIAL_VITALS)) ? (1000 / DIAL_FPS) : 30;
     uint32_t used = millis() - t0;
     vTaskDelay(pdMS_TO_TICKS(used >= period ? 1 : period - used));
   }

@@ -39,6 +39,9 @@
 
 // Rally cluster page (landscape: the panel is turned sideways while this page is shown, see docs/preview/cluster_mockup.png)
 #define SHOW_PAGE_CLUSTER  1
+#define SHOW_PAGE_DIALS    1   // round board only: analog tachometer, analog speedometer and the vitals rings
+#define DIAL_FPS          30   // target frame rate of the round board's dial pages
+#define SWIPE_NEXT_ON_RIGHT 1  // round board: 1 = swipe right goes to the next page, 0 = swipe left goes to the next page
 #define CLUSTER_ROTATION   1      // 1 or 3: which way the picture is turned (swap if it shows upside down)
 #define CLUSTER_FPS        24
 #define RPM_REDLINE        6500   // shift lights and the red zone of the sweep

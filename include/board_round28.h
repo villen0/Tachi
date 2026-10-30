@@ -27,7 +27,7 @@
 #define PIN_LCD_B2 48
 #define PIN_LCD_B3 47
 #define PIN_LCD_B4 21
-#define LCD_PCLK_HZ  (30 * 1000 * 1000)
+#define LCD_PCLK_HZ  (18 * 1000 * 1000)   // Waveshare's board config uses 18 MHz
 #define LCD_HPW 8
 #define LCD_HBP 10
 #define LCD_HFP 50

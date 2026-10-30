@@ -233,9 +233,10 @@ class Mochi {
     }
   }
 
-  // Draws the whole face into g (canvas coordinates 0..W-1, 0..H-1). Clears the canvas first.
-  template <class G> void render(G *g, uint32_t now) const {
-    g->fillRect(0, 0, W, H, 0);
+  // Draws the whole face into g (canvas coordinates 0..W-1, 0..H-1). Clears the canvas first unless clear is false
+  // (the caller then paints a background itself; the round board uses a gradient).
+  template <class G> void render(G *g, uint32_t now, bool clear = true) const {
+    if (clear) g->fillRect(0, 0, W, H, 0);
     if (intro) { drawWelcome(g, now - introT0); return; }
     if (ovl == O_GLITCH) drawGlitchBackground(g, now);
     if (ovl == O_STARS) drawStarfield(g, now);
@@ -744,8 +745,8 @@ class Mochi {
         for (int i = 0; i <= 24; i++) { float u = -1 + 2.0f * i / 24; g->fillCircle((int16_t)(cx + u * wd), (int16_t)(my + 5 * (1 - u * u)), 1, col); }
       }
     }
-    float ta = smootherf((T - 2850.0f) / 100.0f) * (1.0f - smootherf((T - 4800.0f) / 350.0f));
-    if (T >= 2850.0f && ta > 0.01f) drawVectorTitle(g, T, 2900.0f, ta, (T >= 4050.0f && T <= 4750.0f) ? clampf((T - 4050.0f) / 700.0f, 0, 1) : 0.0f, 116);
+    float ta = smootherf((T - 2780.0f) / 420.0f) * (1.0f - smootherf((T - 4650.0f) / 650.0f));   // slow fade in and out: the title melts in and out
+    if (T >= 2780.0f && ta > 0.01f) drawVectorTitle(g, T, 2900.0f, ta, (T >= 4050.0f && T <= 4750.0f) ? clampf((T - 4050.0f) / 700.0f, 0, 1) : 0.0f, 116);
   }
 
   template <class G> void drawTitle(G *g, uint32_t now) const {
