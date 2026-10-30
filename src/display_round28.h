@@ -8,6 +8,7 @@
 #include "config.h"
 
 static bool i2cStarted = false;
+static bool exFound = false, dispBeginOk = false;   // status flags, printed by the bring-up sketch
 static void i2cBegin() { if (!i2cStarted) { Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000); i2cStarted = true; } }
 
 // ---- TCA9554 expander (EXIOn pins are 1-based in config; register bit = n-1) ----
@@ -39,6 +40,7 @@ static bool exInit() {
   exOut = mine;
   exWrite(0x01, exOut);            // output register first, so the pins start high
   exWrite(0x03, (uint8_t)~mine);   // configuration: 0 = output, 1 = input
+  exFound = true;
   return true;
 }
 
@@ -165,6 +167,8 @@ static bool roundDisplayInit() {
   exSet(EXIO_LCD_CS, false);  delay(10);
   bool ok = rgbDisp->begin();
   exSet(EXIO_LCD_CS, true);
+  dispBeginOk = ok;
+  Serial.printf("display begin: %s, PSRAM %u bytes (free %u)\n", ok ? "ok" : "FAILED", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
   if (!ok) Serial.println("ERROR: display begin failed (PSRAM frame buffer / RGB panel)");
   ledcAttach(PIN_LCD_BL, 20000, 10);
   ledcWrite(PIN_LCD_BL, 800);                     // about 80% brightness

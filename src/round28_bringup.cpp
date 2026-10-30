@@ -42,11 +42,20 @@ void setup() {
     if (Wire.endTransmission() == 0) Serial.printf("I2C device at 0x%02X\n", a);
   }
   roundDisplayInit();
+  const uint16_t cols[] = {RED, GREEN, BLUE, WHITE};     // solid colours first: shows at once if the panel and the colour order work
+  for (uint16_t c : cols) { rgbDisp->fillScreen(c); delay(700); }
   drawTestPicture();
   touchInit();
 }
 
 void loop() {
+  static uint32_t lastBeat = 0;
+  if (millis() - lastBeat >= 2000) {                      // status every 2 s, so it shows no matter when the monitor was opened
+    lastBeat = millis();
+    Serial.printf("alive %lus  expander:%s(0x%02X) display:%s touch:%s  PSRAM %u free %u\n", (unsigned long)(millis() / 1000),
+                  exFound ? "ok" : "MISSING", exAddr, dispBeginOk ? "ok" : "FAILED", touchOk ? "ok" : "MISSING",
+                  (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
+  }
   bool down; int x, y;
   if (touchPoll(&down, &x, &y) && down) {
     Serial.printf("touch %d,%d\n", x, y);
