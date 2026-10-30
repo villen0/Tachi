@@ -105,7 +105,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_COUNT };
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_BRIGHTNESS, PAGE_COUNT };
 volatile int page = PAGE_FACE;       // BOOT short press cycles through the visible pages (see pageVisible)
 
 // ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load) ----------
@@ -132,9 +132,11 @@ static bool pageVisible(int p) {
 #ifdef BOARD_ROUND28
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !dialFailed;
   if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
+  if (p == PAGE_BRIGHTNESS) return SHOW_PAGE_BRIGHTNESS && !dialFailed;
 #else
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !clusterFailed;
   if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return false;   // round board only
+  if (p == PAGE_BRIGHTNESS) return false;                           // round board only
 #endif
   if (p >= PAGE_BATT && p <= PAGE_LOAD) return gaugeVisible(p - PAGE_BATT);
   if (p == PAGE_OIL) return oilValid;               // the Mazda says NO DATA; only shown if it ever answers
@@ -909,6 +911,7 @@ static const int SWIPE_MIN_PX = 60, TAP_MAX_PX = 24;
 static void pollTouch() {
   static uint32_t lastPoll = 0, lastReport = 0;
   static int sx = 0, sy = 0, lx = 0, ly = 0;
+  static bool slider = false;               // the finger went down on the brightness slider: it drags the slider, nothing else
   uint32_t ms = millis();
   if (ms - lastPoll < 15) return;
   lastPoll = ms;
@@ -917,11 +920,13 @@ static void pollTouch() {
   if (got) lastReport = ms;
   bool release = (got && !dn) || (btnDown && !got && ms - lastReport > 250);   // no report for a while also counts as lifted
   if (got && dn) {
-    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; }
+    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (page == PAGE_BRIGHTNESS && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); }
     lx = x; ly = y;
-    if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
+    if (slider) { btnLongFired = true; int pct = rui::pctFromX(x); if (pct != backlightPct) setBacklight(pct); }   // live: the screen dims or brightens under the finger
+    else if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
   } else if (release && btnDown) {
     btnDown = false;
+    if (slider) { slider = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }   // keep the level across restarts
     int dx = lx - sx, dy = ly - sy;
     Serial.printf("touch: from %d,%d to %d,%d (dx %d dy %d) -> %s\n", sx, sy, lx, ly, dx, dy, (abs(dx) >= SWIPE_MIN_PX && abs(dx) * 2 > abs(dy) * 3) ? (((dx < 0) != (SWIPE_NEXT_ON_RIGHT != 0)) ? "swipe next" : "swipe previous") : (btnLongFired ? "ignored" : "tap"));
     if (abs(dx) >= SWIPE_MIN_PX && abs(dx) * 2 > abs(dy) * 3) {                 // mostly horizontal
@@ -1178,6 +1183,19 @@ static void roundDialFrame(int p, uint32_t now) {
 }
 #endif
 
+#ifdef BOARD_ROUND28
+// Brightness page (round board): redrawn only when the level changes.
+static void roundBrightnessFrame(bool full) {
+  static int shown = -1;
+  if (!rui::begin()) { Serial.println("round UI buffers failed"); dialFailed = true; forceDraw = true; page = nextPage(page, 1); return; }
+  if (!full && shown == backlightPct) return;
+  uint16_t *fb = fullCanvas->getFramebuffer();
+  rui::brightnessPage(fb, backlightPct, visibleCount(), visibleIndex(page), full);
+  shown = backlightPct;
+  rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); rgbDisp->draw16bitRGBBitmap(x, y, fb + y * LCD_W + x, w, 1); });
+}
+#endif
+
 // Draws whatever the current page needs. Runs only in the UI task; the main task never touches the display.
 void uiTick() {
   static uint32_t lastTick = 0, gapWindowStart = 0, gapMax = 0;
@@ -1246,6 +1264,10 @@ void uiTick() {
     roundDialFrame(page, now);
 #else
     clusterFrame(now);
+#endif
+  } else if (page == PAGE_BRIGHTNESS) {
+#ifdef BOARD_ROUND28
+    roundBrightnessFrame(forceDraw || drawnPage != PAGE_BRIGHTNESS);
 #endif
   } else if (page == PAGE_DEBUG) {
     static uint32_t lastDbgDraw = 0;
@@ -1356,7 +1378,7 @@ void setup() {
 #endif
 #if PIN_LED >= 0
   led.begin();
-  led.setBrightness(60);
+  led.setBrightness(LED_BRIGHTNESS);
 #endif
   sdInit();
   NimBLEDevice::init("");

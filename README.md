@@ -30,6 +30,7 @@ How the UI maps to the round screen (everything is drawn into a 480x480 canvas i
   - Rows are sent only after the panel's scan has passed them (a vsync hook in `display_round28.h` plus `waitBeamPast()`), so a row never shows two versions: no tearing while the needle moves. Switching pages is a full redraw and can tear for a frame.
   - `tools/preview/round_ui_preview.cpp` renders the pages on a computer; `tools/preview/round_ui_selftest.cpp` checks that incremental drawing equals a full redraw (it must print PASS).
   - The serial monitor prints `dial N: X fps, draw .. us, flush .. us` every 2 s while a dial page is shown, and one line per touch gesture.
+- Brightness page (last page, `SHOW_PAGE_BRIGHTNESS`): drag a finger along the slider to set the backlight, 5-100 %, live; the level is saved to flash when you let go and restored at boot (`backlightPct` in `src/display_round28.h`). Touches that start on the slider never swipe or tap.
 - Input: touch replaces the BOOT button. Tap = next page, hold a finger down about 1.5 s = demo mode, swipe left/right = previous/next page (`SWIPE_NEXT_ON_RIGHT` in `config.h` flips the direction). BOOT still works too.
 - USB: use the port labelled USB (native, shows up as `usbmodem...`, used for flashing and the serial log). The UART port is a CH343 serial chip and shows no log.
 - No RGB LED on this board, so the mood colour is not shown; SD logging is off (`SD_LOG_ENABLED 0`).

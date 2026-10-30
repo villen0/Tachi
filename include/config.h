@@ -40,7 +40,9 @@
 // Rally cluster page (landscape: the panel is turned sideways while this page is shown, see docs/preview/cluster_mockup.png)
 #define SHOW_PAGE_CLUSTER  1
 #define SHOW_PAGE_DIALS    1   // round board only: analog tachometer, analog speedometer and the vitals rings
+#define SHOW_PAGE_BRIGHTNESS 1 // round board only: the brightness slider page (the level is saved across restarts)
 #define DIAL_FPS          30   // target frame rate of the round board's dial pages
+#define LED_BRIGHTNESS     0   // mood LED on the 1.47" stick: 0 = always off, 60 = the old default, 255 = full (the round board has no LED)
 #define SWIPE_NEXT_ON_RIGHT 1  // round board: 1 = swipe right goes to the next page, 0 = swipe left goes to the next page
 #define CLUSTER_ROTATION   1      // 1 or 3: which way the picture is turned (swap if it shows upside down)
 #define CLUSTER_FPS        24

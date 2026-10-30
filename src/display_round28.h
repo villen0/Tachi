@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <esp_timer.h>
+#include <Preferences.h>
 #ifdef BOARD_ROUND28
 #define private public    // Arduino_ESP32RGBPanel keeps its panel handle private; the vsync hook below needs it (main.cpp does the same)
 #endif
@@ -163,6 +164,16 @@ static void waitBeamPast(int y) {
   }
 }
 
+// ---- backlight: PWM level in percent, adjustable from the brightness page and kept across restarts ----
+static int backlightPct = 85;                      // 5..100
+static void loadBacklight() { Preferences pr; if (pr.begin("tachi", true)) { backlightPct = pr.getInt("bl", 85); pr.end(); } if (backlightPct < 5 || backlightPct > 100) backlightPct = 85; }
+static void saveBacklight() { Preferences pr; if (pr.begin("tachi", false)) { pr.putInt("bl", backlightPct); pr.end(); } }
+static void setBacklight(int pct) {
+  backlightPct = pct < 5 ? 5 : (pct > 100 ? 100 : pct);
+  int duty = (int)(1023.0f * powf(backlightPct / 100.0f, 1.8f) + 0.5f);    // gamma, so the low end has finer steps
+  ledcWrite(PIN_LCD_BL, duty < 4 ? 4 : duty);
+}
+
 // Whole bring-up of the round board: I2C, expander, panel reset, ST7701 init, RGB panel, backlight.
 static bool roundDisplayInit() {
   i2cBegin();
@@ -174,7 +185,8 @@ static bool roundDisplayInit() {
   Serial.printf("display begin: %s, PSRAM %u bytes (free %u)\n", ok ? "ok" : "FAILED", (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
   if (!ok) Serial.println("ERROR: display begin failed (PSRAM frame buffer / RGB panel)");
   ledcAttach(PIN_LCD_BL, 20000, 10);
-  ledcWrite(PIN_LCD_BL, 800);                     // about 80% brightness
+  loadBacklight();
+  setBacklight(backlightPct);                     // the level saved from the brightness page (85 % by default)
   return ok;
 }
 

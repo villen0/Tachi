@@ -387,4 +387,37 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
   drawRings(S, fb);
 }
 
+// ---- brightness page: sun icon, percentage and a slider ----
+constexpr int BR_X0 = 90, BR_X1 = 390, BR_Y = 308, BR_ZONE_Y0 = 262, BR_ZONE_Y1 = 354, BR_MIN = 5;   // slider track, touch zone, lowest level
+inline int pctFromX(int x) { int p = BR_MIN + (x - BR_X0) * (100 - BR_MIN) / (BR_X1 - BR_X0); return p < BR_MIN ? BR_MIN : (p > 100 ? 100 : p); }
+// full = draw the whole page; otherwise only the part that changes with the level. Marks what it touched (see flushDirty).
+inline void brightnessPage(uint16_t *fb, int pct, int dotN, int dotCur, bool full) {
+  State &S = st(); if (!S.ok) return;
+  if (full) {
+    for (int i = 0; i < W * H; i++) fb[i] = BG;
+    ringAA(fb, CX, CY, 235.5f, 238.5f, BEZEL);
+    textC(fb, F_LBL, "BRIGHTNESS", CX, 92, DIM);
+    textC(fb, F_LBL, "DRAG THE SLIDER", CX, 376, FAINT);
+    pageDots(fb, dotN, dotCur);
+    S.page = -1;                                   // the dial pages must rebuild their static layer next time
+    mark(S, 0, 0, W - 1, H - 1);
+  }
+  for (int y = 122; y <= 344; y++) for (int x = 40; x <= 440; x++) fb[y * W + x] = BG;
+  float f = (pct - BR_MIN) / (float)(100 - BR_MIN);
+  uint16_t sun = lerpc(255, 170, 40, 255, 236, 150, f);
+  discAA(fb, CX, 150, 10, sun);
+  for (int k = 0; k < 8; k++) {                    // rays grow with the level
+    float a = k * 0.785398f, ri = 17, ro = 21 + 11 * f;
+    taper(fb, CX + ri * sinf(a), 150 - ri * cosf(a), CX + ro * sinf(a), 150 - ro * cosf(a), 1.8f, 1.8f, sun);
+  }
+  char t[8]; snprintf(t, sizeof(t), "%d", pct);
+  textC(fb, F_BIG, t, CX - 6, 190, WHITE);
+  text(fb, F_MED, "%", CX - 6 + textW(F_BIG, t) / 2 + 8, 190 + F_BIG.h - F_MED.h, DIM);
+  float kx = BR_X0 + f * (BR_X1 - BR_X0);
+  taper(fb, BR_X0, BR_Y, BR_X1, BR_Y, 8, 8, PANEL_EDGE); discAA(fb, BR_X0, BR_Y, 8, PANEL_EDGE); discAA(fb, BR_X1, BR_Y, 8, PANEL_EDGE);
+  taper(fb, BR_X0, BR_Y, kx, BR_Y, 8, 8, sun); discAA(fb, BR_X0, BR_Y, 8, sun);
+  discAA(fb, kx, BR_Y, 22, BEZEL); discAA(fb, kx, BR_Y, 19, WHITE); discAA(fb, kx, BR_Y, 13, sun);
+  mark(S, 40, 122, 440, 344);
+}
+
 }  // namespace rui
