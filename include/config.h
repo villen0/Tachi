@@ -1,6 +1,7 @@
 #pragma once
+// Tachi settings for the Waveshare ESP32-S3-Touch-LCD-2.8C (round 480x480 touch display). Pins and panel timings: board_round28.h.
 // ===== User settings =====
-#define FW_TAG "cluster2"   // short feature tag shown with the build time on the Debug page (proves which firmware is flashed)
+#define FW_TAG "round"   // short feature tag shown with the build time on the Debug page (proves which firmware is flashed)
 // Part of the BLE adapter's name (check with the nRF Connect app or the scan log).
 #define ADAPTER_NAME_SUBSTR "CodeReader"   // seen in nRF Connect as "CodeReader31B"
 
@@ -26,22 +27,20 @@
 #define CRUISE_RPM_MAX  2600
 
 // Demo mode: fake RPM / speed / coolant, no Bluetooth. Lets you test the face at a desk.
-// DEMO_MODE_DEFAULT is the state at boot. Hold the BOOT button ~1.5 s to toggle at runtime.
+// DEMO_MODE_DEFAULT is the state at boot. Touch and hold the screen ~1.5 s (or hold the BOOT button) to toggle at runtime.
 #define DEMO_MODE_DEFAULT  0
 #define LONG_PRESS_MS      1500
 
 // Character (Mochi-style animated eyes on the Face page, see docs/mochi-plan.md)
-#define MOCHI_FACE   1        // 1 = animated character, 0 = the old simple face
 #define MOCHI_INTRO  1        // play the welcome animation at power-on
 #define INTRO_FORCE  0        // welcome type: 0 = auto (full on fresh power-up, short after a restart), 1 = always full, 2 = always short
 #define UI_FPS       30       // target frame rate of the Face page
-#define LCD_SPI_HZ   40000000 // panel SPI clock (ST7789 handles up to ~60 MHz; lower it if the picture shows noise)
 
-// Rally cluster page (landscape: the panel is turned sideways while this page is shown, see docs/preview/cluster_mockup.png)
-#define SHOW_PAGE_CLUSTER  1
-#define SHOW_PAGE_DIALS    1   // round board only: analog tachometer, analog speedometer and the vitals rings
-#define SHOW_PAGE_BRIGHTNESS 1 // round board only: the brightness slider page (the level is saved across restarts)
-#define SHOW_PAGE_STYLES   1   // round board only: arc (boost), custom, quad, dual and gear pages (the two boost pages appear only if the car answers MAP)
+// Pages (swipe left / right, or tap, to change page). Set 0 to hide.
+#define SHOW_PAGE_CLUSTER  1   // sport cluster: RPM ring, big speed, coolant / fuel / battery chips
+#define SHOW_PAGE_DIALS    1   // analog tachometer, analog speedometer and the vitals rings
+#define SHOW_PAGE_BRIGHTNESS 1 // the brightness slider page (the level is saved across restarts)
+#define SHOW_PAGE_STYLES   1   // arc (boost), custom, quad, dual and gear pages (the two boost pages appear only if the car answers MAP)
 #define BOOST_UNIT_PSI     1   // boost in psi (1) or bar (0)
 // What the multi-value pages show. Pick from: RD_COOL RD_INTAKE RD_BATT RD_FUEL RD_LOAD RD_THROTTLE RD_AMBIENT RD_BOOST
 #define RD_COOL 0
@@ -55,27 +54,25 @@
 #define CUSTOM_ROWS {RD_COOL, RD_INTAKE, RD_BATT}            // the three readouts under the boost number
 #define QUAD_CELLS  {RD_COOL, RD_INTAKE, RD_BATT, RD_LOAD}   // the four values of the quad page
 #define DUAL_ROWS   {RD_COOL, RD_INTAKE}                     // the two values with bars
-#define DIAL_FPS          30   // target frame rate of the round board's dial pages
-#define LED_BRIGHTNESS     0   // mood LED on the 1.47" stick: 0 = always off, 60 = the old default, 255 = full (the round board has no LED)
-#define SWIPE_NEXT_ON_RIGHT 1  // round board: 1 = swipe right goes to the next page, 0 = swipe left goes to the next page
-#define CLUSTER_ROTATION   1      // 1 or 3: which way the picture is turned (swap if it shows upside down)
-#define CLUSTER_FPS        24
+#define DIAL_FPS          30   // target frame rate of the dial pages
+#define SWIPE_NEXT_ON_RIGHT 0  // 1 = swipe right goes to the next page, 0 = swipe left goes to the next page (like a phone)
+// One-off test at first connect: listens ~45 s for the Mazda gear selector CAN message (ID 0x01F) and reports on the Debug page and Serial. Set 0 when done.
+#define FACE_TIMING_LOG    0   // 1 = print the Face page / welcome frame rate on the UART port (the one with the USB-serial chip) every 2 s
+#define GEAR_SNIFF_TEST    1
+#define GEAR_SNIFF_SEC     45
 #define RPM_REDLINE        6500   // shift lights and the red zone of the sweep
 
-// One-off reactions of the face on the Face page: engine start (sparkle), hard braking (startle), low battery / low fuel (crying).
+// One-off reactions of the face on the Face page (logic in src/car_events.h): engine start (sparkle), hard braking (startle), redline (glitch),
+// hard launch (laugh), smooth stop (content), engine off (sleepy), engine warmed up (happy), low battery / low fuel (crying).
 #define CAR_EVENTS            1
 #define EVENT_ENGINE_OFF_MS   3000   // engine must have been off (RPM under 400, data fresh) this long before a start counts
 #define EVENT_BRAKE_MIN_MPH   15     // hard braking: speed before the stop ...
 #define EVENT_BRAKE_DROP_MPH  10     // ... and the drop within one second
 #define EVENT_FUEL_LOW_PCT    7      // low fuel reaction below this percent
+#define EVENT_LAUNCH_MIN_RPM  3000   // hard launch (laugh): revs needed, with speed jumping 6+ mph in a second from below 25 mph
+#define EVENT_WARM_C          80     // engine warmed up (happy look, once per power-up): coolant in deg C, after a cold reading first
+// The redline reaction (glitch flash) uses RPM_REDLINE below.
 
-// Extra car-data pages: shown only if the car answers them (discovered at connect). Set 0 to hide a page.
-#define SHOW_PAGE_BATTERY   1
-#define SHOW_PAGE_INTAKE    1   // intake air temperature
-#define SHOW_PAGE_OUTSIDE   1   // outside air temperature
-#define SHOW_PAGE_FUEL      1
-#define SHOW_PAGE_THROTTLE  1
-#define SHOW_PAGE_LOAD      1   // calculated engine load
 // Battery colours: engine off (RPM ~0) yellow below BATT_LOW_OFF_V; engine running yellow below BATT_LOW_RUN_V; red below BATT_CRIT_V
 #define BATT_LOW_OFF_V   12.0f
 #define BATT_LOW_RUN_V   13.2f
@@ -93,10 +90,5 @@
 #define INIT_TIMEOUT_MS    3000   // adapter setup commands (ATZ is slow)
 #define SCAN_TIME_MS       5000
 
-// ===== Board selection =====
-// Default is the 1.47" stick. platformio.ini env waveshare_s3_round28 defines BOARD_ROUND28.
-#if defined(BOARD_ROUND28)
-  #include "board_round28.h"
-#else
-  #include "board_stick147.h"
-#endif
+// ===== Board (pins, panel timings, layout) =====
+#include "board_round28.h"

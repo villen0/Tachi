@@ -1,18 +1,14 @@
 #pragma once
 // Display + touch driver for the Waveshare ESP32-S3-Touch-LCD-2.8C (ST7701 over 16-bit RGB, GT911, TCA9554 expander).
 // Header-only and static: included by exactly one source file per build (main.cpp or round28_bringup.cpp).
-// Pins and timings: include/board_round28.h. Not yet run on hardware.
+// Pins and timings: include/board_round28.h.
 #include <Arduino.h>
 #include <Wire.h>
 #include <esp_timer.h>
 #include <Preferences.h>
-#ifdef BOARD_ROUND28
 #define private public    // Arduino_ESP32RGBPanel keeps its panel handle private; the vsync hook below needs it (main.cpp does the same)
-#endif
 #include <Arduino_GFX_Library.h>
-#ifdef BOARD_ROUND28
 #undef private
-#endif
 #include "config.h"
 #include "round28_init.h"
 

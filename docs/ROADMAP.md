@@ -1,5 +1,7 @@
 # Tachi roadmap and tracker
 
+> Historical notes. The 1.47" stick (172x320) described in parts of this file is no longer supported: Tachi now targets only the round 2.8C touch board. See README.md for the current state.
+
 (Kept in sync with the working plan; update every session.)
 
 ## Tracker (single place for everything; keep updated each session)

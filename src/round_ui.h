@@ -110,7 +110,10 @@ inline void restore(uint16_t *fb, const uint16_t *bg, int x, int y, int w, int h
 struct Font { const char *chars; const roundfont::Glyph *g; const uint8_t *d; int h, gap; };
 const Font F_HUGE = {roundfont::HUGE_CHARS, roundfont::HUGE_G, roundfont::HUGE_D, roundfont::HUGE_H, 3};
 const Font F_BIG = {roundfont::BIG_CHARS, roundfont::BIG_G, roundfont::BIG_D, roundfont::BIG_H, 2};
+const Font F_NUM = {roundfont::NUM_CHARS, roundfont::NUM_G, roundfont::NUM_D, roundfont::NUM_H, 2};
 const Font F_MED = {roundfont::MED_CHARS, roundfont::MED_G, roundfont::MED_D, roundfont::MED_H, 2};
+const Font F_TTL = {roundfont::TTL_CHARS, roundfont::TTL_G, roundfont::TTL_D, roundfont::TTL_H, 2};
+const Font F_SML = {roundfont::SML_CHARS, roundfont::SML_G, roundfont::SML_D, roundfont::SML_H, 1};
 const Font F_LBL = {roundfont::LBL_CHARS, roundfont::LBL_G, roundfont::LBL_D, roundfont::LBL_H, 1};
 inline int glyphIndex(const Font &f, char ch) { if (ch >= 'a' && ch <= 'z') ch -= 32; const char *p = ch ? strchr(f.chars, ch) : nullptr; return p ? (int)(p - f.chars) : -1; }
 inline int textW(const Font &f, const char *s) { int w = 0; for (int i = 0; s[i]; i++) { int k = glyphIndex(f, s[i]); if (k >= 0) w += f.g[k].adv; } return w > f.gap ? w - f.gap : w; }
@@ -165,6 +168,7 @@ struct State {
   int16_t nmin[H], nmax[H]; int nr0 = 0, nr1 = -1;   // per row: where the needle was drawn last frame
   SBox sbox[MAX_RINGS][MAX_SEG];            // bounding box of every ring segment
   int16_t barPx[2] = {-1, -1}; uint16_t barCol[2] = {0, 0};   // dual page: fill width and colour last drawn
+  int8_t brChip = -2;                                          // brightness page: which preset chip was drawn lit (-1 none, -2 not drawn yet)
 };
 inline State &st() { static State s; return s; }
 
@@ -241,14 +245,14 @@ inline void pageDots(uint16_t *b, int n, int cur) {
   for (int i = 0; i < n; i++) discAA(b, CX + (i - (n - 1) / 2.0f) * step, 450, i == cur ? 5.0f : 3.5f, i == cur ? WHITE : FAINT);
 }
 inline void pill(uint16_t *b, int cx, int y, int w, int h, const char *label) {
-  float r = 14; int x = cx - w / 2;
+  float r = 12; int x = cx - w / 2;
   for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
     float px = i + 0.5f, py = j + 0.5f, qx = fabsf(px - w / 2.0f) - (w / 2.0f - r), qy = fabsf(py - h / 2.0f) - (h / 2.0f - r);
     float d = sqrtf((qx > 0 ? qx : 0) * (qx > 0 ? qx : 0) + (qy > 0 ? qy : 0) * (qy > 0 ? qy : 0)) + fminf(fmaxf(qx, qy), 0.0f) - r;   // signed distance to the rounded rect
     blendPx(b, x + i, y + j, PANEL, (int)(clamp01(0.5f - d) * 255));
     blendPx(b, x + i, y + j, PANEL_EDGE, (int)(clamp01(0.5f - fabsf(d + 1.0f)) * 255));
   }
-  textC(b, F_LBL, label, cx, y + 6, DIM);
+  textC(b, F_LBL, label, cx, y + 10, DIM);
 }
 // the gradient of the RPM ring: cyan -> mint -> yellow -> orange, red from the redline up
 inline uint16_t rpmColor(float v, int redline) {
@@ -300,22 +304,22 @@ inline void buildStyle(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg; char t[16];
   if (pg == PG_ARC || pg == PG_CUSTOM) {
     const bool big = pg == PG_ARC;
-    buildRing(S, 0, CX, CY, big ? 204.0f : 210.0f, 228.0f, 90, 0.8f); S.nring = 1;
+    buildRing(S, 0, CX, CY, 214, 226, 90, 0.8f); S.nring = 1;
     float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
     float minor = d.arcMinor > 0.0001f ? d.arcMinor : 1; int per = (int)(d.arcMajor / minor + 0.5f); if (per < 1) per = 1;
     int n = (int)(span / minor + 0.5f);
     for (int i = 0; i <= n; i++) {
       float v = d.arcMin + i * minor; bool major = (i % per) == 0;
-      tick(b, v - d.arcMin, span, major ? (big ? 180.0f : 188.0f) : (big ? 187.0f : 193.0f), big ? 198.0f : 202.0f, major ? 1.9f : 0.9f, major ? WHITE : FAINT);
-      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 142.0f : 152.0f, t, WHITE); }
+      tick(b, v - d.arcMin, span, major ? 190.0f : 197.0f, 207.0f, major ? 1.6f : 0.8f, major ? WHITE : FAINT);
+      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 150.0f : 152.0f, t, DIM); }
     }
-    if (d.arcLabel[0]) textC(b, F_LBL, d.arcLabel, CX, big ? 338 : 366, CYAN);
-    if (d.arcUnit[0]) textC(b, F_LBL, d.arcUnit, CX, big ? 280 : 186, DIM);
+    if (d.arcLabel[0]) textC(b, F_LBL, d.arcLabel, CX, big ? 338 : 348, CYAN);
+    if (d.arcUnit[0]) textC(b, F_LBL, d.arcUnit, CX, big ? 262 : 182, DIM);
     if (!big) {                                      // three icon readouts under the number
       for (int i = 0; i < 3; i++) {
-        const int y = 228 + 38 * i;
-        iconDraw(b, d.rd[i].icon, CX - 84, y + 14, CYAN);
-        if (d.rd[i].unit[0]) text(b, F_LBL, d.rd[i].unit, CX + 68, y + 9, DIM);
+        const int y = 214 + 40 * i;
+        iconDraw(b, d.rd[i].icon, CX - 78, y + 12, CYAN);
+        if (d.rd[i].unit[0]) text(b, F_LBL, d.rd[i].unit, CX + 66, y + 5, DIM);
       }
     }
     struct A { float zero, red; } a = {(0 - d.arcMin) / span, (d.arcRed - d.arcMin) / span};
@@ -326,28 +330,28 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       float lo = a->zero > 0 ? a->zero : 0, u = (f - lo) / (a->red - lo > 0.01f ? a->red - lo : 0.01f);
       return u < 0.5f ? lerpc(0, 200, 255, 110, 240, 190, u / 0.5f) : lerpc(110, 240, 190, 255, 208, 50, (u - 0.5f) / 0.5f); }, &a);
   } else if (pg == PG_QUAD) {
-    if (d.title[0]) textC(b, F_LBL, d.title, CX, 62, CYAN);
-    taper(b, CX, 96, CX, 420, 0.8f, 0.8f, FAINT); taper(b, 62, CY + 4, 418, CY + 4, 0.8f, 0.8f, FAINT);
-    static const int cxs[4] = {CX - 100, CX + 100, CX - 100, CX + 100}, cys[4] = {CY - 76, CY - 76, CY + 92, CY + 92};
+    if (d.title[0]) textC(b, F_LBL, d.title, CX, 64, CYAN);
+    taper(b, CX, 118, CX, 384, 0.7f, 0.7f, FAINT); taper(b, 84, CY + 2, 396, CY + 2, 0.7f, 0.7f, FAINT);
+    static const int cxs[4] = {CX - 96, CX + 96, CX - 96, CX + 96}, cys[4] = {CY - 80, CY - 80, CY + 84, CY + 84};
     for (int i = 0; i < 4; i++) {
       iconDraw(b, d.rd[i].icon, cxs[i], cys[i] - 68, CYAN);
       textC(b, F_LBL, d.rd[i].label, cxs[i], cys[i] - 46, DIM);
-      textC(b, F_LBL, d.rd[i].unit, cxs[i], cys[i] + 48, DIM);
+      textC(b, F_LBL, d.rd[i].unit, cxs[i], cys[i] + 30, DIM);
     }
   } else if (pg == PG_DUAL) {
-    if (d.title[0]) textC(b, F_LBL, d.title, CX, 64, CYAN);
+    if (d.title[0]) textC(b, F_LBL, d.title, CX, 74, CYAN);
     for (int i = 0; i < 2; i++) {
-      const int y0 = i ? 262 : 108;
-      iconDraw(b, d.rd[i].icon, CX - 74, y0 + 8, CYAN);
+      const int y0 = i ? 262 : 120;
+      iconDraw(b, d.rd[i].icon, CX - 84, y0 + 7, CYAN);
       char lab[24]; snprintf(lab, sizeof(lab), "%s %s", d.rd[i].label, d.rd[i].unit);
-      text(b, F_LBL, lab, CX - 52, y0 + 0, DIM);
-      const int bx0 = CX - 120, by = y0 + 108;
-      taper(b, bx0 + 7, by + 7, bx0 + 233, by + 7, 7, 7, PANEL_EDGE); discAA(b, bx0 + 7, by + 7, 7, PANEL_EDGE); discAA(b, bx0 + 233, by + 7, 7, PANEL_EDGE);
+      text(b, F_LBL, lab, CX - 62, y0, DIM);
+      const int bx0 = CX - 120, by = y0 + 88;
+      taper(b, bx0 + 5, by + 5, bx0 + 235, by + 5, 5, 5, PANEL); discAA(b, bx0 + 5, by + 5, 5, PANEL); discAA(b, bx0 + 235, by + 5, 5, PANEL);
     }
-  } else {   // PG_GEAR: the ladder 1..6, the current gear drawn huge, the speed below
-    textC(b, F_LBL, "GEAR", CX, 58, DIM);
-    for (int g = 0; g < 6; g++) { snprintf(t, sizeof(t), "%d", g + 1); textC(b, F_MED, t, CX + (int)((g - 2.5f) * 54), 92, FAINT); }
-    textC(b, F_LBL, "MPH", CX, 360, DIM);
+  } else {   // PG_GEAR: the ladder 1..6, the current gear drawn large, the speed below
+    textC(b, F_LBL, "GEAR", CX, 92, DIM);
+    for (int g = 0; g < 6; g++) { snprintf(t, sizeof(t), "%d", g + 1); textC(b, F_MED, t, CX + (int)((g - 2.5f) * 48), 120, FAINT); }
+    textC(b, F_LBL, "MPH", CX, 352, DIM);
   }
 }
 
@@ -360,27 +364,27 @@ inline void buildPage(State &S, int pg, const Data &d) {
   int mx = rpmMax(d.redline);
   char t[16];
   if (pg == PG_SPORT) {
-    buildRing(S, 0, CX, CY, 206, 228, 90, 0.9f); S.nring = 1;
-    for (int v = 0; v <= mx; v += 500) tick(b, (float)v, (float)mx, v % 1000 ? 190.0f : 186.0f, 201, v % 1000 ? 1.0f : 1.7f, v % 1000 ? FAINT : DIM);
-    textC(b, F_LBL, "RPM", CX, 78, DIM);
-    textC(b, F_LBL, "MPH", CX, 276, DIM);
-    const int PW = 92, PY = 308, PH = 58;
-    pill(b, CX - 100, PY, PW, PH, "COOL"); pill(b, CX, PY, PW, PH, "FUEL"); pill(b, CX + 100, PY, PW, PH, "BATT");
-    textC(b, F_LBL, "TACHI", CX, 396, FAINT);
+    buildRing(S, 0, CX, CY, 214, 226, 90, 0.9f); S.nring = 1;
+    for (int v = 0; v <= mx; v += 500) tick(b, (float)v, (float)mx, v % 1000 ? 197.0f : 191.0f, 207, v % 1000 ? 0.9f : 1.5f, v % 1000 ? FAINT : DIM);
+    textC(b, F_LBL, "RPM", CX, 102, DIM);
+    textC(b, F_LBL, "MPH", CX, 258, DIM);
+    const int PW = 88, PY = 298, PH = 58;
+    pill(b, CX - 94, PY, PW, PH, "COOL"); pill(b, CX, PY, PW, PH, "FUEL"); pill(b, CX + 94, PY, PW, PH, "BATT");
+    textC(b, F_LBL, "TACHI", CX, 390, FAINT);
   } else if (pg == PG_TACH || pg == PG_SPEEDO) {
     bool tach = pg == PG_TACH; float vmax = tach ? (float)mx : 160.0f;
-    buildRing(S, 0, CX, CY, 213, 227, 90, 0.7f); S.nring = 1;
+    buildRing(S, 0, CX, CY, 214, 226, 90, 0.7f); S.nring = 1;
     float majorStep = tach ? 1000.0f : 20.0f, midStep = tach ? 500.0f : 10.0f, minStep = tach ? 250.0f : 5.0f;
     for (float v = 0; v <= vmax + 0.01f; v += minStep) {
       bool major = fmodf(v, majorStep) < 0.01f, mid = !major && fmodf(v, midStep) < 0.01f;
-      tick(b, v, vmax, major ? 184.0f : (mid ? 192.0f : 198.0f), 207, major ? 2.0f : (mid ? 1.4f : 0.9f), major ? WHITE : (mid ? DIM : FAINT));
+      tick(b, v, vmax, major ? 190.0f : (mid ? 196.0f : 200.0f), 207, major ? 1.8f : (mid ? 1.2f : 0.8f), major ? WHITE : (mid ? DIM : FAINT));
     }
-    for (float v = 0; v <= vmax + 0.01f; v += majorStep) { snprintf(t, sizeof(t), "%d", (int)(tach ? v / 1000 + 0.5f : v + 0.5f)); numeral(b, v, vmax, strlen(t) >= 3 ? 140.0f : 160.0f, t, v >= d.redline && tach ? RED : WHITE); }
-    textC(b, F_LBL, tach ? "X1000 RPM" : "MPH", CX, 132, DIM);
-    textC(b, F_LBL, tach ? "MPH" : "RPM", CX, tach ? 400 : 388, DIM);
+    for (float v = 0; v <= vmax + 0.01f; v += majorStep) { snprintf(t, sizeof(t), "%d", (int)(tach ? v / 1000 + 0.5f : v + 0.5f)); numeral(b, v, vmax, 148.0f, t, v >= d.redline && tach ? RED : WHITE); }
+    textC(b, F_LBL, tach ? "X1000 RPM" : "MPH", CX, 290, DIM);
+    textC(b, F_LBL, tach ? "MPH" : "RPM", CX, 374, DIM);
   } else if (pg == PG_VITALS) {   // vitals: four ring gauges
-    static const int cxs[4] = {CX - 100, CX + 100, CX - 100, CX + 100}, cys[4] = {CY - 100, CY - 100, CY + 100, CY + 100};
-    for (int i = 0; i < 4; i++) buildRing(S, i, (float)cxs[i], (float)cys[i], 74, 90, 45, 1.8f);
+    static const int cxs[4] = {CX - 104, CX + 104, CX - 104, CX + 104}, cys[4] = {CY - 98, CY - 98, CY + 98, CY + 98};
+    for (int i = 0; i < 4; i++) buildRing(S, i, (float)cxs[i], (float)cys[i], 66, 78, 45, 1.8f);
     S.nring = 4;
     const char *lab[4] = {d.unitF ? "COOL F" : "COOL C", "FUEL %", "BATT V", "LOAD %"};
     for (int i = 0; i < 4; i++) textC(b, F_LBL, lab[i], cxs[i], cys[i] + 36, DIM);
@@ -428,10 +432,10 @@ inline void needle(State &S, uint16_t *fb, float deg, uint16_t col) {
   S.needleAng = q;
   for (int y = S.nr0; y <= S.nr1; y++)                    // put back the dial under last frame's needle, row by row
     if (S.nmax[y] >= S.nmin[y]) { restore(fb, S.bg, S.nmin[y] - 1, y, S.nmax[y] - S.nmin[y] + 3, 1); mark(S, S.nmin[y] - 1, y, S.nmax[y] + 1, y); }
-  restore(fb, S.bg, CX - 20, CY - 20, 40, 40); mark(S, CX - 20, CY - 20, CX + 20, CY + 20);
-  float tx, ty, ex, ey; polar(196, q, &tx, &ty); polar(-40, q, &ex, &ey);
-  Box a = taper(fb, ex, ey, tx, ty, 6.5f, 1.4f, col, S.nmin, S.nmax);
-  discAA(fb, CX, CY, 17, rgb(205, 212, 228)); discAA(fb, CX, CY, 10, BG); discAA(fb, CX, CY, 4.5f, col);
+  restore(fb, S.bg, CX - 18, CY - 18, 36, 36); mark(S, CX - 18, CY - 18, CX + 18, CY + 18);
+  float tx, ty, ex, ey; polar(190, q, &tx, &ty); polar(-34, q, &ex, &ey);
+  Box a = taper(fb, ex, ey, tx, ty, 5.0f, 1.2f, col, S.nmin, S.nmax);
+  discAA(fb, CX, CY, 13, rgb(205, 212, 228)); discAA(fb, CX, CY, 8, BG); discAA(fb, CX, CY, 3.5f, col);
   S.nr0 = a.y0 < 0 ? 0 : a.y0; S.nr1 = a.y1 >= H ? H - 1 : a.y1;
   for (int y = S.nr0; y <= S.nr1; y++) if (S.nmax[y] >= S.nmin[y]) mark(S, S.nmin[y] - 1, y, S.nmax[y] + 1, y);
 }
@@ -456,23 +460,23 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
     ringLevel(S, 0, d.haveArc ? (d.arcVal - d.arcMin) / span : 0);
     const bool big = pg == PG_ARC;
-    num(S, fb, 0, F_BIG, d.haveArc ? d.arcText : none, CX, big ? 214 : 122, 0, d.haveArc ? WHITE : DIM);
-    if (!big) for (int i = 0; i < 3; i++) num(S, fb, 1 + i, F_MED, d.rd[i].have ? d.rd[i].text : none, CX + 6, 228 + 38 * i, 0, d.rd[i].have ? d.rd[i].col : DIM);
+    num(S, fb, 0, F_BIG, d.haveArc ? d.arcText : none, CX, big ? 206 : 126, 0, d.haveArc ? WHITE : DIM);
+    if (!big) for (int i = 0; i < 3; i++) num(S, fb, 1 + i, F_MED, d.rd[i].have ? d.rd[i].text : none, CX + 4, 214 + 40 * i, 0, d.rd[i].have ? d.rd[i].col : DIM);
   } else if (pg == PG_QUAD) {
-    static const int cxs[4] = {CX - 100, CX + 100, CX - 100, CX + 100}, cys[4] = {CY - 76, CY - 76, CY + 92, CY + 92};
-    for (int i = 0; i < 4; i++) num(S, fb, i, F_BIG, d.rd[i].have ? d.rd[i].text : none, cxs[i], cys[i] - 16, 0, d.rd[i].have ? d.rd[i].col : DIM);
+    static const int cxs[4] = {CX - 96, CX + 96, CX - 96, CX + 96}, cys[4] = {CY - 80, CY - 80, CY + 84, CY + 84};
+    for (int i = 0; i < 4; i++) num(S, fb, i, F_NUM, d.rd[i].have ? d.rd[i].text : none, cxs[i], cys[i] - 18, 0, d.rd[i].have ? d.rd[i].col : DIM);
   } else if (pg == PG_DUAL) {
     for (int i = 0; i < 2; i++) {
-      const int y0 = i ? 262 : 108;
-      num(S, fb, i, F_BIG, d.rd[i].have ? d.rd[i].text : none, CX, y0 + 28, 0, d.rd[i].have ? d.rd[i].col : DIM);
-      barFill(S, fb, i, CX - 120, y0 + 108, 240, 14, d.rd[i].have ? d.rd[i].frac : 0, d.rd[i].col);
+      const int y0 = i ? 262 : 120;
+      num(S, fb, i, F_NUM, d.rd[i].have ? d.rd[i].text : none, CX, y0 + 32, 0, d.rd[i].have ? d.rd[i].col : DIM);
+      barFill(S, fb, i, CX - 120, y0 + 88, 240, 10, d.rd[i].have ? d.rd[i].frac : 0, d.rd[i].col);
     }
   } else {   // PG_GEAR
     char g[2] = {d.gear, 0}; const bool known = d.gear >= '1' && d.gear <= '6';
-    num(S, fb, 0, F_HUGE, g, CX, 132, 0, known ? WHITE : DIM);
+    num(S, fb, 0, F_HUGE, g, CX, 178, 0, known ? WHITE : DIM);
     char l[2] = {known ? d.gear : (char)0, 0}; int gi = known ? d.gear - '1' : 2;
-    num(S, fb, 1, F_MED, l, CX + (int)((gi - 2.5f) * 54), 92, 0, CYAN);
-    char sp[12]; snprintf(sp, sizeof(sp), "%d", (int)lroundf(S.mph)); num(S, fb, 2, F_BIG, sp, CX, 292, 0, WHITE);
+    num(S, fb, 1, F_MED, l, CX + (int)((gi - 2.5f) * 48), 120, 0, CYAN);
+    char sp[12]; snprintf(sp, sizeof(sp), "%d", (int)lroundf(S.mph)); num(S, fb, 2, F_NUM, sp, CX, 306, 0, WHITE);
   }
 }
 
@@ -493,25 +497,25 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
   char t[16];
   if (pg == PG_SPORT) {
     ringLevel(S, 0, S.rpm / mx);
-    snprintf(t, sizeof(t), "%d", rpm); num(S, fb, 0, F_MED, t, CX, 104, 150, rpm >= d.redline ? RED : WHITE);
-    snprintf(t, sizeof(t), "%d", mph); num(S, fb, 1, F_HUGE, t, CX, 152, 290, WHITE);
-    const int PY = 308 + 28;
+    snprintf(t, sizeof(t), "%d", rpm); num(S, fb, 0, F_MED, t, CX, 126, 150, rpm >= d.redline ? RED : WHITE);
+    snprintf(t, sizeof(t), "%d", mph); num(S, fb, 1, F_HUGE, t, CX, 174, 290, WHITE);
+    const int PY = 298 + 30;
     if (d.haveCool) snprintf(t, sizeof(t), "%d", d.coolShown); else snprintf(t, sizeof(t), "--");
-    num(S, fb, 2, F_MED, t, CX - 100, PY, 84, !d.haveCool ? DIM : (d.coolC >= d.worryC ? RED : (d.coolC >= d.hotC ? YELLOW : WHITE)));
+    num(S, fb, 2, F_MED, t, CX - 94, PY, 84, !d.haveCool ? DIM : (d.coolC >= d.worryC ? RED : (d.coolC >= d.hotC ? YELLOW : WHITE)));
     if (d.haveFuel) snprintf(t, sizeof(t), "%d", d.fuelPct); else snprintf(t, sizeof(t), "--");
     num(S, fb, 3, F_MED, t, CX, PY, 84, !d.haveFuel ? DIM : (d.fuelPct < d.fuelLowPct / 2 ? RED : (d.fuelPct < d.fuelLowPct ? YELLOW : WHITE)));
     if (d.haveBatt) snprintf(t, sizeof(t), "%.1f", d.battV); else snprintf(t, sizeof(t), "--");
-    num(S, fb, 4, F_MED, t, CX + 100, PY, 84, !d.haveBatt ? DIM : (d.battV < d.battCritV ? RED : (d.battV < d.battLowV ? YELLOW : WHITE)));
+    num(S, fb, 4, F_MED, t, CX + 94, PY, 84, !d.haveBatt ? DIM : (d.battV < d.battCritV ? RED : (d.battV < d.battLowV ? YELLOW : WHITE)));
   } else if (pg == PG_TACH) {
     ringLevel(S, 0, S.rpm / mx);
     needle(S, fb, angOf(fminf(S.rpm, (float)mx), (float)mx), S.rpm >= d.redline ? RED : ORANGE);
-    snprintf(t, sizeof(t), "%d", mph); num(S, fb, 0, F_BIG, t, CX, 336, 130, WHITE);
+    snprintf(t, sizeof(t), "%d", mph); num(S, fb, 0, F_MED, t, CX, 338, 130, WHITE);
   } else if (pg == PG_SPEEDO) {
     ringLevel(S, 0, S.mph / 160.0f);
     needle(S, fb, angOf(fminf(S.mph, 160.0f), 160.0f), CYAN);
-    snprintf(t, sizeof(t), "%d", rpm); num(S, fb, 0, F_MED, t, CX, 352, 110, WHITE);
+    snprintf(t, sizeof(t), "%d", rpm); num(S, fb, 0, F_MED, t, CX, 338, 110, WHITE);
   } else if (pg == PG_VITALS) {
-    static const int cxs[4] = {CX - 100, CX + 100, CX - 100, CX + 100}, cys[4] = {CY - 100, CY - 100, CY + 100, CY + 100};
+    static const int cxs[4] = {CX - 104, CX + 104, CX - 104, CX + 104}, cys[4] = {CY - 98, CY - 98, CY + 98, CY + 98};
     float f0 = d.haveCool ? (d.coolC - 40) / 90.0f : 0, f1 = d.haveFuel ? d.fuelPct / 100.0f : 0, f2 = d.haveBatt ? (d.battV - 10.5f) / 5.0f : 0, f3 = d.haveLoad ? d.loadPct / 100.0f : 0;
     ringLevel(S, 0, f0); ringLevel(S, 1, f1); ringLevel(S, 2, f2); ringLevel(S, 3, f3);
     const bool have[4] = {d.haveCool, d.haveFuel, d.haveBatt, d.haveLoad};
@@ -521,7 +525,7 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
       else if (i == 1) snprintf(t, sizeof(t), "%d", d.fuelPct);
       else if (i == 2) snprintf(t, sizeof(t), "%.1f", d.battV);
       else snprintf(t, sizeof(t), "%d", d.loadPct);
-      num(S, fb, i, F_MED, t, cxs[i], cys[i] - 22, 110, have[i] ? WHITE : DIM);
+      num(S, fb, i, F_NUM, t, cxs[i], cys[i] - 22, 110, have[i] ? WHITE : DIM);
     }
   } else {
     frameStyle(S, fb, pg, d);                    // arc, custom, quad, dual, gear
@@ -530,36 +534,172 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
 }
 
 // ---- brightness page: sun icon, percentage and a slider ----
-constexpr int BR_X0 = 90, BR_X1 = 390, BR_Y = 308, BR_ZONE_Y0 = 262, BR_ZONE_Y1 = 354, BR_MIN = 5;   // slider track, touch zone, lowest level
+constexpr int BR_X0 = 90, BR_X1 = 390, BR_Y = 322, BR_ZONE_Y0 = 276, BR_ZONE_Y1 = 368, BR_MIN = 5;   // slider track, touch zone, lowest level
 inline int pctFromX(int x) { int p = BR_MIN + (x - BR_X0) * (100 - BR_MIN) / (BR_X1 - BR_X0); return p < BR_MIN ? BR_MIN : (p > 100 ? 100 : p); }
+// Modern layout: a soft glow that follows the level, a line-art sun, the percentage, a glass slider whose fill glows, and four preset chips.
+constexpr int BR_PRESET_Y0 = 376, BR_PRESET_Y1 = 418, BR_CHIP_W = 60, BR_CHIP_GAP = 8;
+constexpr int BR_PRESETS[4] = {25, 50, 75, 100};
+inline int presetX0() { return CX - (4 * BR_CHIP_W + 3 * BR_CHIP_GAP) / 2; }
+// which preset (percent) is under the finger, or -1
+inline int presetAt(int x, int y) {
+  if (y < BR_PRESET_Y0 - 6 || y > BR_PRESET_Y1 + 6) return -1;
+  for (int k = 0; k < 4; k++) { int x0 = presetX0() + k * (BR_CHIP_W + BR_CHIP_GAP); if (x >= x0 - 4 && x <= x0 + BR_CHIP_W + 4) return BR_PRESETS[k]; }
+  return -1;
+}
+inline void chip(uint16_t *b, int x, int y, int w, int h, bool on, uint16_t col, const char *label) {
+  float r = h / 2.0f;
+  for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
+    float px = i + 0.5f, py = j + 0.5f, qx = fabsf(px - w / 2.0f) - (w / 2.0f - r), qy = fabsf(py - h / 2.0f) - (h / 2.0f - r);
+    float d = sqrtf((qx > 0 ? qx : 0) * (qx > 0 ? qx : 0) + (qy > 0 ? qy : 0) * (qy > 0 ? qy : 0)) + fminf(fmaxf(qx, qy), 0.0f) - r;
+    blendPx(b, x + i, y + j, on ? col : PANEL, (int)(clamp01(0.5f - d) * 255));
+    if (!on) blendPx(b, x + i, y + j, PANEL_EDGE, (int)(clamp01(0.5f - fabsf(d + 1.0f)) * 255));
+  }
+  textC(b, F_LBL, label, x + w / 2, y + (h - F_LBL.h) / 2, on ? BG : DIM);
+}
 // full = draw the whole page; otherwise only the part that changes with the level. Marks what it touched (see flushDirty).
 inline void brightnessPage(uint16_t *fb, int pct, int dotN, int dotCur, bool full) {
   State &S = st(); if (!S.ok) return;
   if (full) {
     for (int i = 0; i < W * H; i++) fb[i] = BG;
     ringAA(fb, CX, CY, 235.5f, 238.5f, BEZEL);
-    textC(fb, F_LBL, "BRIGHTNESS", CX, 92, DIM);
-    textC(fb, F_LBL, "DRAG THE SLIDER", CX, 376, FAINT);
     pageDots(fb, dotN, dotCur);
     S.page = -1;                                   // the dial pages must rebuild their static layer next time
     mark(S, 0, 0, W - 1, H - 1);
   }
-  for (int y = 122; y <= 344; y++) for (int x = 40; x <= 440; x++) fb[y * W + x] = BG;
   float f = (pct - BR_MIN) / (float)(100 - BR_MIN);
-  uint16_t sun = lerpc(255, 170, 40, 255, 236, 150, f);
-  discAA(fb, CX, 150, 10, sun);
-  for (int k = 0; k < 8; k++) {                    // rays grow with the level
-    float a = k * 0.785398f, ri = 17, ro = 21 + 11 * f;
-    taper(fb, CX + ri * sinf(a), 150 - ri * cosf(a), CX + ro * sinf(a), 150 - ro * cosf(a), 1.8f, 1.8f, sun);
+  uint16_t sun = lerpc(255, 160, 40, 255, 238, 170, f);
+
+  // The page redraws on every drag step, so it only touches what changes: the sun / number area and the slider row.
+  // The glow uses a lookup table (no square root per pixel) and the preset chips are redrawn only when the lit one changes.
+  const int GX = CX, GY = 164, GR = 104;
+  static uint8_t lut[GR * GR]; static bool lutOk = false;
+  if (!lutOk) { for (int d2 = 0; d2 < GR * GR; d2++) { float t = 1.0f - sqrtf((float)d2) / GR; lut[d2] = (uint8_t)(255 * t * t); } lutOk = true; }
+  const float GA = 0.06f + 0.26f * f;
+  uint16_t pal[256]; for (int a = 0; a < 256; a++) pal[a] = mix(BG, sun, (int)(a * GA));
+  for (int y = 60; y <= 272; y++) {
+    int dy = y - GY;
+    for (int x = GX - GR - 20; x < GX + GR + 20; x++) {                  // a little wider than the glow: the "%" reaches past it at 100
+      int dx = x - GX, d2 = dx * dx + dy * dy;
+      fb[y * W + x] = d2 < GR * GR ? pal[lut[d2]] : BG;
+    }
   }
+  mark(S, GX - GR - 20, 60, GX + GR + 19, 272);
+  for (int y = 292; y <= 352; y++) for (int x = 48; x < 432; x++) fb[y * W + x] = BG;
+  mark(S, 48, 292, 431, 352);
+  textC(fb, F_LBL, "BRIGHTNESS", CX, 84, DIM);
+
+  // sun: filled core, a thin ring and short rays that lengthen with the level
+  discAA(fb, CX, GY - 6, 12, sun);
+  ringAA(fb, CX, GY - 6, 19.5f, 21, mix(BG, sun, 150));
+  for (int k = 0; k < 8; k++) {
+    float a = k * 0.785398f, ri = 27, ro = 31 + 7 * f;
+    taper(fb, CX + ri * sinf(a), GY - 6 - ri * cosf(a), CX + ro * sinf(a), GY - 6 - ro * cosf(a), 1.5f, 1.5f, sun);
+  }
+
+  // percentage
   char t[8]; snprintf(t, sizeof(t), "%d", pct);
-  textC(fb, F_BIG, t, CX - 6, 190, WHITE);
-  text(fb, F_MED, "%", CX - 6 + textW(F_BIG, t) / 2 + 8, 190 + F_BIG.h - F_MED.h, DIM);
+  textC(fb, F_BIG, t, CX - 8, 218, WHITE);
+  text(fb, F_MED, "%", CX - 8 + textW(F_BIG, t) / 2 + 8, 218 + F_BIG.h - F_MED.h, DIM);
+
+  // slider: glass track, a glow under the fill, gradient fill (colour belongs to the position), knob with a halo
+  const float TH = 8;
   float kx = BR_X0 + f * (BR_X1 - BR_X0);
-  taper(fb, BR_X0, BR_Y, BR_X1, BR_Y, 8, 8, PANEL_EDGE); discAA(fb, BR_X0, BR_Y, 8, PANEL_EDGE); discAA(fb, BR_X1, BR_Y, 8, PANEL_EDGE);
-  taper(fb, BR_X0, BR_Y, kx, BR_Y, 8, 8, sun); discAA(fb, BR_X0, BR_Y, 8, sun);
-  discAA(fb, kx, BR_Y, 22, BEZEL); discAA(fb, kx, BR_Y, 19, WHITE); discAA(fb, kx, BR_Y, 13, sun);
-  mark(S, 40, 122, 440, 344);
+  taper(fb, BR_X0, BR_Y, BR_X1, BR_Y, TH, TH, PANEL); discAA(fb, BR_X0, BR_Y, TH, PANEL); discAA(fb, BR_X1, BR_Y, TH, PANEL);
+  taper(fb, BR_X0, BR_Y, kx, BR_Y, TH + 7, TH + 7, mix(BG, sun, 38)); discAA(fb, BR_X0, BR_Y, TH + 7, mix(BG, sun, 38));
+  for (int x = BR_X0; x <= (int)kx; x++) {
+    float u = (x - BR_X0) / (float)(BR_X1 - BR_X0);
+    uint16_t c = lerpc(255, 140, 30, 255, 238, 170, u);
+    for (int y = BR_Y - (int)TH; y < BR_Y + (int)TH; y++) fb[y * W + x] = c;
+  }
+  discAA(fb, BR_X0, BR_Y, TH, lerpc(255, 140, 30, 255, 140, 30, 0));
+  discAA(fb, kx, BR_Y, 27, mix(BG, sun, 46));                         // halo
+  discAA(fb, kx, BR_Y, 20, WHITE);
+  discAA(fb, kx, BR_Y, 7, sun);
+  discAA(fb, BR_X0 - 28, BR_Y, 4, FAINT);                             // dim dot at the low end, small sun at the high end
+  discAA(fb, BR_X1 + 28, BR_Y, 5, DIM);
+  for (int k = 0; k < 8; k++) {
+    float a = k * 0.785398f;
+    taper(fb, BR_X1 + 28 + 8.5f * sinf(a), BR_Y - 8.5f * cosf(a), BR_X1 + 28 + 12.5f * sinf(a), BR_Y - 12.5f * cosf(a), 1.1f, 1.1f, DIM);
+  }
+
+  // preset chips: only redrawn when the lit one changes
+  int lit = -1; for (int k = 0; k < 4; k++) if (pct == BR_PRESETS[k]) lit = k;
+  if (full || lit != S.brChip) {
+    for (int y = 373; y <= 424; y++) for (int x = 100; x < 380; x++) fb[y * W + x] = BG;
+    for (int k = 0; k < 4; k++) {
+      char lb[6]; snprintf(lb, sizeof(lb), "%d", BR_PRESETS[k]);
+      chip(fb, presetX0() + k * (BR_CHIP_W + BR_CHIP_GAP), BR_PRESET_Y0, BR_CHIP_W, BR_PRESET_Y1 - BR_PRESET_Y0, k == lit, sun, lb);
+    }
+    mark(S, 100, 373, 379, 424);
+    S.brChip = (int8_t)lit;
+  }
+}
+
+// ---- scanning / connecting / status page ---------------------------------------------------------------------------------
+// kind: 0 scanning (radar pulses), 1 connecting (two counter-rotating arcs), 2 not found, 3 link lost, 4 anything else (spinner).
+// accent is the colour the caller asked for. The animation area is redrawn every frame; the title, subtitle and the three-step
+// row are drawn when full is true (page entered or text changed). Marks what it touched (see flushDirty).
+constexpr int ST_AX = CX, ST_AY = 186, ST_R = 66;
+inline void statusPage(uint16_t *fb, int kind, uint16_t accent, const char *title, const char *sub, uint32_t now, bool full) {
+  State &S = st(); if (!S.ok) return;
+  if (full) {
+    for (int i = 0; i < W * H; i++) fb[i] = BG;
+    ringAA(fb, CX, CY, 235.5f, 238.5f, BEZEL);
+    textC(fb, F_TTL, title, CX, 274, WHITE);
+    if (sub[0]) textC(fb, F_SML, sub, CX, 304, DIM);
+    // three steps: scan -> connect -> live. The current one glows in the accent colour (error states point at the step that failed).
+    int cur = kind == 0 ? 0 : kind == 1 ? 1 : kind == 2 ? 0 : kind == 3 ? 2 : -1;
+    static const char *lab[3] = {"SCAN", "CONNECT", "LIVE"};
+    for (int k = 0; k < 3 && cur >= 0; k++) {
+      float x = CX + (k - 1) * 84.0f, y = 352;
+      if (k < 2) taper(fb, x + 10, y, x + 74, y, 0.7f, 0.7f, k < cur ? mix(BG, accent, 110) : FAINT);
+      if (k == cur) { discAA(fb, x, y, 8, mix(BG, accent, 60)); discAA(fb, x, y, 4.5f, accent); }
+      else if (k < cur) discAA(fb, x, y, 3.5f, mix(BG, accent, 140));
+      else ringAA(fb, x, y, 2, 3.5f, FAINT);
+      textC(fb, F_SML, lab[k], (int)x, 366, k == cur ? WHITE : (k < cur ? DIM : FAINT));
+    }
+    S.page = -1;                                   // the dial pages must rebuild their static layer next time
+    mark(S, 0, 0, W - 1, H - 1);
+  }
+  const int AX = ST_AX, AY = ST_AY;
+  for (int y = AY - ST_R; y <= AY + ST_R; y++) for (int x = AX - ST_R; x <= AX + ST_R; x++) fb[y * W + x] = BG;
+  const float t = (float)now;
+  // a comet: a bright head with a fading tail running round a ring (dir +1 clockwise, -1 counter-clockwise)
+  auto comet = [&](float r0, float r1, float speed, int dir, float tail, float trackA) {
+    float head = fmodf(t * speed, 360.0f); if (dir < 0) head = 360.0f - head;
+    annulus(AX, AY, r0, r1, [&](int x, int y, float d, float dx, float dy) {
+      float th = atan2f(dx, -dy) * 57.29578f; if (th < 0) th += 360.0f;
+      float delta = dir > 0 ? head - th : th - head; delta = fmodf(delta + 720.0f, 360.0f);
+      float a = delta < tail ? (1.0f - delta / tail) : 0.0f; a = a * a;
+      a = trackA + (1.0f - trackA) * a;
+      float edge = clamp01(fminf(d - r0, r1 - d) + 0.5f);
+      blendPx(fb, x, y, mix(BG, accent, (int)(a * 255)), (int)(edge * 255));
+    });
+  };
+  const float pulse = 0.5f + 0.5f * sinf(t * 0.004f);
+  if (kind == 0) {                                  // radar: two pulses spreading out from a dot, plus a slow ring
+    for (int k = 0; k < 2; k++) {
+      float ph = fmodf(t / 2200.0f + k * 0.5f, 1.0f), r = 8 + 52 * ph, a = (1.0f - ph) * (1.0f - ph) * 0.85f;
+      ringAA(fb, AX, AY, r - 0.9f, r + 0.9f, mix(BG, accent, (int)(a * 255)));
+    }
+    comet(40, 44, 0.20f, 1, 110, 0.10f);
+    discAA(fb, AX, AY, 9, mix(BG, accent, 50)); discAA(fb, AX, AY, 4.5f, accent);
+  } else if (kind == 1) {                           // connecting: outer arc clockwise, inner arc the other way, a breathing core
+    comet(46, 50, 0.34f, 1, 150, 0.10f);
+    comet(29, 33, 0.46f, -1, 120, 0.10f);
+    discAA(fb, AX, AY, 7 + 2 * pulse, mix(BG, accent, 60)); discAA(fb, AX, AY, 4, accent);
+  } else if (kind == 2) {                           // not found: a quiet ring and an exclamation mark
+    ringAA(fb, AX, AY, 41, 44.5f, mix(BG, accent, (int)((0.22f + 0.18f * pulse) * 255)));
+    taper(fb, AX, AY - 20, AX, AY + 3, 3.8f, 2.8f, accent); discAA(fb, AX, AY + 15, 3.8f, accent);
+  } else if (kind == 3) {                           // link lost: a broken ring and a cross
+    uint16_t c = mix(BG, accent, (int)((0.55f + 0.30f * pulse) * 255));
+    arcAA(fb, AX, AY, 41, 44.5f, 28, 152, c); arcAA(fb, AX, AY, 41, 44.5f, -152, -28, c);
+    taper(fb, AX - 11, AY - 11, AX + 11, AY + 11, 3.2f, 3.2f, accent); taper(fb, AX + 11, AY - 11, AX - 11, AY + 11, 3.2f, 3.2f, accent);
+  } else {
+    comet(40, 44.5f, 0.30f, 1, 150, 0.10f);
+    discAA(fb, AX, AY, 4, accent);
+  }
+  mark(S, AX - ST_R, AY - ST_R, AX + ST_R, AY + ST_R);
 }
 
 }  // namespace rui

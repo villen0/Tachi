@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 template <class G> struct ScaledGfx {
-  G *g; int s, ox, oy;
+  G *g; float s; int ox, oy;
   int X(float v) const { return ox + (int)lroundf(v * s); }
   int Y(float v) const { return oy + (int)lroundf(v * s); }
   int S(float v) const { return (int)lroundf(v * s); }
@@ -14,8 +14,9 @@ template <class G> struct ScaledGfx {
   void fillCircle(float x, float y, float r, uint16_t c) { g->fillCircle(X(x), Y(y), S(r), c); }
   void fillEllipse(float x, float y, float rx, float ry, uint16_t c) { g->fillEllipse(X(x), Y(y), S(rx), S(ry), c); }
   void fillTriangle(float x0, float y0, float x1, float y1, float x2, float y2, uint16_t c) { g->fillTriangle(X(x0), Y(y0), X(x1), Y(y1), X(x2), Y(y2), c); }
-  void drawLine(float x0, float y0, float x1, float y1, uint16_t c) {   // a 1 px line becomes s px thick
-    for (int k = 0; k < s; k++) g->drawLine(X(x0) + k, Y(y0), X(x1) + k, Y(y1), c);
-    for (int k = 1; k < s; k++) g->drawLine(X(x0), Y(y0) + k, X(x1), Y(y1) + k, c);
+  void drawLine(float x0, float y0, float x1, float y1, uint16_t c) {   // a 1 px line becomes about s px thick
+    int t = (int)lroundf(s); if (t < 1) t = 1;
+    for (int k = 0; k < t; k++) g->drawLine(X(x0) + k, Y(y0), X(x1) + k, Y(y1), c);
+    for (int k = 1; k < t; k++) g->drawLine(X(x0), Y(y0) + k, X(x1), Y(y1) + k, c);
   }
 };

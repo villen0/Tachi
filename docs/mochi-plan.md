@@ -1,5 +1,7 @@
 # Tachi plans (Mochi character, navigation, extra car-data pages)
 
+> Historical notes from the 1.47" stick era (172x320 ST7789, which is no longer supported). Tachi now targets only the round 2.8C touch board; see README.md.
+
 Full working plan, latest version. See ROADMAP.md for status.
 
 # Plan: Dasai Mochi-style animated character for Tachi

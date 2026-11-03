@@ -1,28 +1,17 @@
-// Tachi: ESP32-S3 OBD-II desk/dash pet for the Waveshare 1.47" display board.
-// STATUS: compiles (PlatformIO); not yet run on hardware. See README.md.
+// Tachi: ESP32-S3 OBD-II dash pet for the Waveshare ESP32-S3-Touch-LCD-2.8C (round 480x480 touch display).
+// See README.md.
 #include <Arduino.h>
 #include <NimBLEDevice.h>
-#ifdef BOARD_ROUND28
 #define private public    // see display_round28.h: the vsync hook needs Arduino_ESP32RGBPanel's panel handle
-#endif
 #include <Arduino_GFX_Library.h>
-#ifdef BOARD_ROUND28
 #undef private
-#endif
 #include <SD_MMC.h>
 #include <esp_system.h>
 #include "config.h"
-#if PIN_LED >= 0
-#include <Adafruit_NeoPixel.h>
-#endif
-#ifdef BOARD_ROUND28
 #include "display_round28.h"   // ST7701 RGB panel + GT911 touch of the round 2.8C board
-#endif
 #include "mochi.h"
-#include "cluster.h"
-#ifdef BOARD_ROUND28
+#include "gear.h"           // gear estimate from RPM and speed
 #include "round_ui.h"   // round dial pages: sport cluster, analog tach / speedo, vitals rings
-#endif
 #include "obd_parse.h"
 #include "car_events.h"
 
@@ -35,21 +24,11 @@
 
 enum Mood { HAPPY, UNEASY, WORRIED, SLEEPY, EXCITED, CALM };
 
-#ifdef BOARD_ROUND28
 // ---------- Display (round 480x480 RGB panel) ----------
 // Everything draws into a full-frame canvas in PSRAM and is pushed to the panel with flush() once per frame, so the
 // panel never scans out a half-drawn picture.
 Arduino_GFX *gfx = nullptr;                    // the canvas, created in setup()
 static Arduino_Canvas *fullCanvas = nullptr;
-#else
-// ---------- Display (ST7789 172x320, column offset 34) ----------
-Arduino_DataBus *bus = new Arduino_ESP32SPI(PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI, GFX_NOT_DEFINED);
-Arduino_GFX *gfx = new Arduino_ST7789(bus, PIN_LCD_RST, 0 /*rotation*/, true /*IPS*/, LCD_W, LCD_H,
-                                      34, 0, 34, 0 /*col/row offsets for 172x320 panel*/);
-#endif
-#if PIN_LED >= 0
-Adafruit_NeoPixel led(1, PIN_LED, NEO_GRB + NEO_KHZ800);
-#endif
 
 // ---------- Boot type (welcome animation: full on a fresh power-up, short after a quick restart) ----------
 // The car's USB power can dip while the engine cranks and restart the board; replaying the long welcome each time would
@@ -105,17 +84,13 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_ARC, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_BRIGHTNESS, PAGE_COUNT };
-volatile int page = PAGE_FACE;       // BOOT short press cycles through the visible pages (see pageVisible)
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_ARC, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_BRIGHTNESS, PAGE_DEBUG, PAGE_COUNT };   // the Debug page is always last
+volatile int page = PAGE_FACE;       // a tap or swipe changes the page (see pageVisible)
 
-// ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load) ----------
-// Which of them the car answers is read at connect time (supported-PID bitmaps) and only those get a page.
-enum Gauge { G_BATT, G_INTAKE, G_AMBIENT, G_FUEL, G_THROTTLE, G_LOAD, G_MAP, G_BARO, G_COUNT };   // G_MAP / G_BARO feed the boost pages and have no page of their own   // same order as PAGE_BATT..PAGE_LOAD
-struct GaugeDef { const char *title; uint8_t pid; bool show; };                    // pid 0 = adapter voltage (ATRV)
-static const GaugeDef GAUGES[G_COUNT] = {
-  {"BATTERY", 0, SHOW_PAGE_BATTERY}, {"INTAKE AIR", 0x0F, SHOW_PAGE_INTAKE}, {"OUTSIDE", 0x46, SHOW_PAGE_OUTSIDE},
-  {"FUEL", 0x2F, SHOW_PAGE_FUEL}, {"THROTTLE", 0x11, SHOW_PAGE_THROTTLE}, {"ENGINE LOAD", 0x04, SHOW_PAGE_LOAD},
-  {"BOOST", 0x0B, 0}, {"BARO", 0x33, 0}};
+// ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load, boost) ----------
+// Which of them the car answers is read at connect time (supported-PID bitmaps); the dial pages show what is available.
+enum Gauge { G_BATT, G_INTAKE, G_AMBIENT, G_FUEL, G_THROTTLE, G_LOAD, G_MAP, G_BARO, G_COUNT };
+static const uint8_t GAUGE_PID[G_COUNT] = {0 /* adapter voltage, ATRV */, 0x0F, 0x46, 0x2F, 0x11, 0x04, 0x0B /* MAP: boost */, 0x33 /* barometric */};
 static float gVal[G_COUNT];                       // battery V, temps in deg C, others in percent
 static uint32_t gTs[G_COUNT], gLastTry[G_COUNT];
 static uint8_t gFails[G_COUNT];
@@ -126,24 +101,14 @@ static char supText[2][28] = {"sup: (not read yet)", ""};
 static void resetGauges() {
   for (int g = 0; g < G_COUNT; g++) { gVal[g] = 0; gTs[g] = gLastTry[g] = 0; gFails[g] = 0; gSupported[g] = gOk[g] = false; }
 }
-static bool gaugeVisible(int g) { return GAUGES[g].show && gSupported[g] && (gOk[g] || gFails[g] < 5); }
-static bool clusterFailed = false;               // the landscape canvas could not be allocated
-static bool dialFailed = false;                  // round board: the dial pages' buffers could not be allocated
+static bool dialFailed = false;                  // the dial pages' buffers could not be allocated
 static bool boostVisible() { return gSupported[G_MAP] && (gOk[G_MAP] || gFails[G_MAP] < 5); }   // the car answers MAP (intake manifold pressure)
 static bool pageVisible(int p) {
-#ifdef BOARD_ROUND28
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !dialFailed;
   if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_ARC || p == PAGE_CUSTOM) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p >= PAGE_QUAD && p <= PAGE_GEAR) return SHOW_PAGE_STYLES && !dialFailed;
   if (p == PAGE_BRIGHTNESS) return SHOW_PAGE_BRIGHTNESS && !dialFailed;
-#else
-  if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !clusterFailed;
-  if (p >= PAGE_DIAL_TACH && p <= PAGE_GEAR) return false;           // round board only
-  if (p == PAGE_BRIGHTNESS) return false;                           // round board only
-#endif
-  if (p >= PAGE_BATT && p <= PAGE_LOAD) return gaugeVisible(p - PAGE_BATT);
-  if (p == PAGE_OIL) return oilValid;               // the Mazda says NO DATA; only shown if it ever answers
   return true;
 }
 static int nextPage(int p, int n) {
@@ -167,10 +132,8 @@ static int visibleIndex(int p) { int n = 0; for (int q = 0; q < p; q++) if (page
 
 // ---------- UI state (shared by loop() and the wait loops inside sendCmd) ----------
 static int lastMood = -1;
-static bool lastOpen = true;
 static volatile bool forceDraw = true;
-static int drawnPage = -1, shownVal = -99999;
-static bool shownStale = false, shownValid = false;
+static int drawnPage = -1;
 static bool blinking = false;
 static uint32_t nextBlink = 0, blinkEnd = 0;
 
@@ -185,8 +148,63 @@ static uint32_t reqPerSec = 0;
 static uint32_t lastCmdMs = 0, lastWriteMs = 0, maxTickGapMs = 0, sdWriteMs = 0;   // timing shown on the Debug page
 static volatile uint32_t faceFps = 0, faceFrameMs = 0, reqPerSecFace = 0;            // animation speed / car polling while the Face page is shown
 
+// ---------- Gear test: listen to raw CAN frames (ELM327 monitor mode) for the gear selector message ----------
+// The comma.ai open Mazda definitions (mazda_3_2019.dbc) say: CAN ID 0x01F, signal GEAR at bit 36, 4 bits, with
+// P = 13, R = 12, N = 11, D = 1..6. Nobody has confirmed it through an OBD port, so this test only RECORDS what arrives:
+// the frames seen, which bytes change, and the values of byte 4 in the order they appeared. Run once per power-up.
+#if GEAR_SNIFF_TEST
+struct SniffEv { uint32_t ms; uint8_t d[8]; };
+static volatile bool sniffOn = false;
+static char sniffLine[40]; static uint8_t sniffLen = 0;
+static volatile uint32_t sniffFrames = 0, sniffTotal = 0, sniffT0 = 0;       // frames with the gear ID / all frames
+static uint8_t sniffPrev[8]; static bool sniffHave = false;
+static volatile uint32_t sniffChg[8];                                         // how often each byte changed
+static uint8_t sniffVals[12]; static volatile uint8_t sniffNVals = 0;         // distinct values of byte 4, in order of appearance
+static SniffEv sniffRing[24]; static volatile uint8_t sniffHead = 0, sniffTail = 0;
+static char sniffRaw[3][24]; static volatile uint8_t sniffNRaw = 0;           // first lines that were not gear frames (e.g. NO DATA, ?)
+static char gearTxt[2][40] = {"gear test: not run", ""};
+static int hexNib(char c) { return c >= '0' && c <= '9' ? c - '0' : (c >= 'A' && c <= 'F' ? c - 'A' + 10 : (c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1)); }
+static void sniffLineDone() {                                                 // runs in the BLE callback: no printing, no heap
+  sniffLine[sniffLen] = 0;
+  if (sniffLen == 0) return;
+  sniffTotal = sniffTotal + 1;
+  bool gear = sniffLen >= 3 + 10 && sniffLine[0] == '0' && sniffLine[1] == '1' && (sniffLine[2] == 'F' || sniffLine[2] == 'f');
+  uint8_t d[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  if (gear) {
+    int n = (sniffLen - 3) / 2; if (n > 8) n = 8;
+    for (int i = 0; i < n; i++) { int h = hexNib(sniffLine[3 + 2 * i]), l = hexNib(sniffLine[4 + 2 * i]); if (h < 0 || l < 0) { gear = false; break; } d[i] = (uint8_t)(h * 16 + l); }
+  }
+  if (!gear) {
+    uint8_t k = sniffNRaw;
+    if (k < 3) { strncpy(sniffRaw[k], sniffLine, 23); sniffRaw[k][23] = 0; sniffNRaw = k + 1; }
+    return;
+  }
+  sniffFrames = sniffFrames + 1;
+  bool b4new = !sniffHave;
+  if (sniffHave) for (int i = 0; i < 8; i++) if (d[i] != sniffPrev[i]) { sniffChg[i] = sniffChg[i] + 1; if (i == 4) b4new = true; }
+  if (b4new) {
+    uint8_t nxt = (sniffHead + 1) % 24;
+    if (nxt != sniffTail) { sniffRing[sniffHead].ms = millis() - sniffT0; memcpy(sniffRing[sniffHead].d, d, 8); sniffHead = nxt; }
+    bool seen = false; for (int i = 0; i < sniffNVals; i++) if (sniffVals[i] == d[4]) seen = true;
+    if (!seen && sniffNVals < 12) { sniffVals[sniffNVals] = d[4]; sniffNVals = sniffNVals + 1; }
+  }
+  memcpy(sniffPrev, d, 8); sniffHave = true;
+}
+static void sniffFeed(const uint8_t *data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    char c = (char)data[i];
+    if (c == '>') { portENTER_CRITICAL(&rxMux); gotPrompt = true; portEXIT_CRITICAL(&rxMux); }
+    else if (c == '\r' || c == '\n') { sniffLineDone(); sniffLen = 0; }
+    else if (c != ' ' && sniffLen < sizeof(sniffLine) - 1) sniffLine[sniffLen++] = c;
+  }
+}
+#endif
+
 // ---------- BLE receive ----------
 void onNotify(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, bool) {
+#if GEAR_SNIFF_TEST
+  if (sniffOn) { sniffFeed(data, len); return; }
+#endif
   portENTER_CRITICAL(&rxMux);
   for (size_t i = 0; i < len; i++) {
     char c = (char)data[i];
@@ -320,9 +338,9 @@ static void pollGauge(int g) {
       if (obd::dataBytes(r2.c_str(), 0x42, 2, b)) { gVal[g] = obd::moduleVolts(b[0], b[1]); ok = true; }
     }
   } else {
-    char cmd[8]; snprintf(cmd, sizeof(cmd), "01%02X", GAUGES[g].pid);
+    char cmd[8]; snprintf(cmd, sizeof(cmd), "01%02X", GAUGE_PID[g]);
     String r = obdQuery(cmd);
-    if (obd::dataBytes(r.c_str(), GAUGES[g].pid, 1, b)) {
+    if (obd::dataBytes(r.c_str(), GAUGE_PID[g], 1, b)) {
       gVal[g] = (g == G_INTAKE || g == G_AMBIENT) ? (float)obd::tempC(b[0]) : (g == G_MAP || g == G_BARO) ? (float)b[0] : obd::percent(b[0]);   // MAP, BARO: kPa
       ok = true;
     }
@@ -364,10 +382,7 @@ static bool itemDue(int it, bool focus) {
 }
 static int focusItem() {
   int p = page;
-  if (p == PAGE_COOLANT) return 0;
-  if (p == PAGE_OIL) return oilValid ? 1 : -1;
   if ((p == PAGE_ARC || p == PAGE_CUSTOM) && boostVisible()) return 2 + G_MAP;   // the boost pages need MAP often
-  if (p >= PAGE_BATT && p <= PAGE_LOAD && gaugeVisible(p - PAGE_BATT)) return 2 + (p - PAGE_BATT);
   return -1;
 }
 // Background rotation: coolant every second tick (the mood depends on it), the rest take turns.
@@ -397,7 +412,7 @@ static void discoverPids(String r0) {
     String r = sendCmd(cmd, INIT_TIMEOUT_MS);
     if (obd::parseBitmap(r.c_str(), base, &m)) sup.set(base, m); else break;
   }
-  for (int g = 0; g < G_COUNT; g++) gSupported[g] = (GAUGES[g].pid == 0) ? true : sup.supported(GAUGES[g].pid);   // battery: ATRV is tried
+  for (int g = 0; g < G_COUNT; g++) gSupported[g] = (GAUGE_PID[g] == 0) ? true : sup.supported(GAUGE_PID[g]);   // battery: ATRV is tried
   static const uint8_t listed[] = {0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x11, 0x2F, 0x33, 0x42, 0x46, 0x5C};
   snprintf(supText[0], sizeof(supText[0]), "sup:%d", sup.count());
   supText[1][0] = 0;
@@ -530,32 +545,6 @@ void sdLogTick() {
   if (millis() - lastFlush >= 5000) { lastFlush = millis(); uint32_t t = millis(); logFile.flush(); sdWriteMs = millis() - t; }
 }
 
-// ---------- LED ----------
-void setLed(uint8_t r, uint8_t g, uint8_t b) {
-#if PIN_LED >= 0
-  led.setPixelColor(0, led.Color(r, g, b));
-  led.show();
-#else
-  (void)r; (void)g; (void)b;                    // this board has no RGB LED
-#endif
-}
-
-void setLedMood(Mood m) {
-  switch (m) {
-    case HAPPY:   setLed(0, 40, 0);  break;
-    case UNEASY:  setLed(40, 30, 0); break;
-    case WORRIED: setLed(60, 0, 0);  break;
-    case SLEEPY:  setLed(0, 0, 25);  break;
-    case EXCITED: setLed(50, 0, 50); break;
-    case CALM:    setLed(0, 30, 30); break;
-  }
-}
-
-// ---------- Drawing ----------
-const int FACE_DY = 30;   // face page has no readout, so the face sits lower / centered
-const int EYE_Y = 115 + FACE_DY, EYE_X1 = 48, EYE_X2 = 124;
-const int MOUTH_X = LCD_W / 2, MOUTH_Y = 200 + FACE_DY;
-
 // Status text ("Scanning...", "Link lost", ...) is requested from the main task and drawn by the UI task
 // (only one task may touch the display). It stays until clearStatus(); the welcome animation has priority.
 static portMUX_TYPE statusMux = portMUX_INITIALIZER_UNLOCKED;
@@ -573,93 +562,25 @@ void showStatus(const char *msg, uint16_t color) {
 }
 void clearStatus() { if (!statusActive) return; statusActive = false; forceDraw = true; }   // no-op when nothing is shown (no needless redraws)
 
-#ifdef BOARD_ROUND28
-static void drawStatusScreen() {
+// Scanning / Connecting / Not found / Link lost: an animated page (src/round_ui.h statusPage). Called every UI frame while a status is shown;
+// full = the status text changed or the page was just entered (redraw everything), otherwise only the animation is redrawn and sent.
+static void drawStatusScreen(uint32_t now, bool full) {
   char msg[24]; uint16_t col;
   portENTER_CRITICAL(&statusMux);
   memcpy(msg, statusMsg, sizeof(msg)); col = statusColor;
   portEXIT_CRITICAL(&statusMux);
-  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
-  gfx->setTextSize(4);
-  gfx->setTextColor(col);
-  int16_t x1, y1; uint16_t w, h;
-  gfx->getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor((LCD_W - w) / 2 - x1, 214);
-  gfx->print(msg);
-  gfx->flush();
+  int kind = strncmp(msg, "Scan", 4) == 0 ? 0 : strncmp(msg, "Conn", 4) == 0 ? 1 : strncmp(msg, "Not f", 5) == 0 ? 2 : strncmp(msg, "Link", 4) == 0 ? 3 : 4;
+  static const char *titles[4] = {"SCANNING", "CONNECTING", "ADAPTER NOT FOUND", "LINK LOST"};
+  static const char *subs[4] = {"LOOKING FOR OBD ADAPTER", "SETTING UP THE ADAPTER", "CHECK ADAPTER IS PLUGGED IN", "RECONNECTING..."};
+  char title[24] = "";
+  if (kind == 4) { size_t n = 0; for (; msg[n] && n < sizeof(title) - 1; n++) title[n] = (msg[n] >= 'a' && msg[n] <= 'z') ? msg[n] - 32 : msg[n]; while (n && title[n - 1] == '.') n--; title[n] = 0; }
+  if (!rui::begin()) { Serial.println("round UI buffers failed"); return; }
+  uint16_t *fb = fullCanvas->getFramebuffer();
+  rui::statusPage(fb, kind, col, kind == 4 ? title : titles[kind], kind == 4 ? "" : subs[kind], now, full);
+  if (full) { gfx->flush(); rui::flushDirty([](int, int, int) {}); }        // whole page: one push, then forget the marks
+  else rui::flushDirty([&](int x, int y, int w) { rgbDisp->draw16bitRGBBitmap(x, y, fb + y * LCD_W + x, w, 1); });
 }
-
-#else
-static void drawStatusScreen() {
-  char msg[24]; uint16_t col;
-  portENTER_CRITICAL(&statusMux);
-  memcpy(msg, statusMsg, sizeof(msg)); col = statusColor;
-  portEXIT_CRITICAL(&statusMux);
-  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
-  gfx->setTextSize(2);
-  gfx->setTextColor(col);
-  int16_t x1, y1; uint16_t w, h;
-  gfx->getTextBounds(msg, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor((LCD_W - w) / 2, 150);
-  gfx->print(msg);
-}
-
-#endif
-// Draw a smile (curve > 0), flat line (0) or frown (curve < 0).
-void drawMouth(int cx, int cy, int width, int curve, uint16_t color) {
-  for (int t = -width / 2; t <= width / 2; t++) {
-    float u = (2.0f * t) / width;
-    int y = cy + (int)(curve * (1.0f - u * u));
-    gfx->fillCircle(cx + t, y, 3, color);
-  }
-}
-
-void drawEyes(Mood m, bool eyesOpen) {
-  gfx->fillRect(0, 70 + FACE_DY, LCD_W, 90, BLACK);
-  int r = (m == WORRIED) ? 26 : (m == EXCITED) ? 28 : 22;
-  if (m == SLEEPY || !eyesOpen) {
-    gfx->fillRect(EYE_X1 - 20, EYE_Y - 3, 40, 6, WHITE);
-    gfx->fillRect(EYE_X2 - 20, EYE_Y - 3, 40, 6, WHITE);
-  } else {
-    int pupil = (m == WORRIED) ? 5 : (m == EXCITED) ? 13 : 9;
-    gfx->fillCircle(EYE_X1, EYE_Y, r, WHITE);
-    gfx->fillCircle(EYE_X2, EYE_Y, r, WHITE);
-    gfx->fillCircle(EYE_X1, EYE_Y, pupil, BLACK);
-    gfx->fillCircle(EYE_X2, EYE_Y, pupil, BLACK);
-    if (m == EXCITED) {                       // sparkle highlight in each pupil
-      gfx->fillCircle(EYE_X1 - 4, EYE_Y - 4, 4, WHITE);
-      gfx->fillCircle(EYE_X2 - 4, EYE_Y - 4, 4, WHITE);
-    } else if (m == CALM) {                   // relaxed half-closed lids
-      gfx->fillRect(EYE_X1 - r, EYE_Y - r, 2 * r + 1, r, BLACK);
-      gfx->fillRect(EYE_X2 - r, EYE_Y - r, 2 * r + 1, r, BLACK);
-      gfx->fillRect(EYE_X1 - r, EYE_Y - 2, 2 * r + 1, 3, WHITE);
-      gfx->fillRect(EYE_X2 - r, EYE_Y - 2, 2 * r + 1, 3, WHITE);
-    }
-  }
-}
-
-void drawMouthFor(Mood m) {
-  gfx->fillRect(0, 165 + FACE_DY, LCD_W, 75, BLACK);
-  switch (m) {
-    case HAPPY:   drawMouth(MOUTH_X, MOUTH_Y, 70, 16, GREEN);       break;
-    case UNEASY:  drawMouth(MOUTH_X, MOUTH_Y, 60, 0, YELLOW);       break;
-    case WORRIED: drawMouth(MOUTH_X, MOUTH_Y + 8, 60, -16, RED);    break;
-    case SLEEPY:  gfx->drawCircle(MOUTH_X, MOUTH_Y, 8, 0x7BEF);     break;
-    case CALM:    drawMouth(MOUTH_X, MOUTH_Y, 50, 8, 0x07FF);       break;
-    case EXCITED:                                                    // open grin, filled
-      for (int t = -40; t <= 40; t++) {
-        float u = t / 40.0f;
-        gfx->drawFastVLine(MOUTH_X + t, MOUTH_Y - 6, (int)(8 + 26 * (1.0f - u * u)), 0xFD20);
-      }
-      break;
-  }
-}
-
-// Full-screen data page: title, one big number, unit. Mood is still shown by the LED, and the
-// coolant/oil numbers turn yellow/red at the uneasy/worried thresholds.
-
 // ---------- Face-page background (round board): a soft vertical gradient, dithered so it shows no bands ----------
-#ifdef BOARD_ROUND28
 static void paintFaceBg(int x0, int y0, int w, int h) {
   static const uint8_t bay[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
   uint16_t *fb = fullCanvas->getFramebuffer();
@@ -668,23 +589,19 @@ static void paintFaceBg(int x0, int y0, int w, int h) {
   for (int y = y0; y < y0 + h; y++) {
     float f = (float)y / (LCD_H - 1);
     int r12 = (int)((5 + 15 * f) * 16), g12 = (int)((10 + 2 * f) * 16), b12 = (int)((26 + 20 * f) * 16);   // deep navy at the top, indigo at the bottom (x16)
-    uint16_t *row = fb + y * LCD_W;
-    for (int x = x0; x < x0 + w; x++) {
-      int d = bay[y & 3][x & 3];
+    uint16_t *row = fb + y * LCD_W, pat[4];
+    for (int k = 0; k < 4; k++) {                                   // the dither repeats every 4 pixels: work out 4 colours per row, then copy
+      int d = bay[y & 3][k];
       int rq = (r12 + d * 8) >> 7, gq = (g12 + d * 4) >> 6, bq = (b12 + d * 8) >> 7;
-      row[x] = (uint16_t)(((rq > 31 ? 31 : rq) << 11) | ((gq > 63 ? 63 : gq) << 5) | (bq > 31 ? 31 : bq));
+      pat[k] = (uint16_t)(((rq > 31 ? 31 : rq) << 11) | ((gq > 63 ? 63 : gq) << 5) | (bq > 31 ? 31 : bq));
     }
+    for (int x = x0; x < x0 + w; x++) row[x] = pat[x & 3];
   }
 }
 // Clears a rectangle to the page's background: the gradient on the face page, black elsewhere.
 static void clearBg(int x, int y, int w, int h) { if (page == PAGE_FACE) paintFaceBg(x, y, w, h); else gfx->fillRect(x, y, w, h, BLACK); }
-#else
-static void paintFaceBg(int x, int y, int w, int h) { gfx->fillRect(x, y, w, h, BLACK); }
-static void clearBg(int x, int y, int w, int h) { gfx->fillRect(x, y, w, h, BLACK); }
-#endif
 
 // One dot per visible page, the current one white. Spacing shrinks when there are many pages.
-#ifdef BOARD_ROUND28
 // The round panel clips the corners, so the dots sit on a short row at the top (y is ignored).
 static void drawPageDots(int) {
   int n = visibleCount(), cur = visibleIndex(page);
@@ -695,202 +612,80 @@ static void drawPageDots(int) {
     gfx->fillCircle(LCD_W / 2 + (int)((i - (n - 1) / 2.0f) * step), y, 5, i == cur ? WHITE : 0x39E7);
 }
 
-#else
-static void drawPageDots(int y) {
-  int n = visibleCount(), cur = visibleIndex(page);
-  int step = n > 9 ? 12 : 16;
-  gfx->fillRect(0, y - 6, LCD_W, 12, BLACK);
-  for (int i = 0; i < n; i++)
-    gfx->fillCircle(LCD_W / 2 + (int)((i - (n - 1) / 2.0f) * step), y, 4, i == cur ? WHITE : 0x39E7);
-}
-
-#endif
-// Text, colour and freshness for a data page. big = the number as shown ("54", "12.6").
-void pageInfo(int p, char *big, size_t n, bool *valid, const char **title, const char **unit, uint16_t *color) {
-  *valid = true; *color = WHITE;
-  switch (p) {
-    case PAGE_MPH:     snprintf(big, n, "%d", mph); *title = "SPEED"; *unit = "MPH"; *valid = fresh(tsMph, FAST_FRESH_MS); break;
-    case PAGE_RPM:     snprintf(big, n, "%d", rpm); *title = "ENGINE"; *unit = "RPM"; *valid = fresh(tsRpm, FAST_FRESH_MS); break;
-    case PAGE_COOLANT: snprintf(big, n, "%d", tempOut(coolantC)); *title = "COOLANT"; *unit = tempUnit(); *valid = fresh(tsCool, SLOW_FRESH_MS);
-      if (coolantC >= TEMP_WORRIED_C) *color = RED; else if (coolantC >= TEMP_UNEASY_C) *color = YELLOW; break;
-    case PAGE_OIL:     snprintf(big, n, "%d", tempOut(oilC)); *title = "OIL TEMP"; *unit = tempUnit(); *valid = oilValid && fresh(tsOil, OIL_FRESH_MS); break;
-    default: {         // extra gauges
-      int g = p - PAGE_BATT;
-      if (g < 0 || g >= G_COUNT) { snprintf(big, n, "--"); *title = "?"; *unit = ""; *valid = false; break; }
-      *title = GAUGES[g].title;
-      *valid = gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS);
-      float v = gVal[g];
-      switch (g) {
-        case G_BATT: {
-          snprintf(big, n, "%.1f", v); *unit = "VOLTS";
-          bool running = rpm > 600;
-          if (v < BATT_CRIT_V) *color = RED; else if (v < (running ? BATT_LOW_RUN_V : BATT_LOW_OFF_V)) *color = YELLOW;
-          break;
-        }
-        case G_INTAKE: case G_AMBIENT: snprintf(big, n, "%d", tempOut((int)lroundf(v))); *unit = tempUnit(); break;
-        case G_FUEL: snprintf(big, n, "%d", (int)(v + 0.5f)); *unit = "PERCENT"; if (v < FUEL_LOW_PCT) *color = YELLOW; if (v < FUEL_LOW_PCT / 2) *color = RED; break;
-        default: snprintf(big, n, "%d", (int)(v + 0.5f)); *unit = "PERCENT"; break;
-      }
-    }
-  }
-}
-
-// full = also draw the static parts (title, unit, page dots); otherwise only the number is redrawn.
-#ifdef BOARD_ROUND28
-void drawDataPage(bool stale, bool full) {
-  char big[16]; bool valid; const char *title, *unit; uint16_t color;
-  pageInfo(page, big, sizeof(big), &valid, &title, &unit, &color);
-  int16_t x1, y1; uint16_t w, h;
-  if (full) {
-    gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
-    gfx->setTextSize(strlen(title) > 9 ? 4 : 5);      // long titles ("ENGINE LOAD") need the smaller size
-    gfx->setTextColor(0x7BEF);
-    gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-    gfx->setCursor((LCD_W - w) / 2 - x1, 84);
-    gfx->print(title);
-    gfx->setTextSize(5);
-    gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
-    gfx->setCursor((LCD_W - w) / 2 - x1, 336);
-    gfx->print(unit);
-    drawPageDots(0);
-  }
-  if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
-  gfx->fillRect(0, 150, LCD_W, 170, BLACK);   // number area only
-  gfx->setTextSize(strlen(big) <= 3 ? 14 : 11);
-  gfx->setTextColor(color);
-  gfx->getTextBounds(big, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor((LCD_W - w) / 2 - x1, 235 - h / 2 - y1);
-  gfx->print(big);
-  gfx->flush();
-}
-
-#else
-void drawDataPage(bool stale, bool full) {
-  char big[16]; bool valid; const char *title, *unit; uint16_t color;
-  pageInfo(page, big, sizeof(big), &valid, &title, &unit, &color);
-  int16_t x1, y1; uint16_t w, h;
-  if (full) {
-    gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
-    gfx->setTextSize(strlen(title) > 9 ? 2 : 3);      // long titles ("ENGINE LOAD") need the smaller size
-    gfx->setTextColor(0x7BEF);
-    gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-    gfx->setCursor((LCD_W - w) / 2, 40);
-    gfx->print(title);
-    gfx->setTextSize(3);
-    gfx->getTextBounds(unit, 0, 0, &x1, &y1, &w, &h);
-    gfx->setCursor((LCD_W - w) / 2, 230);
-    gfx->print(unit);
-    drawPageDots(300);
-  }
-  if (!valid || stale) { snprintf(big, sizeof(big), "--"); color = 0x7BEF; }
-  gfx->fillRect(0, 100, LCD_W, 110, BLACK);   // number area only
-  gfx->setTextSize(strlen(big) <= 3 ? 8 : 6);
-  gfx->setTextColor(color);
-  gfx->getTextBounds(big, 0, 0, &x1, &y1, &w, &h);
-  gfx->setCursor((LCD_W - w) / 2, 135);
-  gfx->print(big);
-}
-
-#endif
 // Debug page: link state and the last raw adapter exchanges (newest at the bottom).
-#ifdef BOARD_ROUND28
+// Debug page: a status row, readout cards for the key values, grouped system lines and the last adapter exchanges.
+// Drawn with the round UI fonts; the short colour names (WHITE, RED, ...) are macros in this file, so the colours are built here.
 void drawDebugPage() {
-  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
-  gfx->setTextSize(3);
-  gfx->setTextColor(0x07FF);
-  gfx->setCursor(195, 50);
-  gfx->print("DEBUG");
-  gfx->setTextSize(1);
-  gfx->setTextColor(0xFFE0);
-  gfx->setCursor(150, 78); gfx->print(FW_TAG " " __DATE__ " " __TIME__);
+  uint16_t *fb = fullCanvas->getFramebuffer();
+  const uint16_t cBg = rui::rgb(5, 7, 12), cText = rui::rgb(240, 244, 255), cDim = rui::rgb(118, 130, 160), cFaint = rui::rgb(70, 80, 108),
+                 cCyan = rui::rgb(0, 200, 255), cGreen = rui::rgb(80, 230, 110), cRed = rui::rgb(255, 80, 70), cAmber = rui::rgb(255, 170, 60);
+  for (int i = 0; i < LCD_W * LCD_H; i++) fb[i] = cBg;
+  rui::ringAA(fb, rui::CX, rui::CY, 235.5f, 238.5f, rui::rgb(30, 37, 54));
   uint32_t now = millis();
-  const int X = 84, P = 18;                       // text size 2 (12 px glyphs), 27 chars fit inside the circle
-  int y = 96;
-  gfx->setTextSize(2);
-  gfx->setTextColor(WHITE);
-  gfx->setCursor(X, y); gfx->printf("link:%s f:%s c:%s %lu req/s", linked ? "OK" : "--", useFilter ? "Y" : "N", useCount ? "Y" : "N", (unsigned long)reqPerSec); y += P;
-  gfx->setCursor(X, y); gfx->printf("mph:%d  age:%ldms", mph, tsMph ? (long)(now - tsMph) : -1L); y += P;
-  gfx->setCursor(X, y); gfx->printf("rpm:%d  age:%ldms", rpm, tsRpm ? (long)(now - tsRpm) : -1L); y += P;
-  gfx->setCursor(X, y); gfx->printf("cool:%d oil:%d %s b:%.1fV", tempOut(coolantC), oilValid ? tempOut(oilC) : -999, TEMP_UNIT_F ? "F" : "C", gOk[G_BATT] ? gVal[G_BATT] : 0.0f); y += P;
-  gfx->setTextColor(0x7BEF);
-  gfx->setCursor(X, y); gfx->printf("cmd:%lums gap:%lums", (unsigned long)lastCmdMs, (unsigned long)maxTickGapMs); y += P;
-  gfx->setCursor(X, y); gfx->printf("sd:%s %lums", sdOk ? "on" : "off", (unsigned long)sdWriteMs); y += P;
-  gfx->setCursor(X, y); gfx->printf("oil: %s", oilReply); y += P;
-  gfx->setCursor(X, y); gfx->printf("face:%lufps %lums", (unsigned long)faceFps, (unsigned long)faceFrameMs); y += P;
-  gfx->setTextColor(0x07FF);
-  gfx->setCursor(X, y); gfx->print(supText[0]); y += P;
-  gfx->setCursor(X, y); gfx->print(supText[1]); y += P;
-  gfx->setTextColor(0xFFE0);
-  gfx->setCursor(X, y); gfx->print(bootText); y += P;
-  gfx->setTextColor(0xFFFF);
-  gfx->setCursor(X, y); gfx->printf("mood:%d %s", lastMood, faceName); y += P;
-  gfx->setTextSize(1);
-  gfx->setCursor(X, y); gfx->print("chg:");
-  for (int k = 0; k < 3; k++) { int i = (chgHead + k) % 3; if (chgAt[i]) gfx->printf(" %lus %s", (unsigned long)(chgAt[i] / 1000), chgName[i]); }
-  y += 16;
-  for (int k = 0; k < 5 && y < 424; k++) {        // last adapter exchanges, oldest first
-    DbgEntry &d = dbg[(dbgHead + k) % 5];
-    if (!d.cmd[0]) continue;
-    gfx->setCursor(120, y); gfx->setTextColor(0xFFE0); gfx->printf("> %s%s", d.cmd, d.timeout ? " (timeout)" : ""); y += 10;
-    for (int off = 0; off < (int)strlen(d.reply) && off < 76 && y < 424; off += 38) {   // wrap reply at 38 chars
-      char line[39]; strncpy(line, d.reply + off, 38); line[38] = 0;
-      gfx->setCursor(120, y); gfx->setTextColor(WHITE); gfx->print(line); y += 10;
-    }
-    y += 4;
+  char b[64];
+  const int CX = LCD_W / 2;
+
+  rui::textC(fb, rui::F_TTL, "DEBUG", CX, 40, cCyan);
+  snprintf(b, sizeof(b), "%s  %s", FW_TAG, __DATE__ " " __TIME__);
+  rui::textC(fb, rui::F_SML, b, CX, 66, cFaint);
+
+  // status chips
+  snprintf(b, sizeof(b), "%lu REQ/S", (unsigned long)reqPerSec);
+  rui::chip(fb, CX - 174, 88, 96, 26, true, linked ? cGreen : cRed, linked ? "LINK OK" : "NO LINK");
+  rui::chip(fb, CX - 70, 88, 96, 26, false, cDim, b);
+  snprintf(b, sizeof(b), "CMD %lu MS", (unsigned long)lastCmdMs);
+  rui::chip(fb, CX + 34, 88, 140, 26, false, cDim, b);
+
+  // readout cards: label on top, value below
+  struct Card { const char *label; char val[12]; uint16_t col; };
+  Card cards[6]; memset(cards, 0, sizeof(cards));
+  auto setCard = [&](int k, const char *label, uint16_t col, const char *fmt, int v, float f, bool useF) {
+    cards[k].label = label; cards[k].col = col;
+    if (useF) snprintf(cards[k].val, sizeof(cards[k].val), fmt, f); else snprintf(cards[k].val, sizeof(cards[k].val), fmt, v);
+  };
+  setCard(0, "RPM", cText, "%d", rpm, 0, false);
+  setCard(1, "MPH", cText, "%d", mph, 0, false);
+  setCard(2, TEMP_UNIT_F ? "COOL F" : "COOL C", cText, "%d", tempOut(coolantC), 0, false);
+  if (oilValid) setCard(3, TEMP_UNIT_F ? "OIL F" : "OIL C", cText, "%d", tempOut(oilC), 0, false); else { cards[3].label = "OIL"; cards[3].col = cDim; strcpy(cards[3].val, "--"); }
+  if (gOk[G_BATT]) setCard(4, "BATT V", cText, "%.1f", 0, gVal[G_BATT], true); else { cards[4].label = "BATT V"; cards[4].col = cDim; strcpy(cards[4].val, "--"); }
+  setCard(5, "FPS", cText, "%d", (int)faceFps, 0, false);
+  for (int k = 0; k < 6; k++) {
+    int cx = CX + (k % 3 - 1) * 112, y = 126 + (k / 3) * 64;
+    rui::pill(fb, cx, y, 104, 56, cards[k].label);
+    rui::textC(fb, rui::F_MED, cards[k].val, cx, y + 28, cards[k].col);
+  }
+
+  // system lines
+  int y = 262;
+  auto line = [&](uint16_t col, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof(b), fmt, ap); va_end(ap);
+    rui::textC(fb, rui::F_SML, b, CX, y, col); y += 15;
+  };
+  static const char *moodNames[6] = {"HAPPY", "UNEASY", "WORRIED", "SLEEPY", "EXCITED", "CALM"};
+  line(cDim, "SPEED AGE %ld MS   RPM AGE %ld MS", tsMph ? (long)(now - tsMph) : -1L, tsRpm ? (long)(now - tsRpm) : -1L);
+  line(cDim, "GAP %lu MS   SD %s   MOOD %s", (unsigned long)maxTickGapMs, sdOk ? "ON" : "OFF", (lastMood >= 0 && lastMood < 6) ? moodNames[lastMood] : "-");
+  line(cDim, "%s", bootText);
+  line(cCyan, "%s", supText[0]);
+  if (supText[1][0]) line(cCyan, "%s", supText[1]);
+#if GEAR_SNIFF_TEST
+  line(cAmber, "%s", gearTxt[0]);
+  if (gearTxt[1][0]) line(cAmber, "%s", gearTxt[1]);
+#endif
+
+  // last adapter exchanges (newest last)
+  y += 4;
+  rui::taper(fb, CX - 90, y, CX + 90, y, 0.6f, 0.6f, rui::rgb(40, 48, 70)); y += 10;
+  DbgEntry *list[3]; int n = 0;                                       // the newest three, drawn oldest first
+  for (int k = 4; k >= 0 && n < 3; k--) { DbgEntry &d = dbg[(dbgHead + k) % 5]; if (d.cmd[0]) list[n++] = &d; }
+  for (int k = n - 1; k >= 0 && y < 428; k--) {
+    DbgEntry &d = *list[k]; char rep[20]; strncpy(rep, d.reply, 18); rep[18] = 0;
+    snprintf(b, sizeof(b), "> %s  %s%s", d.cmd, d.timeout ? "TIMEOUT" : "", d.timeout ? "" : rep);
+    rui::textC(fb, rui::F_SML, b, CX, y, d.timeout ? cRed : cDim); y += 14;
   }
   drawPageDots(0);
   gfx->flush();
 }
 
-#else
-void drawDebugPage() {
-  gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
-  gfx->setTextSize(2);
-  gfx->setTextColor(0x07FF);
-  gfx->setCursor(8, 6);
-  gfx->print("DEBUG");
-  gfx->setTextSize(1);
-  gfx->setTextColor(0xFFE0);
-  gfx->setCursor(86, 6);  gfx->print(FW_TAG);
-  gfx->setCursor(86, 17); gfx->print(__DATE__ " " __TIME__);
-  gfx->setTextColor(WHITE);
-  uint32_t now = millis();
-  gfx->setCursor(4, 30);  gfx->printf("link:%s f:%s c:%s %lu req/s", linked ? "OK" : "--", useFilter ? "Y" : "N", useCount ? "Y" : "N", (unsigned long)reqPerSec);
-  gfx->setCursor(4, 42);  gfx->printf("mph:%d  age:%ldms", mph, tsMph ? (long)(now - tsMph) : -1L);
-  gfx->setCursor(4, 54);  gfx->printf("rpm:%d  age:%ldms", rpm, tsRpm ? (long)(now - tsRpm) : -1L);
-  gfx->setCursor(4, 66);  gfx->printf("cool:%d oil:%d %s b:%.1fV", tempOut(coolantC), oilValid ? tempOut(oilC) : -999, TEMP_UNIT_F ? "F" : "C", gOk[G_BATT] ? gVal[G_BATT] : 0.0f);
-  gfx->setTextColor(0x7BEF);
-  gfx->setCursor(4, 78);  gfx->printf("cmd:%lums wr:%lums gap:%lums", (unsigned long)lastCmdMs, (unsigned long)lastWriteMs, (unsigned long)maxTickGapMs);
-  gfx->setCursor(4, 90);  gfx->printf("sd:%s %lums", sdOk ? "on" : "off", (unsigned long)sdWriteMs);
-  gfx->setCursor(4, 102); gfx->printf("oil: %s", oilReply);
-  gfx->setCursor(4, 114); gfx->printf("face:%lufps %lums req:%lu", (unsigned long)faceFps, (unsigned long)faceFrameMs, (unsigned long)reqPerSecFace);
-  gfx->setTextColor(0x07FF);
-  gfx->setCursor(4, 126); gfx->print(supText[0]);
-  gfx->setCursor(4, 137); gfx->print(supText[1]);
-  gfx->setTextColor(0xFFE0);
-  gfx->setCursor(4, 148); gfx->print(bootText);
-  gfx->setTextColor(0xFFFF);
-  gfx->setCursor(4, 158);
-  gfx->printf("mood:%d %s ex:%s %lds", lastMood, faceName, exciteWhy == 1 ? "rev" : exciteWhy == 2 ? "acc" : "-", exciteWhy ? (long)((now - exciteAt) / 1000) : 0L);
-  gfx->setTextColor(0xFFFF);
-  gfx->setCursor(4, 168); gfx->print("chg:");
-  for (int k = 0; k < 3; k++) { int i = (chgHead + k) % 3; if (chgAt[i]) gfx->printf(" %lus %s", (unsigned long)(chgAt[i] / 1000), chgName[i]); }
-  gfx->setTextColor(0x7BEF);
-  int y = 182;
-  for (int k = 0; k < 5; k++) {   // oldest first
-    DbgEntry &d = dbg[(dbgHead + k) % 5];
-    if (!d.cmd[0]) continue;
-    gfx->setCursor(4, y);  gfx->setTextColor(0xFFE0); gfx->printf("> %s%s", d.cmd, d.timeout ? " (timeout)" : ""); y += 10;
-    for (int off = 0; off < (int)strlen(d.reply) && off < 56; off += 27) {   // wrap reply at 27 chars
-      char line[28]; strncpy(line, d.reply + off, 27); line[27] = 0;
-      gfx->setCursor(4, y); gfx->setTextColor(WHITE); gfx->print(line); y += 10;
-    }
-    y += 4;
-  }
-  drawPageDots(308);
-}
-
-#endif
 // ---------- Input ----------
 // Short press: next page (Face > MPH > RPM > Coolant > Oil temp). Long press (LONG_PRESS_MS): toggle demo mode.
 // Edges are caught by an interrupt, so a quick click is never missed while the main loop is busy
@@ -910,7 +705,6 @@ void IRAM_ATTR onButtonEdge() {
   }
 }
 
-#ifdef BOARD_ROUND28
 // The touch screen acts as the button: a tap is a short press, holding a finger down LONG_PRESS_MS toggles demo mode, and a
 // horizontal swipe changes the page: swipe left = next page, swipe right = previous page.
 static const int SWIPE_MIN_PX = 60, TAP_MAX_PX = 24;
@@ -918,6 +712,7 @@ static void pollTouch() {
   static uint32_t lastPoll = 0, lastReport = 0;
   static int sx = 0, sy = 0, lx = 0, ly = 0;
   static bool slider = false;               // the finger went down on the brightness slider: it drags the slider, nothing else
+  static bool preset = false;               // ... or on one of the preset chips: it jumps to that level
   uint32_t ms = millis();
   if (ms - lastPoll < 15) return;
   lastPoll = ms;
@@ -926,12 +721,14 @@ static void pollTouch() {
   if (got) lastReport = ms;
   bool release = (got && !dn) || (btnDown && !got && ms - lastReport > 250);   // no report for a while also counts as lifted
   if (got && dn) {
-    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (page == PAGE_BRIGHTNESS && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); }
+    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (page == PAGE_BRIGHTNESS && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); preset = (page == PAGE_BRIGHTNESS && rui::presetAt(x, y) >= 0); }
     lx = x; ly = y;
-    if (slider) { btnLongFired = true; int pct = rui::pctFromX(x); if (pct != backlightPct) setBacklight(pct); }   // live: the screen dims or brightens under the finger
+    if (preset) { btnLongFired = true; int pv = rui::presetAt(sx, sy); if (pv >= 0 && pv != backlightPct) setBacklight(pv); }
+    else if (slider) { btnLongFired = true; int pct = rui::pctFromX(x); if (pct != backlightPct) setBacklight(pct); }   // live: the screen dims or brightens under the finger
     else if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
   } else if (release && btnDown) {
     btnDown = false;
+    if (preset) { preset = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }
     if (slider) { slider = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }   // keep the level across restarts
     int dx = lx - sx, dy = ly - sy;
     Serial.printf("touch: from %d,%d to %d,%d (dx %d dy %d) -> %s\n", sx, sy, lx, ly, dx, dy, (abs(dx) >= SWIPE_MIN_PX && abs(dx) * 2 > abs(dy) * 3) ? (((dx < 0) != (SWIPE_NEXT_ON_RIGHT != 0)) ? "swipe next" : "swipe previous") : (btnLongFired ? "ignored" : "tap"));
@@ -942,12 +739,9 @@ static void pollTouch() {
     } else if (!btnLongFired && btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;   // a tap
   }
 }
-#endif
 
 void handleButton() {
-#ifdef BOARD_ROUND28
   pollTouch();
-#endif
   if (btnDown && !btnLongFired && millis() - btnDownMs >= LONG_PRESS_MS) {
     btnLongFired = true;
     demo = !demo;
@@ -968,11 +762,7 @@ void handleButton() {
 
 // ---------- Face page (animated character) ----------
 static mochi::Mochi character;
-static Arduino_Canvas *canvas = nullptr;   // stick: 172x180 face canvas pushed to the panel; round board: unused (the face is drawn scaled into the full-frame canvas)
-#ifdef BOARD_ROUND28
 #include "scaled_gfx.h"
-#endif
-static const int FACE_Y = (LCD_H - mochi::H) / 2;    // canvas position on the panel (centered)
 
 static mochi::Expr moodExpr(Mood m) {
   switch (m) {
@@ -993,6 +783,7 @@ static void carEventReact(uint32_t now, bool settling) {
     carevents::Config c;
     c.engineOffMs = EVENT_ENGINE_OFF_MS; c.brakeMinMph = EVENT_BRAKE_MIN_MPH; c.brakeDropMph = EVENT_BRAKE_DROP_MPH;
     c.battCritV = BATT_CRIT_V; c.fuelLowPct = EVENT_FUEL_LOW_PCT;
+    c.redlineRpm = RPM_REDLINE; c.launchMinRpm = EVENT_LAUNCH_MIN_RPM; c.warmC = EVENT_WARM_C;
     return c;
   }());
   carevents::Input in;
@@ -1001,11 +792,17 @@ static void carEventReact(uint32_t now, bool settling) {
   in.speedFresh = fresh(tsMph, FAST_FRESH_MS); in.mph = mph;
   in.battFresh = gOk[G_BATT] && fresh(gTs[G_BATT], GAUGE_FRESH_MS); in.battV = gVal[G_BATT];
   in.fuelFresh = gOk[G_FUEL] && fresh(gTs[G_FUEL], GAUGE_FRESH_MS); in.fuelPct = gVal[G_FUEL];
+  in.coolFresh = fresh(tsCool, SLOW_FRESH_MS * 3); in.coolC = coolantC;
   carevents::Event ev = det.update(in);
   if (settling) return;
   switch (ev) {
     case carevents::EV_ENGINE_START: character.react(mochi::E_STARS, 1800, now); break;
     case carevents::EV_HARD_BRAKE:   character.react(mochi::E_STARTLE, 1200, now); break;
+    case carevents::EV_REDLINE:      character.react(mochi::E_GLITCH, 1000, now); break;       // overload flash at the limiter
+    case carevents::EV_HARD_LAUNCH:  character.react(mochi::E_LAUGH, 1500, now); break;        // whee
+    case carevents::EV_SMOOTH_STOP:  character.react(mochi::E_UWU, 2000, now); break;          // content after a gentle stop
+    case carevents::EV_ENGINE_OFF:   character.react(mochi::E_SLEEPY, 3000, now); break;       // drifts off when the engine stops
+    case carevents::EV_ENGINE_WARM:  character.react(mochi::E_LOVE, 2200, now); break;         // warmed up, ready to go
     case carevents::EV_LOW_BATTERY:
     case carevents::EV_LOW_FUEL:     character.react(mochi::E_CRYING, 2500, now); break;
     default: break;
@@ -1014,6 +811,13 @@ static void carEventReact(uint32_t now, bool settling) {
 #endif
 
 // One animation frame. Demo mode shows every expression in turn (with its name) for checking at a desk.
+// Sends a rectangle of the frame buffer to the panel, row by row straight from the canvas (no extra copy).
+// The Face page never waited for the panel's scan (the old code pushed the whole frame in one call): waiting cost ~37 ms per frame
+// on the round panel, more than the copying itself, so the animation ran at only ~13 fps. The dial pages keep their tear-free sync.
+static void flushRect(const uint16_t *fb, int sx, int sy, int sw, int sh) {
+  for (int y = sy; y < sy + sh; y++) rgbDisp->draw16bitRGBBitmap(sx, y, (uint16_t *)(fb + y * LCD_W + sx), sw, 1);
+}
+
 static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   uint32_t t0 = millis();
   static int showIdx = 0; static uint32_t showAt = 0; static bool lastDemoSeen = false;
@@ -1024,16 +828,18 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   if (wasIntro && !introNow) { settleUntil = now + FACE_SETTLE_MS; appliedMood = -1; }
   wasIntro = introNow;
   bool settling = introNow || now < settleUntil;
+  bool fullFlush = entering;                      // true when something outside the face area changed: then the whole frame is sent to the panel
   if (entering) {
     paintFaceBg(0, 0, LCD_W, LCD_H);
     drawPageDots(300);
     if (!settling) character.setBase(moodExpr(m), now);
   }
   bool d = demo;
-  if (d && !lastDemoSeen) { character.startIntro(now); showIdx = 0; showAt = now + 5200; }   // demo ON replays the welcome
+  if (d && !lastDemoSeen) { character.startIntro(now); showIdx = 0; showAt = now + 5200; fullFlush = true; }   // demo ON replays the welcome
   if (!d && lastDemoSeen) {                       // demo just turned OFF: back to the real mood face
     character.setBase(moodExpr(m), now);
     clearBg(UI_LABEL_X0, UI_LABEL_Y, UI_LABEL_W, UI_LABEL_H);      // remove the expression name label
+    fullFlush = true;
   }
   lastDemoSeen = d;
   if (d) {
@@ -1048,6 +854,7 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
       int16_t x1, y1; uint16_t w, h; const char *nm = mochi::exprName(e);
       gfx->getTextBounds(nm, 0, 0, &x1, &y1, &w, &h);
       gfx->setCursor((LCD_W - w) / 2, UI_LABEL_TY); gfx->print(nm);
+      fullFlush = true;
     }
   } else {
     if (!settling && ((int)m != appliedMood || entering)) {
@@ -1064,22 +871,42 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   faceName = mochi::exprName(character.current());
   { static mochi::Expr lastE = mochi::E_COUNT;
     if (character.current() != lastE) { lastE = character.current(); chgAt[chgHead] = now; chgName[chgHead] = faceName; chgHead = (chgHead + 1) % 3; } }
-#ifdef BOARD_ROUND28
+  const int FW = (int)ceilf(mochi::W * FACE_SCALE) + 4, FH = (int)ceilf(mochi::H * FACE_SCALE) + 4;      // area the scaled face can touch
+  const int FX = (LCD_W - FW) / 2, FY = (LCD_H - FH) / 2;
+  const int IM = 52;                                                  // the welcome's road lines and light cones reach this far past the face canvas
+  const int IX = FX - IM, IY = FY - IM, IW = FW + 2 * IM, IH = FH + 2 * IM;
+  bool introRect = false;
   {
     static bool wasIntroDraw = false;
     bool introDraw = character.introActive();
-    const int FX = (LCD_W - mochi::W * FACE_SCALE) / 2, FY = (LCD_H - mochi::H * FACE_SCALE) / 2;
-    if (introDraw) paintFaceBg(0, 0, LCD_W, LCD_H);                  // the welcome's road lines reach past the character's own canvas: repaint everything
-    else if (wasIntroDraw) { paintFaceBg(0, 0, LCD_W, LCD_H); drawPageDots(300); }   // welcome over: bring the page dots back
-    else paintFaceBg(FX, FY, mochi::W * FACE_SCALE, mochi::H * FACE_SCALE);
+    if (introDraw && !wasIntroDraw) { paintFaceBg(0, 0, LCD_W, LCD_H); fullFlush = true; }   // first welcome frame: clear everything (hides the page dots)
+    else if (introDraw && character.introWide(now)) { paintFaceBg(IX, IY, IW, IH); introRect = true; }   // the drive-in scene reaches past the face canvas
+    else if (introDraw) paintFaceBg(FX, FY, FW, FH);                                           // the title writing stays inside the face canvas: small area, much faster
+    else if (wasIntroDraw) { paintFaceBg(0, 0, LCD_W, LCD_H); drawPageDots(300); fullFlush = true; }   // welcome over: bring the page dots back
+    else paintFaceBg(FX, FY, FW, FH);
     wasIntroDraw = introDraw;
-    ScaledGfx<Arduino_GFX> sg{gfx, FACE_SCALE, FX, FY};
+    ScaledGfx<Arduino_GFX> sg{gfx, FACE_SCALE, FX + 2, FY + 2};
     character.render(&sg, now, false);                              // the gradient is the background
   }
-  gfx->flush();
-#else
-  character.render(canvas, now);
-  canvas->flush();
+  uint32_t tFl = micros();
+  if (fullFlush) gfx->flush();
+  else {                                                            // send only the rows that can have changed (the face area, or the welcome's area)
+    uint16_t *fb = fullCanvas->getFramebuffer();
+    const int sx = introRect ? IX : FX, sy = introRect ? IY : FY, sw = introRect ? IW : FW, sh = introRect ? IH : FH;
+    flushRect(fb, sx, sy, sw, sh);
+  }
+#if FACE_TIMING_LOG
+  {                                                                 // frame rate of the Face page and the welcome, once per 2 s, on the UART port
+    static uint32_t flSum = 0, flN = 0, win = 0; flSum += micros() - tFl; flN++;
+    if (now - win >= 2000) {
+      if (win && flN) {
+        char ln[96]; snprintf(ln, sizeof(ln), "face: %lu fps, flush %lu us (%s), frame %lu ms\n", (unsigned long)(flN * 1000 / (now - win)), (unsigned long)(flSum / flN),
+                              fullFlush ? "full" : (introRect ? "welcome area" : "face area"), (unsigned long)(millis() - t0));
+        Serial0.print(ln);
+      }
+      flSum = flN = 0; win = now;
+    }
+  }
 #endif
 
   uint32_t dt = millis() - t0;
@@ -1088,72 +915,6 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   if (now - winStart >= 1000) { faceFps = frames; frames = 0; winStart = now; }
 }
 
-// ---------- Rally cluster page (landscape 320x172, drawn in two 320x86 strips) ----------
-// No full-frame canvas: that needs a 110 KB contiguous block that the heap does not have next to the face canvas.
-// The 62 KB face canvas buffer is reused as the strip buffer (the face is not drawn while this page is shown).
-static uint16_t *clusterBuf = nullptr;
-static const int CLUSTER_STRIP = 86;
-static bool landscape = false;                      // the panel is currently rotated for the cluster
-static void clusterFrame(uint32_t now) {
-  if (!clusterBuf) {
-#ifdef BOARD_ROUND28
-    // Round board: the whole 320x172 picture in one buffer (internal RAM if it fits, else PSRAM), then scaled 1.25x into the canvas.
-    clusterBuf = (uint16_t *)heap_caps_malloc(cluster::W * cluster::H * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!clusterBuf) clusterBuf = (uint16_t *)heap_caps_malloc(cluster::W * cluster::H * 2, MALLOC_CAP_SPIRAM);
-#else
-#if MOCHI_FACE
-    if (canvas) clusterBuf = canvas->getFramebuffer();
-#endif
-    if (!clusterBuf) clusterBuf = (uint16_t *)heap_caps_malloc(cluster::W * CLUSTER_STRIP * 2, MALLOC_CAP_8BIT);
-#endif
-    if (!clusterBuf) { Serial.println("cluster buffer allocation failed"); clusterFailed = true; page = nextPage(PAGE_CLUSTER, 1); forceDraw = true; return; }
-  }
-  // Values ease toward the real ones so the sweep and the digits glide instead of jumping at the 5 Hz poll rate.
-  static float dRpm = 0, dMph = 0; static uint32_t lastT = 0, runStart = 0;
-  float k = lastT ? 1.0f - expf(-(float)(now - lastT) / 90.0f) : 1.0f; lastT = now;
-  dRpm += ((float)rpm - dRpm) * k; dMph += ((float)mph - dMph) * k;
-  bool engineOn = fresh(tsRpm, FAST_FRESH_MS) && rpm > 400;
-  if (engineOn) { if (!runStart) runStart = now; } else runStart = 0;
-  cluster::Data d;
-  d.rpm = (int)lroundf(dRpm); d.mph = (int)lroundf(dMph);
-  d.haveCool = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30; d.coolF = tempOut(coolantC); d.hotF = tempOut(TEMP_UNEASY_C);
-  auto have = [&](int g) { return gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS); };
-  d.haveIntake = have(G_INTAKE); d.intakeF = tempOut((int)lroundf(gVal[G_INTAKE]));
-  d.haveAmb = have(G_AMBIENT);   d.ambF = tempOut((int)lroundf(gVal[G_AMBIENT]));
-  d.haveFuel = have(G_FUEL);     d.fuelPct = (int)lroundf(gVal[G_FUEL]);
-  d.haveBatt = have(G_BATT);     d.battV = gVal[G_BATT];
-  d.haveLoad = have(G_LOAD);     d.loadPct = (int)lroundf(gVal[G_LOAD]);
-  d.haveThr = have(G_THROTTLE);  d.thrPct = (int)lroundf(gVal[G_THROTTLE]);
-  d.runSec = runStart ? (int)((now - runStart) / 1000) : 0;
-  d.live = now - lastValidMs <= STALE_AFTER_MS;
-  d.redline = RPM_REDLINE; d.rate = (int)reqPerSec; d.tempF = TEMP_UNIT_F;
-#ifdef BOARD_ROUND28
-  cluster::Raster r(clusterBuf, cluster::H, 0);
-  cluster::draw(&r, d, now);
-  // Nearest-neighbour 1.25x (4 of every 5 source pixels, one repeated), centred; the 400x215 picture fits inside the circle.
-  const int DW = cluster::W * 5 / 4, DH = cluster::H * 5 / 4;
-  const int X0 = (LCD_W - DW) / 2, Y0 = (LCD_H - DH) / 2;
-  static uint16_t xmap[cluster::W * 5 / 4];
-  static bool mapped = false;
-  if (!mapped) { for (int x = 0; x < DW; x++) xmap[x] = x * 4 / 5; mapped = true; }
-  uint16_t *fb = fullCanvas->getFramebuffer();
-  for (int y = 0; y < DH; y++) {
-    const uint16_t *src = clusterBuf + (y * 4 / 5) * cluster::W;
-    uint16_t *dst = fb + (Y0 + y) * LCD_W + X0;
-    for (int x = 0; x < DW; x++) dst[x] = src[xmap[x]];
-  }
-  gfx->flush();
-#else
-  for (int y0 = 0; y0 < cluster::H; y0 += CLUSTER_STRIP) {
-    int rows = cluster::H - y0 < CLUSTER_STRIP ? cluster::H - y0 : CLUSTER_STRIP;
-    cluster::Raster r(clusterBuf, rows, y0);
-    cluster::draw(&r, d, now);
-    gfx->draw16bitRGBBitmap(0, y0, clusterBuf, cluster::W, rows);
-  }
-#endif
-}
-
-#ifdef BOARD_ROUND28
 // Round-board dial pages (src/round_ui.h): sport cluster, analog tach, analog speedo, vitals rings.
 // ---------- Multi-value pages (arc / custom / quad / dual / gear): what they show ----------
 // Colours are built here with rui::rgb(): the short names WHITE / RED / YELLOW are macros in this file.
@@ -1211,7 +972,7 @@ static void fillReadout(rui::Readout &r, int id) {
 // Estimated gear (OBD has no gear value): N shows at once, a digit only after it has held steady for half a second.
 static char gearShown() {
   static char cand = 'N', cur = 'N'; static uint32_t since = 0;
-  char g = cluster::estimateGear(rpm, mph, cluster::DEFAULT_GEARS);
+  char g = gear::estimateGear(rpm, mph);
   uint32_t now = millis();
   if (g != cand) { cand = g; since = now; }
   if (g != cur && (g == 'N' || now - since >= 500)) cur = g;
@@ -1268,9 +1029,7 @@ static void roundDialFrame(int p, uint32_t now) {
     frames = sumDraw = sumFlush = 0; win = now;
   }
 }
-#endif
 
-#ifdef BOARD_ROUND28
 // Brightness page (round board): redrawn only when the level changes.
 static void roundBrightnessFrame(bool full) {
   static int shown = -1;
@@ -1281,7 +1040,7 @@ static void roundBrightnessFrame(bool full) {
   shown = backlightPct;
   rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); rgbDisp->draw16bitRGBBitmap(x, y, fb + y * LCD_W + x, w, 1); });
 }
-#endif
+
 
 // Draws whatever the current page needs. Runs only in the UI task; the main task never touches the display.
 void uiTick() {
@@ -1299,29 +1058,12 @@ void uiTick() {
   if (!fresh(tsRpm, FAST_FRESH_MS)) rpm = 0;
   Mood m = computeMood();
   bool moodChanged = (int)m != lastMood;
-  if (moodChanged || forceDraw) setLedMood(m);   // LED follows the mood on every page
-#if MOCHI_FACE && MOCHI_INTRO
-  {                                              // ...except during the welcome gauge, when it follows the needle
-    static bool ledFromIntro = false; static uint8_t lr = 0, lg = 0, lb = 0;
-    uint8_t r, g, b;
-    if (character.introLed(&r, &g, &b)) {
-      if (!ledFromIntro || r != lr || g != lg || b != lb) { setLed(r, g, b); lr = r; lg = g; lb = b; }
-      ledFromIntro = true;
-    } else if (ledFromIntro) { ledFromIntro = false; setLedMood(m); }
-  }
-#endif
 
   // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
   static bool statusShown = false; static uint32_t shownStatusVer = 0;
-  bool introOn = MOCHI_FACE && MOCHI_INTRO && character.introActive() && page == PAGE_FACE;
-#ifndef BOARD_ROUND28
-  {                                                // the cluster page is landscape; every other screen is portrait
-    bool wantLand = page == PAGE_CLUSTER && !(statusActive && !demo);
-    if (wantLand != landscape) { gfx->setRotation(wantLand ? CLUSTER_ROTATION : 0); landscape = wantLand; forceDraw = true; drawnPage = -1; }
-  }
-#endif
+  bool introOn = MOCHI_INTRO && character.introActive() && page == PAGE_FACE;
   if (statusActive && !introOn && !demo) {
-    if (!statusShown || statusVer != shownStatusVer) { drawStatusScreen(); shownStatusVer = statusVer; statusShown = true; }
+    drawStatusScreen(now, !statusShown || statusVer != shownStatusVer); shownStatusVer = statusVer; statusShown = true;   // animated: redrawn every frame
     drawnPage = -1;
     lastMood = (int)m;
     return;
@@ -1329,47 +1071,14 @@ void uiTick() {
   if (statusShown) { statusShown = false; forceDraw = true; drawnPage = -1; }
 
   if (page == PAGE_FACE) {
-#if MOCHI_FACE
     faceFrame(m, moodChanged, forceDraw || drawnPage != PAGE_FACE, now);
-#else
-    static bool blinkingOld = false; static uint32_t nextBlinkOld = 0, blinkEndOld = 0; static bool lastOpenOld = true;
-    if (!blinkingOld && now >= nextBlinkOld) { blinkingOld = true; blinkEndOld = now + 150; }
-    if (blinkingOld && now >= blinkEndOld) { blinkingOld = false; nextBlinkOld = now + random(2500, 5500); }
-    bool open = !blinkingOld;
-    if (forceDraw || moodChanged || drawnPage != PAGE_FACE) {
-      gfx->fillRect(0, 0, LCD_W, LCD_H, BLACK);
-      drawEyes(m, open);
-      drawMouthFor(m);
-      lastOpenOld = open;
-    } else if (m != SLEEPY && open != lastOpenOld) {
-      drawEyes(m, open);
-      lastOpenOld = open;
-    }
-#endif
   } else if (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_GEAR)) {
-#ifdef BOARD_ROUND28
     roundDialFrame(page, now);
-#else
-    clusterFrame(now);
-#endif
   } else if (page == PAGE_BRIGHTNESS) {
-#ifdef BOARD_ROUND28
     roundBrightnessFrame(forceDraw || drawnPage != PAGE_BRIGHTNESS);
-#endif
   } else if (page == PAGE_DEBUG) {
     static uint32_t lastDbgDraw = 0;
     if (forceDraw || drawnPage != PAGE_DEBUG || now - lastDbgDraw >= 500) { drawDebugPage(); lastDbgDraw = now; }
-  } else {
-    char big[16]; bool valid; const char *tt, *u; uint16_t c;
-    pageInfo(page, big, sizeof(big), &valid, &tt, &u, &c);
-    bool stale = (m == SLEEPY) && page != PAGE_BATT;   // battery comes from the adapter, readable with the engine off
-    static char shownBig[16]; static uint16_t shownColor = 0;
-    bool full = forceDraw || drawnPage != page;
-    if (full || strcmp(big, shownBig) != 0 || valid != shownValid || stale != shownStale || c != shownColor) {
-      drawDataPage(stale, full);
-      strncpy(shownBig, big, sizeof(shownBig) - 1); shownBig[sizeof(shownBig) - 1] = 0;
-      shownValid = valid; shownStale = stale; shownColor = c;
-    }
   }
   drawnPage = page;
   lastMood = (int)m;
@@ -1387,11 +1096,64 @@ static void uiTask(void *) {
   }
 }
 
+#if GEAR_SNIFF_TEST
+static void gearSniffDrain() {                                                // main task: print what the callback queued
+  while (sniffTail != sniffHead) {
+    SniffEv e = sniffRing[sniffTail]; sniffTail = (sniffTail + 1) % 24;
+    Serial.printf("gear 01F t=%.1fs  %02X %02X %02X %02X [%02X] %02X %02X %02X   byte4>>1&15=%d byte4>>4=%d byte4&15=%d\n", e.ms / 1000.0f,
+                  e.d[0], e.d[1], e.d[2], e.d[3], e.d[4], e.d[5], e.d[6], e.d[7], (e.d[4] >> 1) & 15, e.d[4] >> 4, e.d[4] & 15);
+  }
+}
+static void gearSniffRestore() {
+  const char *init[] = {"ATZ", "ATE0", "ATL0", "ATH0", "ATS0", "ATSP0"};      // the same setup as at connect: clears the filter and headers
+  for (auto c : init) sendCmd(c, INIT_TIMEOUT_MS);
+  discoverPids(sendCmd("0100", 8000));
+}
+static void runGearSniff() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  Serial.println("=== gear test: listening for CAN ID 01F ===");
+  showStatus("SHIFT P R N D", YELLOW);
+  sendCmd("ATH1");                                           // show frame headers (the CAN ID)
+  String f = sendCmd("ATCRA01F");                            // only frames from ID 01F, if the adapter supports it
+  bool filtered = f.indexOf("OK") >= 0;
+  sniffTotal = sniffFrames = 0; sniffNVals = 0; sniffNRaw = 0; sniffHave = false; sniffLen = 0; sniffHead = sniffTail = 0;
+  for (int i = 0; i < 8; i++) sniffChg[i] = 0;
+  portENTER_CRITICAL(&rxMux); gotPrompt = false; portEXIT_CRITICAL(&rxMux);
+  sniffT0 = millis(); sniffOn = true;
+  const char *ma = "ATMA\r";
+  txChar->writeValue((const uint8_t *)ma, 5, false);
+  uint32_t t0 = millis();
+  while (millis() - t0 < (uint32_t)GEAR_SNIFF_SEC * 1000 && client && client->isConnected()) {
+    gearSniffDrain();
+    snprintf(gearTxt[0], sizeof(gearTxt[0]), "gear test: %lu fr / %lu", (unsigned long)sniffFrames, (unsigned long)sniffTotal);
+    delay(20);
+  }
+  const char *stop = "\r";                                  // any character stops the monitor
+  txChar->writeValue((const uint8_t *)stop, 1, false);
+  uint32_t ts = millis();
+  while (!gotPrompt && millis() - ts < 2000) delay(5);
+  delay(300);
+  sniffOn = false;
+  gearSniffDrain();
+  Serial.printf("=== gear test done: filter %s, %lu frames of 01F, %lu lines in all ===\n", filtered ? "accepted" : "not accepted (all traffic)", (unsigned long)sniffFrames, (unsigned long)sniffTotal);
+  Serial.print("byte changes b0..b7:"); for (int i = 0; i < 8; i++) Serial.printf(" %lu", (unsigned long)sniffChg[i]); Serial.println();
+  Serial.print("byte4 values in order:"); for (int i = 0; i < sniffNVals; i++) Serial.printf(" %02X", sniffVals[i]); Serial.println();
+  for (int i = 0; i < sniffNRaw; i++) Serial.printf("other line %d: %s\n", i, sniffRaw[i]);
+  snprintf(gearTxt[0], sizeof(gearTxt[0]), "gear test: %lu fr of %lu%s", (unsigned long)sniffFrames, (unsigned long)sniffTotal, filtered ? "" : " nofilt");
+  gearTxt[1][0] = 0;
+  if (sniffFrames == 0) snprintf(gearTxt[1], sizeof(gearTxt[1]), "none: %s", sniffNRaw ? sniffRaw[0] : "no reply");
+  else { size_t n = snprintf(gearTxt[1], sizeof(gearTxt[1]), "b4:"); for (int i = 0; i < sniffNVals && n < sizeof(gearTxt[1]) - 4; i++) n += snprintf(gearTxt[1] + n, sizeof(gearTxt[1]) - n, " %02X", sniffVals[i]); }
+  gearSniffRestore();                                        // back to normal OBD polling
+  clearStatus();
+}
+#endif
+
 // ---------- Connection ----------
 bool connectAdapter() {
   int tmpBytes[2];
   showStatus("Scanning...", 0x07FF);
-  setLed(0, 20, 40);
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
   NimBLEScanResults results = scan->getResults(SCAN_TIME_MS, false);
@@ -1418,6 +1180,9 @@ bool connectAdapter() {
   const char *init[] = {"ATZ", "ATE0", "ATL0", "ATH0", "ATS0", "ATSP0"};
   for (auto c : init) sendCmd(c, INIT_TIMEOUT_MS);
   discoverPids(sendCmd("0100", 8000));        // finds the car's protocol (can take seconds), then reads which values it supports
+#if GEAR_SNIFF_TEST
+  runGearSniff();                             // one-off test, see the comment at the top of that section
+#endif
   useFilter = useCount = false;
 #if USE_ENGINE_FILTER
   String f = sendCmd("ATCRA7E8", INIT_TIMEOUT_MS);   // only listen to the engine computer
@@ -1439,10 +1204,12 @@ bool connectAdapter() {
 // ---------- Arduino entry points ----------
 void setup() {
   Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);   // never stall when nothing is reading the USB serial port (car power)
+  Serial.setTxTimeoutMs(0);
+#if FACE_TIMING_LOG
+  Serial0.begin(115200);
+#endif   // never stall when nothing is reading the USB serial port (car power)
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), onButtonEdge, CHANGE);
-#ifdef BOARD_ROUND28
   if (!roundDisplayInit()) Serial.println("display init failed");
   fullCanvas = new Arduino_Canvas(LCD_W, LCD_H, rgbDisp, 0, 0);
   if (!fullCanvas->begin(GFX_SKIP_OUTPUT_BEGIN)) Serial.println("canvas allocation failed");
@@ -1450,22 +1217,10 @@ void setup() {
   gfx->fillScreen(BLACK);
   gfx->flush();
   touchInit();
-#else
-  pinMode(PIN_LCD_BL, OUTPUT);
-  digitalWrite(PIN_LCD_BL, HIGH);
-  gfx->begin(LCD_SPI_HZ);
-  gfx->fillScreen(BLACK);
-  canvas = new Arduino_Canvas(mochi::W, mochi::H, gfx, 0, FACE_Y);
-  if (!canvas->begin(GFX_SKIP_OUTPUT_BEGIN)) Serial.println("canvas allocation failed");
-#endif
   character.begin(esp_random());
   detectBoot();
-#if MOCHI_FACE && MOCHI_INTRO
+#if MOCHI_INTRO
   character.startIntro(millis(), bootQuickRestart);
-#endif
-#if PIN_LED >= 0
-  led.begin();
-  led.setBrightness(LED_BRIGHTNESS);
 #endif
   sdInit();
   NimBLEDevice::init("");
@@ -1489,7 +1244,6 @@ void loop() {
     if (linked) {
       linked = false;
       showStatus("Link lost", RED);
-      setLed(60, 0, 0);
       // Wait out the reconnect delay without freezing the button (long press -> demo).
       uint32_t t0 = millis();
       while (millis() - t0 < RECONNECT_WAIT_MS && !demo) delay(10);

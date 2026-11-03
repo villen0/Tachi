@@ -5,10 +5,13 @@ import sys
 from fontgen import fit_size, render
 
 CLASSES = [  # name, chars, cap height px, stroke, gap px
-    ("HUGE", "0123456789N-", 104, 0, 3),
-    ("BIG", "0123456789.-", 56, 0, 2),
-    ("MED", "0123456789.-%/", 28, 0, 2),
-    ("LBL", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-%/+ ", 17, 0, 1),
+    ("HUGE", "0123456789N-", 68, 0, 3),
+    ("BIG", "0123456789.-", 44, 0, 2),
+    ("NUM", "0123456789.-%/", 26, 0, 2),
+    ("MED", "0123456789.-%/", 21, 0, 2),
+    ("LBL", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-%/+ ", 13, 0, 1),
+    ("TTL", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:- ", 16, 0, 2),
+    ("SML", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-%/+>?, ", 11, 0, 1),
 ]
 
 def main(font, out):

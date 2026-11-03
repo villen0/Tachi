@@ -1,5 +1,5 @@
 #pragma once
-// Pixel-buffer stand-in for the Arduino_GFX calls used by mochi.h / cluster.h (host preview only).
+// Pixel-buffer stand-in for the Arduino_GFX calls used by mochi.h (host preview only).
 #include <cstdio>
 #include <cstdlib>
 #include <vector>

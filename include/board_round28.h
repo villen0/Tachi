@@ -1,6 +1,6 @@
 #pragma once
 // Waveshare ESP32-S3-Touch-LCD-2.8C: 2.8" round IPS 480x480, ST7701 on parallel RGB (16-bit), GT911 touch.
-// Pins and timings from Waveshare's demo (Display_ST7701.h, Touch_GT911.h, SD_Card.h). Not yet run on hardware.
+// Pins and timings from Waveshare's demo (Display_ST7701.h, Touch_GT911.h, SD_Card.h); verified on a real board.
 // EXIOn = pin n (1-based, as in Waveshare's demo) of the on-board TCA9554 I/O expander, not a GPIO.
 
 #define LCD_W 480
@@ -52,10 +52,9 @@
 #define GT911_ADDR    0x5D
 
 #define PIN_BUTTON    0          // BOOT button
-#define PIN_LED       -1         // no RGB LED on this board; LED code must be skipped
 
 // TF slot (shares GPIO 1/2 with the LCD init bus, which is idle after panel init)
-#define SD_LOG_ENABLED   0       // off until the full firmware is ported
+#define SD_LOG_ENABLED   0       // off: the TF pins below are unconfirmed and shared with the display init bus
 #define SD_LOG_INTERVAL_MS 1000
 #define PIN_SD_CLK  2
 #define PIN_SD_CMD  1
@@ -68,4 +67,4 @@
 #define UI_LABEL_H    32
 #define UI_LABEL_SIZE 3
 #define UI_LABEL_TY   428
-#define FACE_SCALE    2
+#define FACE_SCALE    1.6f   // the 172x180 face art is drawn at this scale (fractions allowed)

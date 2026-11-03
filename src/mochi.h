@@ -174,19 +174,11 @@ class Mochi {
     cur = tgt = def(E_DEFAULT).pose; expr = E_DEFAULT; style = ES_RECT; mouth = M_SMILE; ovl = O_NONE;
   }
   bool introActive() const { return intro; }
+  // true while the welcome still draws the drive-in scene (road lines, light cones, car) that reaches past the face canvas; after that only the face canvas changes
+  bool introWide(uint32_t now) const { return intro && welcomeClock(now - introT0) < 2500.0f; }
   // Scripted welcome (headlights drive-in): lamps appear far away, a car drives in and brakes, the lamps flash and become the
   // eyes, the eyes turn into happy arches while a glowing "TACHI" writes itself on, then the normal face returns.
   // Full about 5.4 s; the short version (after a quick restart) plays only the drive-in part, about 0.9 s.
-  // LED colour that follows the headlights during the drive-in; false afterwards (the mood colour takes over).
-  bool introLed(uint8_t *r, uint8_t *g, uint8_t *b) const {
-    if (!intro) return false;
-    float T = welcomeClock(clockNow - introT0);
-    if (T >= 2500.0f) return false;
-    float on = smoothf((T - 300.0f) / 170.0f), fl = flashAt(T);
-    float k = on * (1.0f - 0.7f * smootherf((T - 2080.0f) / 420.0f));
-    *r = (uint8_t)(clampf(40 * k + 100 * fl, 0, 140)); *g = (uint8_t)(clampf(70 * k + 90 * fl, 0, 160)); *b = (uint8_t)(clampf(100 * k + 70 * fl, 0, 170));
-    return true;
-  }
   bool reacting() const { return reaction != E_COUNT || intro; }
   Expr current() const { return expr; }
 
@@ -618,11 +610,11 @@ class Mochi {
   }
   // Visits every point of the hand-written "TACHI" that has been written so far (about 1 point per pixel of stroke).
   // f(x, y, letter, writingNow) is called per point; writingNow is true for the letter that is still being drawn.
-  template <class F> void titleWalk(float T, float t0, int y0, F f) const {
+  template <class F> void titleWalk(float T, float t0, int y0, int stride, F f) const {   // stride > 1: only every stride-th dot (soft glow passes need fewer)
     const char *word = "TACHI"; const int lw = 22, lh = 32, gap = 9, n = 5;      // bold title: letters 22x32 px, 9 px apart
     const int x0 = (W - (n * lw + (n - 1) * gap)) / 2;
     for (int i = 0; i < n; i++) {
-      float prog = smoothf((T - (t0 + 190.0f * i)) / 260.0f);
+      float prog = smootherf((T - (t0 + 150.0f * i)) / 440.0f);
       if (prog <= 0) continue;
       float pts[16][2], part[17][2], totalLen = 0; int ns = letterStrokes(word[i]);
       for (int s = 0; s < ns; s++) { int c = letterStroke(word[i], s, pts); totalLen += polyLen(pts, c); }
@@ -635,7 +627,7 @@ class Mochi {
           float ax = x0 + i * (lw + gap) + part[k][0] * lw, ay = y0 + part[k][1] * lh;
           float bx = x0 + i * (lw + gap) + part[k + 1][0] * lw, by = y0 + part[k + 1][1] * lh;
           int steps = (int)(hypotf(bx - ax, by - ay) * 1.2f) + 1;
-          for (int q = 0; q <= steps; q++) f(lerpf(ax, bx, (float)q / steps), lerpf(ay, by, (float)q / steps), i, prog > 0.04f && prog < 1.0f);
+          for (int q = 0; q <= steps; q++) { if (stride > 1 && (q % stride) != 0 && q != steps) continue; f(lerpf(ax, bx, (float)q / steps), lerpf(ay, by, (float)q / steps), i, prog > 0.04f && prog < 1.0f); }
         }
       }
     }
@@ -645,17 +637,17 @@ class Mochi {
     const int n = 5, total = n * 22 + (n - 1) * 9, x0 = (W - total) / 2;
     auto glow = [&](float k) { return rgb((int)(50 * k * alpha), (int)(130 * k * alpha), (int)(255 * k * alpha)); };
     uint16_t wide = glow(26.0f / 255.0f), mid = glow(70.0f / 255.0f);
-    titleWalk(T, t0, y0, [&](float x, float y, int, bool) { g->fillCircle((int16_t)x, (int16_t)y, 8, wide); });
-    titleWalk(T, t0, y0, [&](float x, float y, int, bool) { g->fillCircle((int16_t)x, (int16_t)y, 5, mid); });
+    titleWalk(T, t0, y0, 6, [&](float x, float y, int, bool) { g->fillCircle(x, y, 8, wide); });
+    titleWalk(T, t0, y0, 3, [&](float x, float y, int, bool) { g->fillCircle(x, y, 5, mid); });
     float tx = 0, ty = 0; bool tip = false;
-    titleWalk(T, t0, y0, [&](float x, float y, int, bool writing) {
+    titleWalk(T, t0, y0, 1, [&](float x, float y, int, bool writing) {
       float sh = shim > 0 ? clampf(1.0f - fabsf(x - (x0 - 20 + (total + 40) * shim)) / 14.0f, 0, 1) * 0.75f : 0.0f;
-      g->fillCircle((int16_t)x, (int16_t)y, 3, rgb((int)((205 + 50 * sh) * alpha), (int)((235 + 20 * sh) * alpha), (int)(255 * alpha)));
+      g->fillCircle(x, y, 3, rgb((int)((205 + 50 * sh) * alpha), (int)((235 + 20 * sh) * alpha), (int)(255 * alpha)));
       if (writing) { tx = x; ty = y; tip = true; }
     });
     if (tip) {
-      g->fillCircle((int16_t)tx, (int16_t)ty, 10, rgb((int)(120 * 90 / 255.0f * alpha), (int)(190 * 90 / 255.0f * alpha), (int)(255 * 90 / 255.0f * alpha)));
-      g->fillCircle((int16_t)tx, (int16_t)ty, 4, rgb((int)(255 * alpha), (int)(255 * alpha), (int)(255 * alpha)));
+      g->fillCircle(tx, ty, 10, rgb((int)(120 * 90 / 255.0f * alpha), (int)(190 * 90 / 255.0f * alpha), (int)(255 * 90 / 255.0f * alpha)));
+      g->fillCircle(tx, ty, 4, rgb((int)(255 * alpha), (int)(255 * alpha), (int)(255 * alpha)));
     }
   }
 
@@ -682,8 +674,8 @@ class Mochi {
         float al = 140.0f * scene * fminf(1.0f, d0 * 3.0f) * (1.0f - 0.55f * p);
         uint16_t col = fc(150, 190, 255, al);
         float x0 = vpx + sinf(angs[a]) * 120 * d0, y0 = vpy + cosf(angs[a]) * 110 * d0, x1 = vpx + sinf(angs[a]) * 120 * d1, y1 = vpy + cosf(angs[a]) * 110 * d1;
-        g->drawLine((int16_t)x0, (int16_t)y0, (int16_t)x1, (int16_t)y1, col);
-        if (d0 > 0.5f) g->drawLine((int16_t)x0 + 1, (int16_t)y0, (int16_t)x1 + 1, (int16_t)y1, col);
+        g->drawLine(x0, y0, x1, y1, col);
+        if (d0 > 0.5f) g->drawLine(x0 + 1, y0, x1 + 1, y1, col);
       }
       // pool of light on the road (widest and dimmest first)
       static const int prx[3] = {70, 56, 42}, pry[3] = {22, 17, 12}; static const float pa[3] = {20, 46, 76};
@@ -694,8 +686,8 @@ class Mochi {
         float x = cx + side * half, s = spread * sp[layer];
         float ax = x - side * 2, ay = ly - 2, bx = x - side * 2, by = ly + 4, cx2 = x + side * s * 1.05f, cy2 = ly + s * 1.35f, dx = x + side * s * 0.15f, dy = ly + s * 1.5f;
         uint16_t col = fc(190, 225, 255, ca[layer] * scene);
-        g->fillTriangle((int16_t)ax, (int16_t)ay, (int16_t)bx, (int16_t)by, (int16_t)cx2, (int16_t)cy2, col);
-        g->fillTriangle((int16_t)ax, (int16_t)ay, (int16_t)cx2, (int16_t)cy2, (int16_t)dx, (int16_t)dy, col);
+        g->fillTriangle(ax, ay, bx, by, cx2, cy2, col);
+        g->fillTriangle(ax, ay, cx2, cy2, dx, dy, col);
       }
     }
 
@@ -734,18 +726,18 @@ class Mochi {
         } else {                                                   // ^ arch (grows out of the thin line)
           float amp = 11.0f * arch; float px[17], py[17];
           for (int i = 0; i <= 16; i++) { float u = -1 + 2.0f * i / 16; px[i] = x + u * w / 2; py[i] = eyesY + 2 - amp * (1 - u * u) + amp * 0.35f; }
-          for (int i = 0; i <= 16; i++) g->fillCircle((int16_t)px[i], (int16_t)py[i], 6, glowc(pw, 0.10f * pw.glow));
-          for (int i = 0; i <= 16; i++) g->fillCircle((int16_t)px[i], (int16_t)py[i], 5, glowc(pw, 0.25f * pw.glow));
-          for (int i = 0; i <= 16; i++) g->fillCircle((int16_t)px[i], (int16_t)py[i], 3, scaled(pw, 1.0f));
+          for (int i = 0; i <= 16; i++) g->fillCircle(px[i], py[i], 6, glowc(pw, 0.10f * pw.glow));
+          for (int i = 0; i <= 16; i++) g->fillCircle(px[i], py[i], 5, glowc(pw, 0.25f * pw.glow));
+          for (int i = 0; i <= 16; i++) g->fillCircle(px[i], py[i], 3, scaled(pw, 1.0f));
         }
       }
       if (morph > 0.35f) {                                         // smile: grows out of the grille smile, same place as the live face's smile
         float a = smootherf((morph - 0.35f) / 0.65f), wd = lerpf(8, 12, up), my = 84.0f + 22.0f - 20.0f * up;
         uint16_t col = fc(205, 235, 255, 255 * a);
-        for (int i = 0; i <= 24; i++) { float u = -1 + 2.0f * i / 24; g->fillCircle((int16_t)(cx + u * wd), (int16_t)(my + 5 * (1 - u * u)), 1, col); }
+        for (int i = 0; i <= 24; i++) { float u = -1 + 2.0f * i / 24; g->fillCircle((cx + u * wd), (my + 5 * (1 - u * u)), 1, col); }
       }
     }
-    float ta = smootherf((T - 2780.0f) / 420.0f) * (1.0f - smootherf((T - 4650.0f) / 650.0f));   // slow fade in and out: the title melts in and out
+    float ta = smootherf((T - 2780.0f) / 620.0f) * (1.0f - smootherf((T - 4650.0f) / 650.0f));   // slow fade in and out: the title melts in and out
     if (T >= 2780.0f && ta > 0.01f) drawVectorTitle(g, T, 2900.0f, ta, (T >= 4050.0f && T <= 4750.0f) ? clampf((T - 4050.0f) / 700.0f, 0, 1) : 0.0f, 116);
   }
 

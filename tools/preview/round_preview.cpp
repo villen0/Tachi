@@ -8,9 +8,10 @@
 static void run(mochi::Mochi &m, uint32_t &t, uint32_t ms) { uint32_t end = t + ms; while (t < end) { t += 16; m.update(t); } }
 
 int main(int argc, char **argv) {
-  const int N = 480, S = 2;
+  const int N = 480; const float S = argc > 2 ? (float)atof(argv[2]) : 1.6f;
   MockGfx panel(N, N);
-  ScaledGfx<MockGfx> sg{&panel, S, (N - mochi::W * S) / 2, (N - mochi::H * S) / 2};
+  const int fx = (N - (int)ceilf(mochi::W * S)) / 2, fy = (N - (int)ceilf(mochi::H * S)) / 2;
+  ScaledGfx<MockGfx> sg{&panel, S, fx, fy};
   MockGfx sheet(N * 3, N * 2);
   mochi::Expr shots[] = {mochi::E_DEFAULT, mochi::E_TURBO, mochi::E_SWEAT, mochi::E_ANGRY, mochi::E_SLEEPY, mochi::E_COUNT /* welcome */};
   for (int i = 0; i < 6; i++) {

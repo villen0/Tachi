@@ -45,8 +45,8 @@ int main(int argc, char **argv) {
     int i = 0;
     for (uint32_t mk : (variant ? shrt : full)) {
       while (t - t0 < mk) { t += 16; m.update(t); }
-      m.render(&g, t); uint8_t lr = 0, lg = 0, lb = 0; bool led = m.introLed(&lr, &lg, &lb);
-      char n[400]; snprintf(n, sizeof n, "%s/%c_%02d_%04u%s.ppm", out.c_str(), variant ? 's' : 'i', i++, (unsigned)(t - t0), led ? "_led" : ""); savePPM(g, n);
+      m.render(&g, t);
+      char n[400]; snprintf(n, sizeof n, "%s/%c_%02d_%04u.ppm", out.c_str(), variant ? 's' : 'i', i++, (unsigned)(t - t0)); savePPM(g, n);
       if (!variant && mk == 4400) { snprintf(n, sizeof n, "%s/z_title.ppm", out.c_str()); savePPM(g, n); }
     }
     printf("%s welcome still active at the end: %d\n", variant ? "short" : "full", (int)m.introActive());
