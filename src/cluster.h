@@ -95,6 +95,8 @@ inline char estimateGear(int rpm, int mph, const GearTable &t) {
   return best < 0.16f ? (char)('1' + bi) : '-';   // within about 16 % of a known ratio, else slipping / between gears
 }
 
+const GearTable DEFAULT_GEARS = {{167, 95, 68, 47, 33, 28}};   // Mazda 3 guess; tune from a drive log
+
 // ---- data + page --------------------------------------------------------------------------------------------
 struct Data {
   int rpm = 0, mph = 0;
@@ -118,7 +120,7 @@ template <class G> void smallTile(G *g, int x, int y, int w, int h, const char *
 }
 
 template <class G> void draw(G *g, const Data &d, uint32_t now) {
-  static const GearTable gt = {{167, 95, 68, 47, 33, 28}};
+  const GearTable &gt = DEFAULT_GEARS;
   // background: vertical blue gradient
   for (int y = 0; y < H; y += 2) {
     int k = y * 44 / H;

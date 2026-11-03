@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <vector>
 #include <string>
+#include <cstring>
 #include "round_ui.h"
 
 static void save(const std::vector<uint16_t> &fb, const std::string &path) {
@@ -20,13 +21,21 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   if (!rui::begin()) { puts("alloc failed"); return 1; }
   std::vector<uint16_t> fb(rui::W * rui::H, 0);
-  const char *names[] = {"sport", "tach", "speedo", "vitals"};
+  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear"};
   struct Case { float rpm, mph; const char *tag; } cases[] = {{3763, 63, "mid"}, {6900, 112, "red"}, {0, 0, "idle"}};
   for (int pg = 0; pg < rui::PG_COUNT; pg++) for (auto &c : cases) {
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;           // restart each picture from scratch
     rui::Data d; d.rpm = c.rpm; d.mph = c.mph; d.haveCool = d.haveFuel = d.haveBatt = d.haveLoad = true;
     d.coolC = c.rpm > 6000 ? 109 : 95; d.coolShown = (int)(d.coolC * 1.8f + 32.5f); d.fuelPct = c.rpm > 6000 ? 12 : 61; d.battV = 14.0f; d.loadPct = c.rpm > 6000 ? 92 : 72;
     d.dotN = 7; d.dotCur = pg + 1;
+    // multi-value pages (boost shown in psi)
+    strcpy(d.arcLabel, "BOOST"); strcpy(d.arcUnit, "PSI"); strcpy(d.title, pg == rui::PG_QUAD ? "ENGINE" : "TEMPS");
+    d.arcMin = -20; d.arcMax = 30; d.arcMajor = 10; d.arcMinor = 2; d.arcRed = 24; d.arcDec = 0;
+    float boost = c.rpm > 6000 ? 26.0f : (c.rpm > 0 ? 9.5f : -11.0f); d.haveArc = true; d.arcVal = boost; snprintf(d.arcText, sizeof(d.arcText), "%.1f", boost);
+    const char *lab[4] = {"COOLANT", "INTAKE", "BATTERY", "LOAD"}, *unit[4] = {"F", "F", "V", "%"}, *txt[4] = {"195", "88", "13.6", "42"}; float fr[4] = {0.62f, 0.3f, 0.7f, 0.42f};
+    for (int k = 0; k < 4; k++) { strcpy(d.rd[k].label, lab[k]); strcpy(d.rd[k].unit, unit[k]); strcpy(d.rd[k].text, txt[k]); d.rd[k].icon = k == 0 ? rui::IC_THERM : k == 1 ? rui::IC_AIR : k == 2 ? rui::IC_BATT : rui::IC_LOAD; d.rd[k].have = true; d.rd[k].frac = fr[k]; d.rd[k].col = k == 1 ? rui::ORANGE : rui::WHITE; }
+    if (pg == rui::PG_DUAL) { strcpy(d.rd[1].label, "OIL TEMP"); d.rd[1].icon = rui::IC_BOOST; }
+    d.gear = c.rpm > 6000 ? '5' : (c.rpm > 0 ? '3' : 'N');
     rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100);
     d.rpm = c.rpm; rui::frame(fb.data(), pg, d, 2000);
     save(fb, dir + "/" + names[pg] + "_" + c.tag + ".ppm");

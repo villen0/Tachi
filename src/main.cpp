@@ -105,16 +105,17 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_BRIGHTNESS, PAGE_COUNT };
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_ARC, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_MPH, PAGE_RPM, PAGE_COOLANT, PAGE_OIL, PAGE_BATT, PAGE_INTAKE, PAGE_AMBIENT, PAGE_FUEL, PAGE_THROTTLE, PAGE_LOAD, PAGE_DEBUG, PAGE_BRIGHTNESS, PAGE_COUNT };
 volatile int page = PAGE_FACE;       // BOOT short press cycles through the visible pages (see pageVisible)
 
 // ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load) ----------
 // Which of them the car answers is read at connect time (supported-PID bitmaps) and only those get a page.
-enum Gauge { G_BATT, G_INTAKE, G_AMBIENT, G_FUEL, G_THROTTLE, G_LOAD, G_COUNT };   // same order as PAGE_BATT..PAGE_LOAD
+enum Gauge { G_BATT, G_INTAKE, G_AMBIENT, G_FUEL, G_THROTTLE, G_LOAD, G_MAP, G_BARO, G_COUNT };   // G_MAP / G_BARO feed the boost pages and have no page of their own   // same order as PAGE_BATT..PAGE_LOAD
 struct GaugeDef { const char *title; uint8_t pid; bool show; };                    // pid 0 = adapter voltage (ATRV)
 static const GaugeDef GAUGES[G_COUNT] = {
   {"BATTERY", 0, SHOW_PAGE_BATTERY}, {"INTAKE AIR", 0x0F, SHOW_PAGE_INTAKE}, {"OUTSIDE", 0x46, SHOW_PAGE_OUTSIDE},
-  {"FUEL", 0x2F, SHOW_PAGE_FUEL}, {"THROTTLE", 0x11, SHOW_PAGE_THROTTLE}, {"ENGINE LOAD", 0x04, SHOW_PAGE_LOAD}};
+  {"FUEL", 0x2F, SHOW_PAGE_FUEL}, {"THROTTLE", 0x11, SHOW_PAGE_THROTTLE}, {"ENGINE LOAD", 0x04, SHOW_PAGE_LOAD},
+  {"BOOST", 0x0B, 0}, {"BARO", 0x33, 0}};
 static float gVal[G_COUNT];                       // battery V, temps in deg C, others in percent
 static uint32_t gTs[G_COUNT], gLastTry[G_COUNT];
 static uint8_t gFails[G_COUNT];
@@ -128,14 +129,17 @@ static void resetGauges() {
 static bool gaugeVisible(int g) { return GAUGES[g].show && gSupported[g] && (gOk[g] || gFails[g] < 5); }
 static bool clusterFailed = false;               // the landscape canvas could not be allocated
 static bool dialFailed = false;                  // round board: the dial pages' buffers could not be allocated
+static bool boostVisible() { return gSupported[G_MAP] && (gOk[G_MAP] || gFails[G_MAP] < 5); }   // the car answers MAP (intake manifold pressure)
 static bool pageVisible(int p) {
 #ifdef BOARD_ROUND28
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !dialFailed;
   if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
+  if (p == PAGE_ARC || p == PAGE_CUSTOM) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
+  if (p >= PAGE_QUAD && p <= PAGE_GEAR) return SHOW_PAGE_STYLES && !dialFailed;
   if (p == PAGE_BRIGHTNESS) return SHOW_PAGE_BRIGHTNESS && !dialFailed;
 #else
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !clusterFailed;
-  if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return false;   // round board only
+  if (p >= PAGE_DIAL_TACH && p <= PAGE_GEAR) return false;           // round board only
   if (p == PAGE_BRIGHTNESS) return false;                           // round board only
 #endif
   if (p >= PAGE_BATT && p <= PAGE_LOAD) return gaugeVisible(p - PAGE_BATT);
@@ -319,7 +323,7 @@ static void pollGauge(int g) {
     char cmd[8]; snprintf(cmd, sizeof(cmd), "01%02X", GAUGES[g].pid);
     String r = obdQuery(cmd);
     if (obd::dataBytes(r.c_str(), GAUGES[g].pid, 1, b)) {
-      gVal[g] = (g == G_INTAKE || g == G_AMBIENT) ? (float)obd::tempC(b[0]) : obd::percent(b[0]);
+      gVal[g] = (g == G_INTAKE || g == G_AMBIENT) ? (float)obd::tempC(b[0]) : (g == G_MAP || g == G_BARO) ? (float)b[0] : obd::percent(b[0]);   // MAP, BARO: kPa
       ok = true;
     }
   }
@@ -362,6 +366,7 @@ static int focusItem() {
   int p = page;
   if (p == PAGE_COOLANT) return 0;
   if (p == PAGE_OIL) return oilValid ? 1 : -1;
+  if ((p == PAGE_ARC || p == PAGE_CUSTOM) && boostVisible()) return 2 + G_MAP;   // the boost pages need MAP often
   if (p >= PAGE_BATT && p <= PAGE_LOAD && gaugeVisible(p - PAGE_BATT)) return 2 + (p - PAGE_BATT);
   return -1;
 }
@@ -393,7 +398,7 @@ static void discoverPids(String r0) {
     if (obd::parseBitmap(r.c_str(), base, &m)) sup.set(base, m); else break;
   }
   for (int g = 0; g < G_COUNT; g++) gSupported[g] = (GAUGES[g].pid == 0) ? true : sup.supported(GAUGES[g].pid);   // battery: ATRV is tried
-  static const uint8_t listed[] = {0x04, 0x05, 0x0C, 0x0D, 0x0F, 0x11, 0x2F, 0x42, 0x46, 0x5C};
+  static const uint8_t listed[] = {0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x11, 0x2F, 0x33, 0x42, 0x46, 0x5C};
   snprintf(supText[0], sizeof(supText[0]), "sup:%d", sup.count());
   supText[1][0] = 0;
   int n0 = 0;
@@ -424,6 +429,7 @@ void demoStep() {
   gVal[G_FUEL] = 100 - fmodf(t, 200.0f) * 0.4f;
   gVal[G_THROTTLE] = thr;
   gVal[G_LOAD] = 20 + thr * 0.6f;
+  gVal[G_BARO] = 101.3f; gVal[G_MAP] = 101.3f + (-69.0f + 160.0f * thr / 100.0f);   // -10 psi at idle up to +15 psi at full throttle
   if (fmodf(t, 75.0f) <= 65.0f) tsRpm = tsMph = tsCool = tsOil = lastValidMs = millis();   // else: 10 s "engine off" gap
 }
 
@@ -1149,6 +1155,85 @@ static void clusterFrame(uint32_t now) {
 
 #ifdef BOARD_ROUND28
 // Round-board dial pages (src/round_ui.h): sport cluster, analog tach, analog speedo, vitals rings.
+// ---------- Multi-value pages (arc / custom / quad / dual / gear): what they show ----------
+// Colours are built here with rui::rgb(): the short names WHITE / RED / YELLOW are macros in this file.
+static const uint16_t UI_WHITE = rui::rgb(240, 244, 255), UI_YELLOW = rui::rgb(255, 208, 50), UI_RED = rui::rgb(255, 60, 56), UI_ORANGE = rui::rgb(255, 120, 40);
+
+// Boost = intake manifold pressure (MAP) minus barometric pressure, in kPa. Barometric falls back to 101.3 kPa (sea level).
+static bool boostValue(float *kpa) {
+  if (!(gOk[G_MAP] && fresh(gTs[G_MAP], 6000))) return false;
+  float baro = (gOk[G_BARO] && fresh(gTs[G_BARO], GAUGE_FRESH_MS * 3)) ? gVal[G_BARO] : 101.3f;
+  *kpa = gVal[G_MAP] - baro;
+  return true;
+}
+
+static void fillReadout(rui::Readout &r, int id) {
+  r = rui::Readout();
+  r.col = UI_WHITE;
+  auto have = [&](int g) { return gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS); };
+  const char *tu = TEMP_UNIT_F ? "F" : "C";
+  switch (id) {
+    case RD_COOL:
+      r.have = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30; r.icon = rui::IC_THERM; strcpy(r.label, "COOLANT"); strcpy(r.unit, tu);
+      snprintf(r.text, sizeof(r.text), "%d", tempOut(coolantC)); r.frac = (coolantC - 40) / 90.0f;
+      r.col = coolantC >= TEMP_WORRIED_C ? UI_RED : (coolantC >= TEMP_UNEASY_C ? UI_YELLOW : UI_WHITE); break;
+    case RD_INTAKE: case RD_AMBIENT: {
+      int g = id == RD_INTAKE ? G_INTAKE : G_AMBIENT;
+      r.have = have(g); r.icon = rui::IC_AIR; strcpy(r.label, id == RD_INTAKE ? "INTAKE" : "OUTSIDE"); strcpy(r.unit, tu);
+      snprintf(r.text, sizeof(r.text), "%d", tempOut((int)lroundf(gVal[g]))); r.frac = (gVal[g] + 20) / 100.0f; break;
+    }
+    case RD_BATT:
+      r.have = have(G_BATT); r.icon = rui::IC_BATT; strcpy(r.label, "BATTERY"); strcpy(r.unit, "V");
+      snprintf(r.text, sizeof(r.text), "%.1f", gVal[G_BATT]); r.frac = (gVal[G_BATT] - 10.5f) / 5.0f;
+      r.col = gVal[G_BATT] < BATT_CRIT_V ? UI_RED : (gVal[G_BATT] < (rpm > 600 ? BATT_LOW_RUN_V : BATT_LOW_OFF_V) ? UI_YELLOW : UI_WHITE); break;
+    case RD_FUEL:
+      r.have = have(G_FUEL); r.icon = rui::IC_FUEL; strcpy(r.label, "FUEL"); strcpy(r.unit, "%");
+      snprintf(r.text, sizeof(r.text), "%d", (int)lroundf(gVal[G_FUEL])); r.frac = gVal[G_FUEL] / 100.0f;
+      r.col = gVal[G_FUEL] < FUEL_LOW_PCT / 2 ? UI_RED : (gVal[G_FUEL] < FUEL_LOW_PCT ? UI_YELLOW : UI_WHITE); break;
+    case RD_LOAD: case RD_THROTTLE: {
+      int g = id == RD_LOAD ? G_LOAD : G_THROTTLE;
+      r.have = have(g); r.icon = id == RD_LOAD ? rui::IC_LOAD : rui::IC_THROTTLE; strcpy(r.label, id == RD_LOAD ? "LOAD" : "THROTTLE"); strcpy(r.unit, "%");
+      snprintf(r.text, sizeof(r.text), "%d", (int)lroundf(gVal[g])); r.frac = gVal[g] / 100.0f; break;
+    }
+    case RD_BOOST: {
+      float kpa = 0; r.have = boostValue(&kpa); r.icon = rui::IC_BOOST; strcpy(r.label, "BOOST");
+#if BOOST_UNIT_PSI
+      float v = kpa * 0.145038f; strcpy(r.unit, "PSI"); snprintf(r.text, sizeof(r.text), "%.1f", v); r.frac = (v + 20) / 50.0f;
+#else
+      float v = kpa / 100.0f; strcpy(r.unit, "BAR"); snprintf(r.text, sizeof(r.text), "%.2f", v); r.frac = (v + 1.0f) / 3.0f;
+#endif
+      break;
+    }
+    default: break;
+  }
+}
+
+// Estimated gear (OBD has no gear value): N shows at once, a digit only after it has held steady for half a second.
+static char gearShown() {
+  static char cand = 'N', cur = 'N'; static uint32_t since = 0;
+  char g = cluster::estimateGear(rpm, mph, cluster::DEFAULT_GEARS);
+  uint32_t now = millis();
+  if (g != cand) { cand = g; since = now; }
+  if (g != cur && (g == 'N' || now - since >= 500)) cur = g;
+  return cur;
+}
+
+static void fillStyleData(rui::Data &d, int p) {
+  if (p == PAGE_ARC || p == PAGE_CUSTOM) {
+    float kpa = 0; d.haveArc = boostValue(&kpa);
+#if BOOST_UNIT_PSI
+    float v = kpa * 0.145038f; d.arcMin = -20; d.arcMax = 30; d.arcMajor = 10; d.arcMinor = 2; d.arcRed = 24; d.arcDec = 0; strcpy(d.arcUnit, "PSI"); snprintf(d.arcText, sizeof(d.arcText), "%.1f", v);
+#else
+    float v = kpa / 100.0f; d.arcMin = -1; d.arcMax = 2; d.arcMajor = 0.5f; d.arcMinor = 0.1f; d.arcRed = 1.6f; d.arcDec = 1; strcpy(d.arcUnit, "BAR"); snprintf(d.arcText, sizeof(d.arcText), "%.2f", v);
+#endif
+    d.arcVal = v; strcpy(d.arcLabel, "BOOST");
+  }
+  if (p == PAGE_CUSTOM) { static const int rows[3] = CUSTOM_ROWS; for (int i = 0; i < 3; i++) fillReadout(d.rd[i], rows[i]); }
+  if (p == PAGE_QUAD) { static const int cells[4] = QUAD_CELLS; strcpy(d.title, "ENGINE"); for (int i = 0; i < 4; i++) fillReadout(d.rd[i], cells[i]); }
+  if (p == PAGE_DUAL) { static const int rows[2] = DUAL_ROWS; strcpy(d.title, "TEMPS"); for (int i = 0; i < 2; i++) fillReadout(d.rd[i], rows[i]); }
+  if (p == PAGE_GEAR) d.gear = gearShown();
+}
+
 static void roundDialFrame(int p, uint32_t now) {
   static bool started = false;
   if (!started) {
@@ -1165,7 +1250,9 @@ static void roundDialFrame(int p, uint32_t now) {
   d.redline = RPM_REDLINE; d.hotC = TEMP_UNEASY_C; d.worryC = TEMP_WORRIED_C; d.fuelLowPct = FUEL_LOW_PCT;
   d.battCritV = BATT_CRIT_V; d.battLowV = BATT_LOW_OFF_V; d.unitF = TEMP_UNIT_F;
   d.dotN = visibleCount(); d.dotCur = visibleIndex(page);
-  int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : rui::PG_VITALS;
+  fillStyleData(d, p);
+  int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : p == PAGE_ARC ? rui::PG_ARC
+         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : rui::PG_VITALS;
   uint32_t t0 = micros();
   uint16_t *fb = fullCanvas->getFramebuffer();
   rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen
@@ -1259,7 +1346,7 @@ void uiTick() {
       lastOpenOld = open;
     }
 #endif
-  } else if (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_DIAL_VITALS)) {
+  } else if (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_GEAR)) {
 #ifdef BOARD_ROUND28
     roundDialFrame(page, now);
 #else
@@ -1294,7 +1381,7 @@ static void uiTask(void *) {
   for (;;) {
     uint32_t t0 = millis();
     uiTick();
-    uint32_t period = (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_DIAL_VITALS)) ? (1000 / DIAL_FPS) : 30;
+    uint32_t period = (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_GEAR)) ? (1000 / DIAL_FPS) : 30;
     uint32_t used = millis() - t0;
     vTaskDelay(pdMS_TO_TICKS(used >= period ? 1 : period - used));
   }

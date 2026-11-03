@@ -19,7 +19,7 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -127,7 +127,16 @@ inline void text(uint16_t *b, const Font &f, const char *s, int x, int y, uint16
 inline void textC(uint16_t *b, const Font &f, const char *s, int cx, int y, uint16_t col) { text(b, f, s, cx - textW(f, s) / 2, y, col); }
 
 // ---- data the pages show ------------------------------------------------------------------------------------------
+enum Icon : uint8_t { IC_NONE = 0, IC_THERM, IC_AIR, IC_BATT, IC_FUEL, IC_LOAD, IC_BOOST, IC_THROTTLE };
+struct Readout {                 // one value on the multi-value pages (custom, quad, dual)
+  bool have = false; uint8_t icon = IC_NONE; char label[14] = ""; char text[12] = "--"; char unit[8] = ""; uint16_t col = 0xFFFF; float frac = 0;
+};
 struct Data {
+  // multi-value pages (filled by the caller): the arc gauge, up to four readouts, the page heading and the estimated gear
+  bool haveArc = false; float arcVal = 0, arcMin = -1, arcMax = 2, arcMajor = 0.5f, arcMinor = 0.1f, arcRed = 1.6f; int arcDec = 1;
+  char arcText[12] = "--", arcUnit[8] = "", arcLabel[14] = "", title[14] = "";
+  Readout rd[4];
+  char gear = 'N';               // 'N' stopped, '1'..'6', '-' unknown
   float rpm = 0, mph = 0;
   bool haveCool = false, haveFuel = false, haveBatt = false, haveLoad = false;
   int coolC = 0, coolShown = 0, fuelPct = 0, loadPct = 0;
@@ -155,6 +164,7 @@ struct State {
   int16_t dmin[H], dmax[H];                 // per row: the span of pixels changed this frame (dmax < dmin: row is clean)
   int16_t nmin[H], nmax[H]; int nr0 = 0, nr1 = -1;   // per row: where the needle was drawn last frame
   SBox sbox[MAX_RINGS][MAX_SEG];            // bounding box of every ring segment
+  int16_t barPx[2] = {-1, -1}; uint16_t barCol[2] = {0, 0};   // dual page: fill width and colour last drawn
 };
 inline State &st() { static State s; return s; }
 
@@ -254,6 +264,93 @@ inline void setRingColors(Ring &R, uint16_t (*f)(float frac, const void *), cons
   for (int i = 0; i < R.nseg; i++) { R.lit[i] = f((i + 0.5f) / R.nseg, ctx); R.dim[i] = dimmed(R.lit[i]); }
 }
 
+// ---- small icons for the multi-value pages (drawn with the primitives above, about 24 px) --------------------------
+inline void iconDraw(uint16_t *b, int type, float x, float y, uint16_t c) {
+  switch (type) {
+    case IC_THERM:
+      taper(b, x, y - 10, x, y + 3, 2.6f, 2.6f, c); discAA(b, x, y - 10, 2.6f, c); discAA(b, x, y + 6.5f, 5.5f, c);
+      taper(b, x + 7, y - 7, x + 11, y - 7, 1.1f, 1.1f, c); taper(b, x + 7, y - 2, x + 11, y - 2, 1.1f, 1.1f, c); break;
+    case IC_AIR:
+      for (int k = -1; k <= 1; k++) taper(b, x - 10, y + k * 6.5f, x + 7, y + k * 6.5f, 1.4f, 1.4f, c);
+      taper(b, x + 8, y, x + 3, y - 5, 1.4f, 1.4f, c); taper(b, x + 8, y, x + 3, y + 5, 1.4f, 1.4f, c); break;
+    case IC_BATT:
+      taper(b, x - 10, y - 6, x + 10, y - 6, 1.3f, 1.3f, c); taper(b, x - 10, y + 8, x + 10, y + 8, 1.3f, 1.3f, c);
+      taper(b, x - 10, y - 6, x - 10, y + 8, 1.3f, 1.3f, c); taper(b, x + 10, y - 6, x + 10, y + 8, 1.3f, 1.3f, c);
+      taper(b, x - 6, y - 10, x - 6, y - 6, 2.2f, 2.2f, c); taper(b, x + 6, y - 10, x + 6, y - 6, 2.2f, 2.2f, c);
+      taper(b, x - 5, y + 1, x + 5, y + 1, 1.2f, 1.2f, c); break;
+    case IC_FUEL:
+      taper(b, x - 8, y - 10, x + 3, y - 10, 1.3f, 1.3f, c); taper(b, x - 8, y + 10, x + 3, y + 10, 1.3f, 1.3f, c);
+      taper(b, x - 8, y - 10, x - 8, y + 10, 1.3f, 1.3f, c); taper(b, x + 3, y - 10, x + 3, y + 10, 1.3f, 1.3f, c);
+      taper(b, x - 8, y - 3, x + 3, y - 3, 1.2f, 1.2f, c);
+      taper(b, x + 3, y - 5, x + 9, y - 5, 1.3f, 1.3f, c); taper(b, x + 9, y - 5, x + 9, y + 4, 1.3f, 1.3f, c); break;
+    case IC_LOAD:
+      ringAA(b, x, y, 8, 10.5f, c); taper(b, x, y + 1, x + 5.5f, y - 5, 1.6f, 0.8f, c); discAA(b, x, y + 1, 2.4f, c); break;
+    case IC_BOOST:
+      ringAA(b, x, y, 6, 10, c);
+      for (int k = 0; k < 3; k++) { float a = k * 2.0944f; taper(b, x, y, x + 7 * sinf(a), y - 7 * cosf(a), 2.0f, 0.8f, c); }
+      discAA(b, x, y, 2.4f, c); break;
+    case IC_THROTTLE:
+      taper(b, x - 5, y + 10, x + 5, y - 9, 4.2f, 3.2f, c); taper(b, x - 9, y + 11, x + 3, y + 11, 1.2f, 1.2f, c); break;
+    default: break;
+  }
+}
+
+// static layer of the multi-value pages: arc, custom, quad, dual, gear
+inline void buildStyle(State &S, int pg, const Data &d) {
+  uint16_t *b = S.bg; char t[16];
+  if (pg == PG_ARC || pg == PG_CUSTOM) {
+    const bool big = pg == PG_ARC;
+    buildRing(S, 0, CX, CY, big ? 204.0f : 210.0f, 228.0f, 90, 0.8f); S.nring = 1;
+    float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
+    float minor = d.arcMinor > 0.0001f ? d.arcMinor : 1; int per = (int)(d.arcMajor / minor + 0.5f); if (per < 1) per = 1;
+    int n = (int)(span / minor + 0.5f);
+    for (int i = 0; i <= n; i++) {
+      float v = d.arcMin + i * minor; bool major = (i % per) == 0;
+      tick(b, v - d.arcMin, span, major ? (big ? 180.0f : 188.0f) : (big ? 187.0f : 193.0f), big ? 198.0f : 202.0f, major ? 1.9f : 0.9f, major ? WHITE : FAINT);
+      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 142.0f : 152.0f, t, WHITE); }
+    }
+    if (d.arcLabel[0]) textC(b, F_LBL, d.arcLabel, CX, big ? 338 : 366, CYAN);
+    if (d.arcUnit[0]) textC(b, F_LBL, d.arcUnit, CX, big ? 280 : 186, DIM);
+    if (!big) {                                      // three icon readouts under the number
+      for (int i = 0; i < 3; i++) {
+        const int y = 228 + 38 * i;
+        iconDraw(b, d.rd[i].icon, CX - 84, y + 14, CYAN);
+        if (d.rd[i].unit[0]) text(b, F_LBL, d.rd[i].unit, CX + 68, y + 9, DIM);
+      }
+    }
+    struct A { float zero, red; } a = {(0 - d.arcMin) / span, (d.arcRed - d.arcMin) / span};
+    setRingColors(S.ring[0], [](float f, const void *p) {
+      const A *a = (const A *)p;
+      if (f >= a->red) return RED;
+      if (a->zero > 0 && f < a->zero) return lerpc(60, 120, 255, 0, 200, 255, f / a->zero);
+      float lo = a->zero > 0 ? a->zero : 0, u = (f - lo) / (a->red - lo > 0.01f ? a->red - lo : 0.01f);
+      return u < 0.5f ? lerpc(0, 200, 255, 110, 240, 190, u / 0.5f) : lerpc(110, 240, 190, 255, 208, 50, (u - 0.5f) / 0.5f); }, &a);
+  } else if (pg == PG_QUAD) {
+    if (d.title[0]) textC(b, F_LBL, d.title, CX, 62, CYAN);
+    taper(b, CX, 96, CX, 420, 0.8f, 0.8f, FAINT); taper(b, 62, CY + 4, 418, CY + 4, 0.8f, 0.8f, FAINT);
+    static const int cxs[4] = {CX - 100, CX + 100, CX - 100, CX + 100}, cys[4] = {CY - 76, CY - 76, CY + 92, CY + 92};
+    for (int i = 0; i < 4; i++) {
+      iconDraw(b, d.rd[i].icon, cxs[i], cys[i] - 68, CYAN);
+      textC(b, F_LBL, d.rd[i].label, cxs[i], cys[i] - 46, DIM);
+      textC(b, F_LBL, d.rd[i].unit, cxs[i], cys[i] + 48, DIM);
+    }
+  } else if (pg == PG_DUAL) {
+    if (d.title[0]) textC(b, F_LBL, d.title, CX, 64, CYAN);
+    for (int i = 0; i < 2; i++) {
+      const int y0 = i ? 262 : 108;
+      iconDraw(b, d.rd[i].icon, CX - 74, y0 + 8, CYAN);
+      char lab[24]; snprintf(lab, sizeof(lab), "%s %s", d.rd[i].label, d.rd[i].unit);
+      text(b, F_LBL, lab, CX - 52, y0 + 0, DIM);
+      const int bx0 = CX - 120, by = y0 + 108;
+      taper(b, bx0 + 7, by + 7, bx0 + 233, by + 7, 7, 7, PANEL_EDGE); discAA(b, bx0 + 7, by + 7, 7, PANEL_EDGE); discAA(b, bx0 + 233, by + 7, 7, PANEL_EDGE);
+    }
+  } else {   // PG_GEAR: the ladder 1..6, the current gear drawn huge, the speed below
+    textC(b, F_LBL, "GEAR", CX, 58, DIM);
+    for (int g = 0; g < 6; g++) { snprintf(t, sizeof(t), "%d", g + 1); textC(b, F_MED, t, CX + (int)((g - 2.5f) * 54), 92, FAINT); }
+    textC(b, F_LBL, "MPH", CX, 360, DIM);
+  }
+}
+
 // ---- per page: static layer + ring setup ---------------------------------------------------------------------------
 inline void buildPage(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg;
@@ -281,17 +378,20 @@ inline void buildPage(State &S, int pg, const Data &d) {
     for (float v = 0; v <= vmax + 0.01f; v += majorStep) { snprintf(t, sizeof(t), "%d", (int)(tach ? v / 1000 + 0.5f : v + 0.5f)); numeral(b, v, vmax, strlen(t) >= 3 ? 140.0f : 160.0f, t, v >= d.redline && tach ? RED : WHITE); }
     textC(b, F_LBL, tach ? "X1000 RPM" : "MPH", CX, 132, DIM);
     textC(b, F_LBL, tach ? "MPH" : "RPM", CX, tach ? 400 : 388, DIM);
-  } else {   // vitals: four ring gauges
+  } else if (pg == PG_VITALS) {   // vitals: four ring gauges
     static const int cxs[4] = {CX - 100, CX + 100, CX - 100, CX + 100}, cys[4] = {CY - 100, CY - 100, CY + 100, CY + 100};
     for (int i = 0; i < 4; i++) buildRing(S, i, (float)cxs[i], (float)cys[i], 74, 90, 45, 1.8f);
     S.nring = 4;
     const char *lab[4] = {d.unitF ? "COOL F" : "COOL C", "FUEL %", "BATT V", "LOAD %"};
     for (int i = 0; i < 4; i++) textC(b, F_LBL, lab[i], cxs[i], cys[i] + 36, DIM);
+  } else {
+    buildStyle(S, pg, d);                        // arc, custom, quad, dual, gear
   }
   pageDots(b, d.dotN, d.dotCur);
 
   // ring colours
-  if (pg == PG_SPORT || pg == PG_TACH) {
+  if (pg >= PG_ARC) {                            // the multi-value pages set their ring colours in buildStyle
+  } else if (pg == PG_SPORT || pg == PG_TACH) {
     struct C { int mx, rl; } c = {mx, d.redline};
     setRingColors(S.ring[0], [](float f, const void *p) { const C *c = (const C *)p; return rpmColor(f * c->mx, c->rl); }, &c);
   } else if (pg == PG_SPEEDO) {
@@ -336,6 +436,46 @@ inline void needle(State &S, uint16_t *fb, float deg, uint16_t col) {
   for (int y = S.nr0; y <= S.nr1; y++) if (S.nmax[y] >= S.nmin[y]) mark(S, S.nmin[y] - 1, y, S.nmax[y] + 1, y);
 }
 
+// dual page: a horizontal bar fill (the track is part of the static layer)
+inline void barFill(State &S, uint16_t *fb, int i, int x0, int y, int w, int h, float frac, uint16_t col) {
+  int px = (int)(clamp01(frac) * w + 0.5f);
+  if (px == S.barPx[i] && col == S.barCol[i]) return;
+  S.barPx[i] = px; S.barCol[i] = col;
+  restore(fb, S.bg, x0 - 1, y - 1, w + 2, h + 2);
+  if (px > 0) {
+    int e = px < h ? h : px; float r = h / 2.0f;
+    taper(fb, x0 + r, y + r, x0 + e - r, y + r, r, r, col); discAA(fb, x0 + r, y + r, r, col); discAA(fb, x0 + e - r, y + r, r, col);
+  }
+  mark(S, x0 - 1, y - 1, x0 + w, y + h);
+}
+
+// dynamic part of the multi-value pages
+inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
+  const char *none = "--";
+  if (pg == PG_ARC || pg == PG_CUSTOM) {
+    float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
+    ringLevel(S, 0, d.haveArc ? (d.arcVal - d.arcMin) / span : 0);
+    const bool big = pg == PG_ARC;
+    num(S, fb, 0, F_BIG, d.haveArc ? d.arcText : none, CX, big ? 214 : 122, 0, d.haveArc ? WHITE : DIM);
+    if (!big) for (int i = 0; i < 3; i++) num(S, fb, 1 + i, F_MED, d.rd[i].have ? d.rd[i].text : none, CX + 6, 228 + 38 * i, 0, d.rd[i].have ? d.rd[i].col : DIM);
+  } else if (pg == PG_QUAD) {
+    static const int cxs[4] = {CX - 100, CX + 100, CX - 100, CX + 100}, cys[4] = {CY - 76, CY - 76, CY + 92, CY + 92};
+    for (int i = 0; i < 4; i++) num(S, fb, i, F_BIG, d.rd[i].have ? d.rd[i].text : none, cxs[i], cys[i] - 16, 0, d.rd[i].have ? d.rd[i].col : DIM);
+  } else if (pg == PG_DUAL) {
+    for (int i = 0; i < 2; i++) {
+      const int y0 = i ? 262 : 108;
+      num(S, fb, i, F_BIG, d.rd[i].have ? d.rd[i].text : none, CX, y0 + 28, 0, d.rd[i].have ? d.rd[i].col : DIM);
+      barFill(S, fb, i, CX - 120, y0 + 108, 240, 14, d.rd[i].have ? d.rd[i].frac : 0, d.rd[i].col);
+    }
+  } else {   // PG_GEAR
+    char g[2] = {d.gear, 0}; const bool known = d.gear >= '1' && d.gear <= '6';
+    num(S, fb, 0, F_HUGE, g, CX, 132, 0, known ? WHITE : DIM);
+    char l[2] = {known ? d.gear : (char)0, 0}; int gi = known ? d.gear - '1' : 2;
+    num(S, fb, 1, F_MED, l, CX + (int)((gi - 2.5f) * 54), 92, 0, CYAN);
+    char sp[12]; snprintf(sp, sizeof(sp), "%d", (int)lroundf(S.mph)); num(S, fb, 2, F_BIG, sp, CX, 292, 0, WHITE);
+  }
+}
+
 // full = the frame buffer holds something else (another page was shown): rebuild and redraw everything.
 inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full = false) {
   State &S = st(); if (!S.ok) return;
@@ -346,7 +486,7 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
     memcpy(fb, S.bg, (size_t)W * H * 2);
     S.page = pg; S.dotN = d.dotN; S.dotCur = d.dotCur; S.unitF = d.unitF; S.redline = d.redline;
     for (Slot &s : S.slot) { s.s[0] = '\x01'; s.s[1] = 0; s.col = 0; s.x0 = 0; s.x1 = -1; }
-    S.needle = {0, 0, -1, -1}; S.needleAng = 1e9f; S.forceRings = true; S.nr0 = 0; S.nr1 = -1;
+    S.needle = {0, 0, -1, -1}; S.needleAng = 1e9f; S.forceRings = true; S.nr0 = 0; S.nr1 = -1; S.barPx[0] = S.barPx[1] = -1;
     mark(S, 0, 0, W - 1, H - 1);
   }
   int rpm = (int)lroundf(S.rpm), mph = (int)lroundf(S.mph), mx = rpmMax(d.redline);
@@ -370,7 +510,7 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
     ringLevel(S, 0, S.mph / 160.0f);
     needle(S, fb, angOf(fminf(S.mph, 160.0f), 160.0f), CYAN);
     snprintf(t, sizeof(t), "%d", rpm); num(S, fb, 0, F_MED, t, CX, 352, 110, WHITE);
-  } else {
+  } else if (pg == PG_VITALS) {
     static const int cxs[4] = {CX - 100, CX + 100, CX - 100, CX + 100}, cys[4] = {CY - 100, CY - 100, CY + 100, CY + 100};
     float f0 = d.haveCool ? (d.coolC - 40) / 90.0f : 0, f1 = d.haveFuel ? d.fuelPct / 100.0f : 0, f2 = d.haveBatt ? (d.battV - 10.5f) / 5.0f : 0, f3 = d.haveLoad ? d.loadPct / 100.0f : 0;
     ringLevel(S, 0, f0); ringLevel(S, 1, f1); ringLevel(S, 2, f2); ringLevel(S, 3, f3);
@@ -383,6 +523,8 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
       else snprintf(t, sizeof(t), "%d", d.loadPct);
       num(S, fb, i, F_MED, t, cxs[i], cys[i] - 22, 110, have[i] ? WHITE : DIM);
     }
+  } else {
+    frameStyle(S, fb, pg, d);                    // arc, custom, quad, dual, gear
   }
   drawRings(S, fb);
 }

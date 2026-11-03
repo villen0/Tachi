@@ -41,6 +41,20 @@
 #define SHOW_PAGE_CLUSTER  1
 #define SHOW_PAGE_DIALS    1   // round board only: analog tachometer, analog speedometer and the vitals rings
 #define SHOW_PAGE_BRIGHTNESS 1 // round board only: the brightness slider page (the level is saved across restarts)
+#define SHOW_PAGE_STYLES   1   // round board only: arc (boost), custom, quad, dual and gear pages (the two boost pages appear only if the car answers MAP)
+#define BOOST_UNIT_PSI     1   // boost in psi (1) or bar (0)
+// What the multi-value pages show. Pick from: RD_COOL RD_INTAKE RD_BATT RD_FUEL RD_LOAD RD_THROTTLE RD_AMBIENT RD_BOOST
+#define RD_COOL 0
+#define RD_INTAKE 1
+#define RD_BATT 2
+#define RD_FUEL 3
+#define RD_LOAD 4
+#define RD_THROTTLE 5
+#define RD_AMBIENT 6
+#define RD_BOOST 7
+#define CUSTOM_ROWS {RD_COOL, RD_INTAKE, RD_BATT}            // the three readouts under the boost number
+#define QUAD_CELLS  {RD_COOL, RD_INTAKE, RD_BATT, RD_LOAD}   // the four values of the quad page
+#define DUAL_ROWS   {RD_COOL, RD_INTAKE}                     // the two values with bars
 #define DIAL_FPS          30   // target frame rate of the round board's dial pages
 #define LED_BRIGHTNESS     0   // mood LED on the 1.47" stick: 0 = always off, 60 = the old default, 255 = full (the round board has no LED)
 #define SWIPE_NEXT_ON_RIGHT 1  // round board: 1 = swipe right goes to the next page, 0 = swipe left goes to the next page

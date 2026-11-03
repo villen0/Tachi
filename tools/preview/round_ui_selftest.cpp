@@ -3,6 +3,7 @@
 // Build: g++ -std=c++17 -O2 -I../../src round_ui_selftest.cpp -o round_ui_selftest && ./round_ui_selftest
 #include <cstdio>
 #include <vector>
+#include <cstring>
 #include "round_ui.h"
 int main() {
   if (!rui::begin()) return 1;
@@ -11,8 +12,15 @@ int main() {
     std::vector<uint16_t> fb(rui::W * rui::H, 0), panel(rui::W * rui::H, 0), ref(rui::W * rui::H, 0);
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
     rui::Data d; d.haveCool = d.haveFuel = d.haveBatt = d.haveLoad = true; d.dotN = 6; d.dotCur = pg + 1; d.coolShown = 203; d.battV = 14.0f;
+    // multi-value pages: static labels first (they are read when the page is built), live values inside the loop
+    strcpy(d.arcLabel, "BOOST"); strcpy(d.arcUnit, "BAR"); strcpy(d.title, "ENGINE"); d.arcMin = -1; d.arcMax = 2; d.arcMajor = 0.5f; d.arcMinor = 0.1f; d.arcRed = 1.6f; d.arcDec = 1;
+    const char *lab[4] = {"COOLANT", "INTAKE", "BATTERY", "LOAD"}, *unit[4] = {"F", "F", "V", "%"};
+    for (int k = 0; k < 4; k++) { strcpy(d.rd[k].label, lab[k]); strcpy(d.rd[k].unit, unit[k]); d.rd[k].icon = k + 1; }
     uint32_t now = 1000;
     for (int i = 0; i < 400; i++) {
+      d.haveArc = (i % 61) != 5; d.arcVal = -1 + 3 * (0.5f + 0.5f * sinf(i * 0.05f)); snprintf(d.arcText, sizeof(d.arcText), "%.2f", d.arcVal);
+      for (int k = 0; k < 4; k++) { d.rd[k].have = (i % 53) != k; snprintf(d.rd[k].text, sizeof(d.rd[k].text), "%d", 60 + (i * (k + 3)) % 140); d.rd[k].frac = ((i * (k + 3)) % 140) / 140.0f; d.rd[k].col = (i % 40) < 20 ? rui::CYAN : rui::ORANGE; }
+      d.gear = "N123456-"[(i / 7) % 8];
       float ph = i * 0.07f;
       d.rpm = 800 + 3000 * (0.5f + 0.5f * sinf(ph)) + (i % 97 == 0 ? 3200 : 0); d.mph = 45 * (0.5f + 0.5f * sinf(ph * 0.6f));
       d.coolC = 80 + (i / 8) % 40; d.coolShown = (int)(d.coolC * 1.8f + 32); d.fuelPct = 100 - (i / 5) % 100; d.battV = 11.0f + (i % 50) * 0.08f; d.loadPct = (i * 3) % 100;

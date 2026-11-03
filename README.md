@@ -36,6 +36,14 @@ How the UI maps to the round screen (everything is drawn into a 480x480 canvas i
 - No RGB LED on this board, so the mood colour is not shown; SD logging is off (`SD_LOG_ENABLED 0`).
 The stick build is unchanged.
 
+**More gauge pages on the round board** (`SHOW_PAGE_STYLES`, drawn by `src/round_ui.h`; the layout is in the same family as common digital gauge faces, all drawing is our own):
+- **Arc**: a 270 degree sweep with ticks, the big boost number and its unit. Boost is manifold pressure (PID 010B) minus barometric pressure (0133, or 101.3 kPa if the car does not answer), in psi or bar (`BOOST_UNIT_PSI`). The two boost pages only appear if the car answers 010B.
+- **Custom**: the boost arc plus three readouts with icons (`CUSTOM_ROWS`).
+- **Quad**: four values at once (`QUAD_CELLS`). **Dual**: two values, each with a bar (`DUAL_ROWS`).
+- **Gear**: the estimated gear (1-6, N when stopped, - when unsure) huge, a 1-6 ladder above it and the speed below. OBD has no gear value, so it is worked out from RPM and speed with the ratios in `cluster::DEFAULT_GEARS` (`src/cluster.h`), which need tuning from a real drive. The gear selector (P R N D S M) cannot be read through standard OBD.
+- Readout choices for those pages: `RD_COOL RD_INTAKE RD_BATT RD_FUEL RD_LOAD RD_THROTTLE RD_AMBIENT RD_BOOST`.
+- Check them on a computer without the board: `tools/preview/round_ui_preview.cpp` renders every page, `tools/preview/round_ui_selftest.cpp` proves the incremental drawing equals a full redraw.
+
 ## What it does
 
 - Scans for the adapter by name, connects over BLE, sets it up
