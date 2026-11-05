@@ -664,15 +664,18 @@ static char statusMsg[24];
 static uint16_t statusColor = 0;
 static volatile uint32_t statusVer = 0;
 static volatile bool statusActive = false;
+static volatile bool statusHidden = false;   // the user touched the status screen: show the normal pages until the link is up
+static uint32_t statusSince = 0;             // when this wait began (the status went from off to on)
 
 void showStatus(const char *msg, uint16_t color) {
   portENTER_CRITICAL(&statusMux);
   strncpy(statusMsg, msg, sizeof(statusMsg) - 1); statusMsg[sizeof(statusMsg) - 1] = 0;
+  if (!statusActive) statusSince = millis();
   statusColor = color; statusVer = statusVer + 1; statusActive = true;
   portEXIT_CRITICAL(&statusMux);
   Serial.println(msg);
 }
-void clearStatus() { if (!statusActive) return; statusActive = false; forceDraw = true; }   // no-op when nothing is shown (no needless redraws)
+void clearStatus() { statusHidden = false; if (!statusActive) return; statusActive = false; forceDraw = true; }   // no-op when nothing is shown (no needless redraws)
 
 // Scanning / Connecting / Not found / Link lost: an animated page (src/round_ui.h statusPage). Called every UI frame while a status is shown;
 // full = the status text changed or the page was just entered (redraw everything), otherwise only the animation is redrawn and sent.
@@ -688,7 +691,9 @@ static void drawStatusScreen(uint32_t now, bool full) {
   if (kind == 4) { size_t n = 0; for (; msg[n] && n < sizeof(title) - 1; n++) title[n] = (msg[n] >= 'a' && msg[n] <= 'z') ? msg[n] - 32 : msg[n]; while (n && title[n - 1] == '.') n--; title[n] = 0; }
   if (!rui::begin()) { Serial.println("round UI buffers failed"); return; }
   uint16_t *fb = fullCanvas->getFramebuffer();
-  rui::statusPage(fb, kind, col, kind == 4 ? title : titles[kind], kind == 4 ? "" : subs[kind], now, full);
+  int waitSec = -1;                                                           // custom messages show no waiting time
+  if (kind != 4) { waitSec = (int)((now - statusSince) / 1000); if (waitSec < 0) waitSec = 0; }
+  rui::statusPage(fb, kind, col, kind == 4 ? title : titles[kind], kind == 4 ? "" : subs[kind], now, full, waitSec);
   if (full) { gfx->flush(); rui::flushDirty([](int, int, int) {}); }        // whole page: one push, then forget the marks
   else rui::flushDirty([&](int x, int y, int w) { rgbDisp->draw16bitRGBBitmap(x, y, fb + y * LCD_W + x, w, 1); });
 }
@@ -861,6 +866,7 @@ static void pollTouch() {
   } else if (release && btnDown) {
     btnDown = false;
     if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = -1; codeClearProg = 0; return; }      // this touch only woke the screen
+    if (statusActive && !statusHidden && !demo) { statusHidden = true; forceDraw = true; tripChip = codeBtn = -1; return; }   // a touch on the status screen skips it
     if (tripChip >= 0 || codeBtn >= 0) {
       int tc = tripChip, cb = codeBtn; tripChip = codeBtn = -1; codeClearProg = 0;
       if (tc >= 0 && rui::tripChipAt(lx, ly) == tc && (tc == 0 || tc <= tripChipsAvailable())) tripSel = tc;   // lifted on the same chip
@@ -1297,7 +1303,7 @@ void uiTick() {
   // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
   static bool statusShown = false; static uint32_t shownStatusVer = 0;
   bool introOn = MOCHI_INTRO && character.introActive() && page == PAGE_FACE;
-  if (statusActive && !introOn && !demo) {
+  if (statusActive && !introOn && !demo && !statusHidden) {
     drawStatusScreen(now, !statusShown || statusVer != shownStatusVer); shownStatusVer = statusVer; statusShown = true;   // animated: redrawn every frame
     drawnPage = -1;
     lastMood = (int)m;
@@ -1386,11 +1392,19 @@ static void runGearSniff() {
 #endif
 
 // ---------- Connection ----------
+// Throws the BLE client away so the next attempt starts clean (a half-broken client object can keep failing for ever).
+static void dropClient() {
+  rxChar = txChar = nullptr;
+  if (client) { if (client->isConnected()) client->disconnect(); NimBLEDevice::deleteClient(client); client = nullptr; }
+}
+static bool lastCmdTimedOut() { return dbg[(dbgHead + 4) % 5].timeout; }   // the newest entry of the Debug page's command log
+
 bool connectAdapter() {
   int tmpBytes[2];
   showStatus("Scanning...", 0x07FF);
   NimBLEScan *scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
+  scan->clearResults();
   NimBLEScanResults results = scan->getResults(SCAN_TIME_MS, false);
   const NimBLEAdvertisedDevice *found = nullptr;
   for (int i = 0; i < results.getCount(); i++) {
@@ -1403,17 +1417,23 @@ bool connectAdapter() {
 
   showStatus("Connecting...", YELLOW);
   if (!client) client = NimBLEDevice::createClient();
-  if (!client->connect(found)) { Serial.println("connect failed"); return false; }
+  client->setConnectTimeout(10000);                       // never wait longer than 10 s for the adapter to accept the link
+  if (!client->connect(found)) { Serial.println("connect failed"); dropClient(); return false; }
 
   NimBLERemoteService *svc = client->getService(NimBLEUUID(SERVICE_UUID_STR));
-  if (!svc) { Serial.println("service not found"); client->disconnect(); return false; }
+  if (!svc) { Serial.println("service not found"); dropClient(); return false; }
   rxChar = svc->getCharacteristic(NimBLEUUID(RX_UUID_STR));
   txChar = svc->getCharacteristic(NimBLEUUID(TX_UUID_STR));
-  if (!rxChar || !txChar) { Serial.println("characteristics not found"); client->disconnect(); return false; }
+  if (!rxChar || !txChar) { Serial.println("characteristics not found"); dropClient(); return false; }
   rxChar->subscribe(true, onNotify);
 
   const char *init[] = {"ATZ", "ATE0", "ATL0", "ATH0", "ATS0", "ATSP0"};
-  for (auto c : init) sendCmd(c, INIT_TIMEOUT_MS);
+  int silent = 0;
+  for (auto c : init) {
+    sendCmd(c, INIT_TIMEOUT_MS);
+    if (lastCmdTimedOut()) { if (++silent >= 2) { Serial.println("adapter does not answer the setup commands: starting over"); dropClient(); return false; } }   // two in a row: not worth waiting out the rest
+    else silent = 0;
+  }
   discoverPids(sendCmd("0100", 8000));        // finds the car's protocol (can take seconds), then reads which values it supports
 #if GEAR_SNIFF_TEST
   runGearSniff();                             // one-off test, see the comment at the top of that section
@@ -1480,6 +1500,7 @@ void loop() {
   if (!client || !client->isConnected()) {
     if (linked) {
       linked = false;
+      statusHidden = false;                                  // a lost link is worth showing again
       showStatus("Link lost", RED);
       // Wait out the reconnect delay without freezing the button (long press -> demo).
       uint32_t t0 = millis();

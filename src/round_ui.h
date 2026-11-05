@@ -736,9 +736,12 @@ inline void brightnessPage(uint16_t *fb, int pct, int dotN, int dotCur, bool ful
 // accent is the colour the caller asked for. The animation area is redrawn every frame; the title, subtitle and the three-step
 // row are drawn when full is true (page entered or text changed). Marks what it touched (see flushDirty).
 constexpr int ST_AX = CX, ST_AY = 186, ST_R = 66;
-inline void statusPage(uint16_t *fb, int kind, uint16_t accent, const char *title, const char *sub, uint32_t now, bool full) {
+// waitSec: how long this wait has lasted (-1 = do not show). After 15 s the line also says the screen can be tapped to skip it.
+inline void statusPage(uint16_t *fb, int kind, uint16_t accent, const char *title, const char *sub, uint32_t now, bool full, int waitSec = -1) {
   State &S = st(); if (!S.ok) return;
+  static int shownSec = -2;
   if (full) {
+    shownSec = -2;
     for (int i = 0; i < W * H; i++) fb[i] = BG;
     ringAA(fb, CX, CY, 235.5f, 238.5f, BEZEL);
     textC(fb, F_TTL, title, CX, 274, WHITE);
@@ -756,6 +759,12 @@ inline void statusPage(uint16_t *fb, int kind, uint16_t accent, const char *titl
     }
     S.page = -1;                                   // the dial pages must rebuild their static layer next time
     mark(S, 0, 0, W - 1, H - 1);
+  }
+  if (waitSec != shownSec) {                       // the waiting time, redrawn once a second
+    shownSec = waitSec;
+    for (int y = 318; y <= 334; y++) for (int x = CX - 130; x <= CX + 130; x++) fb[y * W + x] = BG;
+    if (waitSec >= 0) { char t[40]; if (waitSec >= 15) snprintf(t, sizeof(t), "%d S   TAP TO SKIP", waitSec); else snprintf(t, sizeof(t), "%d S", waitSec); textC(fb, F_SML, t, CX, 320, FAINT); }
+    mark(S, CX - 130, 318, CX + 130, 334);
   }
   const int AX = ST_AX, AY = ST_AY;
   for (int y = AY - ST_R; y <= AY + ST_R; y++) for (int x = AX - ST_R; x <= AX + ST_R; x++) fb[y * W + x] = BG;

@@ -66,7 +66,7 @@
 #define SWIPE_NEXT_ON_RIGHT 0  // 1 = swipe right goes to the next page, 0 = swipe left goes to the next page (like a phone)
 // One-off test at first connect: listens ~45 s for the Mazda gear selector CAN message (ID 0x01F) and reports on the Debug page and Serial. Set 0 when done.
 #define FACE_TIMING_LOG    0   // 1 = print the Face page / welcome frame rate on the UART port (the one with the USB-serial chip) every 2 s
-#define GEAR_SNIFF_TEST    1
+#define GEAR_SNIFF_TEST    0
 #define GEAR_SNIFF_SEC     45
 #define RPM_REDLINE        6500   // shift lights and the red zone of the sweep
 

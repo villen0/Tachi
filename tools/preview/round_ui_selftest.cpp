@@ -53,6 +53,25 @@ int main() {
     }
     bad += stale + diff;
   }
+  // status screens (scanning, connecting, not found, link lost): the animation and the waiting-time line are drawn incrementally; the result must equal a full redraw
+  for (int kind = 0; kind <= 4; kind++) {
+    std::vector<uint16_t> fb(rui::W * rui::H, 0), panel(rui::W * rui::H, 0), ref(rui::W * rui::H, 0);
+    rui::State &S = rui::st(); S.page = -1;
+    uint32_t now = 1000; int sec = kind == 4 ? -1 : 0;
+    rui::statusPage(fb.data(), kind, rui::CYAN, "TITLE", "SUBTITLE", now, true, sec);
+    rui::flushDirty([&](int x, int y, int w) { for (int k = 0; k < w; k++) panel[y * rui::W + x + k] = fb[y * rui::W + x + k]; });
+    for (int i = 0; i < 300; i++) {
+      now += 33; if (kind != 4 && i % 30 == 29) sec++;                       // the second counter ticks every ~1 s, going past the 15 s "tap to skip" text
+      if (i == 150 && kind != 4) sec = 14;
+      rui::statusPage(fb.data(), kind, rui::CYAN, "TITLE", "SUBTITLE", now, false, sec);
+      rui::flushDirty([&](int x, int y, int w) { for (int k = 0; k < w; k++) panel[y * rui::W + x + k] = fb[y * rui::W + x + k]; });
+    }
+    int stale = 0; for (size_t i = 0; i < fb.size(); i++) if (fb[i] != panel[i]) stale++;
+    rui::statusPage(ref.data(), kind, rui::CYAN, "TITLE", "SUBTITLE", now, true, sec);
+    int diff = 0; for (size_t i = 0; i < fb.size(); i++) if (fb[i] != ref[i]) diff++;
+    printf("status %d: stale-on-panel %d px, differs-from-full-redraw %d px\n", kind, stale, diff);
+    bad += stale + diff;
+  }
   puts(bad ? "FAIL" : "PASS");
   return bad ? 1 : 0;
 }
