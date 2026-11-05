@@ -22,7 +22,7 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_CODES, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_CODES, PG_SETTINGS, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -140,7 +140,7 @@ inline void text(uint16_t *b, const Font &f, const char *s, int x, int y, uint16
 inline void textC(uint16_t *b, const Font &f, const char *s, int cx, int y, uint16_t col) { text(b, f, s, cx - textW(f, s) / 2, y, col); }
 
 // ---- data the pages show ------------------------------------------------------------------------------------------
-enum Icon : uint8_t { IC_NONE = 0, IC_THERM, IC_AIR, IC_BATT, IC_FUEL, IC_LOAD, IC_BOOST, IC_THROTTLE, IC_ENGINE };
+enum Icon : uint8_t { IC_NONE = 0, IC_THERM, IC_AIR, IC_BATT, IC_FUEL, IC_LOAD, IC_BOOST, IC_THROTTLE, IC_ENGINE, IC_SUN, IC_BUG };
 struct Readout {                 // one value on the multi-value pages (custom, quad, dual)
   bool have = false; uint8_t icon = IC_NONE; char label[14] = ""; char text[12] = "--"; char unit[8] = ""; uint16_t col = 0xFFFF; float frac = 0;
 };
@@ -163,8 +163,11 @@ struct CodesView {
   char status[40] = ""; uint16_t statusCol = 0xFFFF;
   float clearProg = 0;                   // 0..1 while the CLEAR button is being held
 };
+// Settings hub: one tappable row per section (icon, label, current value).
+struct SettingsRow { char label[16] = ""; char value[16] = ""; uint8_t icon = 0; };
+struct SettingsView { int n = 0; SettingsRow row[5]; };
 struct Data {
-  TripView trip; CodesView codes;
+  TripView trip; CodesView codes; SettingsView settings;
   int ver = 0;                           // must change whenever any STATIC content changes (trip title/labels/chips/live, code rows/tags/mil/answered/total) so the page is rebuilt;
                                          // live numbers (tile values, footers, status, clear progress) are redrawn every frame without it
   // multi-value pages (filled by the caller): the arc gauge, up to four readouts, the page heading and the estimated gear
@@ -321,6 +324,15 @@ inline int tripChipAt(int x, int y) {
   for (int k = 0; k < 6; k++) { int x0 = tripChipX(k); if (x >= x0 - 4 && x <= x0 + tripChipW(k) + 4) return k; }
   return -1;
 }
+// Settings hub rows and the BACK chip of the sub-screens (brightness, debug)
+constexpr int ST_ROW_X0 = 90, ST_ROW_W = 300, ST_ROW_Y0 = 104, ST_ROW_H = 52, ST_ROW_GAP = 8;
+inline int settingsRowAt(int x, int y) {                                      // which row (0..4) is under the finger, or -1
+  if (x < ST_ROW_X0 - 6 || x > ST_ROW_X0 + ST_ROW_W + 6) return -1;
+  for (int i = 0; i < 5; i++) { int y0 = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * i; if (y >= y0 - 3 && y <= y0 + ST_ROW_H + 3) return i; }
+  return -1;
+}
+constexpr int BACK_W = 84, BACK_H = 24, BACK_Y = 432, BACK_X = CX - BACK_W / 2;
+inline int backAt(int x, int y) { return (x >= BACK_X - 12 && x <= BACK_X + BACK_W + 12 && y >= BACK_Y - 12 && y <= BACK_Y + BACK_H + 14) ? 1 : -1; }
 constexpr int CD_BTN_Y = 366, CD_BTN_H = 42, CD_BTN_W = 110;                  // the preset chips' height on the brightness page
 inline int cdBtnX(int k) { return k == 0 ? CX - 120 : CX + 10; }              // 0 = READ, 1 = CLEAR (hold)
 inline int codesButtonAt(int x, int y) {
@@ -357,6 +369,16 @@ inline void iconDraw(uint16_t *b, int type, float x, float y, uint16_t c) {
       discAA(b, x, y, 2.4f, c); break;
     case IC_THROTTLE:
       taper(b, x - 5, y + 10, x + 5, y - 9, 4.2f, 3.2f, c); taper(b, x - 9, y + 11, x + 3, y + 11, 1.2f, 1.2f, c); break;
+    case IC_SUN:
+      discAA(b, x, y, 5.5f, c);
+      for (int k = 0; k < 8; k++) { float a = k * 0.785398f; taper(b, x + 8.5f * sinf(a), y - 8.5f * cosf(a), x + 11.5f * sinf(a), y - 11.5f * cosf(a), 1.2f, 1.2f, c); }
+      break;
+    case IC_BUG:
+      discAA(b, x, y + 2, 5.5f, c); discAA(b, x, y - 6, 3.2f, c);
+      for (int sd = -1; sd <= 1; sd += 2) {
+        taper(b, x + sd * 5, y - 1, x + sd * 10, y - 4, 1.1f, 1.1f, c); taper(b, x + sd * 5, y + 2, x + sd * 11, y + 2, 1.1f, 1.1f, c); taper(b, x + sd * 5, y + 5, x + sd * 10, y + 9, 1.1f, 1.1f, c);
+      }
+      break;
     case IC_ENGINE:
       taper(b, x - 8, y - 3, x + 8, y - 3, 1.3f, 1.3f, c); taper(b, x - 8, y + 9, x + 8, y + 9, 1.3f, 1.3f, c);
       taper(b, x - 8, y - 3, x - 8, y + 9, 1.3f, 1.3f, c); taper(b, x + 8, y - 3, x + 8, y + 9, 1.3f, 1.3f, c);
@@ -444,6 +466,15 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     chip(b, cdBtnX(0), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, CYAN, "READ");
     chip(b, cdBtnX(1), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, RED, "CLEAR");
     taper(b, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 8, cdBtnX(1) + CD_BTN_W - 6, CD_BTN_Y + CD_BTN_H + 8, 3, 3, PANEL);
+  } else if (pg == PG_SETTINGS) {
+    textC(b, F_LBL, "SETTINGS", CX, 74, CYAN);
+    for (int i = 0; i < d.settings.n && i < 5; i++) {
+      const SettingsRow &R = d.settings.row[i]; int y = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * i;
+      pill(b, CX, y, ST_ROW_W, ST_ROW_H, "");
+      iconDraw(b, R.icon, ST_ROW_X0 + 26, y + ST_ROW_H / 2, CYAN);
+      text(b, F_LBL, R.label, ST_ROW_X0 + 46, y + (ST_ROW_H - F_LBL.h) / 2, WHITE);
+      if (R.value[0]) text(b, F_SML, R.value, ST_ROW_X0 + ST_ROW_W - 14 - textW(F_SML, R.value), y + (ST_ROW_H - F_SML.h) / 2, DIM);
+    }
   } else {   // PG_GEAR: the ladder 1..6, the current gear drawn large, the speed below
     textC(b, F_LBL, "GEAR", CX, 92, DIM);
     for (int g = 0; g < 6; g++) { snprintf(t, sizeof(t), "%d", g + 1); textC(b, F_MED, t, CX + (int)((g - 2.5f) * 48), 120, FAINT); }
@@ -583,6 +614,8 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     const CodesView &C = d.codes;
     num(S, fb, 0, F_SML, C.status, CX, 340, 0, C.statusCol);
     barFill(S, fb, 0, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 5, CD_BTN_W - 12, 6, C.clearProg, RED);
+  } else if (pg == PG_SETTINGS) {
+    // static page: everything is in the background layer
   } else {   // PG_GEAR
     char g[2] = {d.gear, 0}; const bool known = d.gear >= '1' && d.gear <= '6';
     num(S, fb, 0, F_HUGE, g, CX, 178, 0, known ? WHITE : DIM);
@@ -670,6 +703,11 @@ inline void chip(uint16_t *b, int x, int y, int w, int h, bool on, uint16_t col,
     if (!on) blendPx(b, x + i, y + j, PANEL_EDGE, (int)(clamp01(0.5f - fabsf(d + 1.0f)) * 255));
   }
   textC(b, F_LBL, label, x + w / 2, y + (h - F_LBL.h) / 2, on ? BG : DIM);
+}
+// The BACK button of the Settings sub-screens (brightness, debug). Marks what it touched.
+inline void backChip(uint16_t *fb) {
+  chip(fb, BACK_X, BACK_Y, BACK_W, BACK_H, false, CYAN, "BACK");
+  mark(st(), BACK_X - 2, BACK_Y - 2, BACK_X + BACK_W + 2, BACK_Y + BACK_H + 2);
 }
 // full = draw the whole page; otherwise only the part that changes with the level. Marks what it touched (see flushDirty).
 inline void brightnessPage(uint16_t *fb, int pct, int dotN, int dotCur, bool full) {

@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   if (!rui::begin()) { puts("alloc failed"); return 1; }
   std::vector<uint16_t> fb(rui::W * rui::H, 0);
-  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "trip", "codes"};
+  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "trip", "codes", "settings"};
   struct Case { float rpm, mph; const char *tag; } cases[] = {{3763, 63, "mid"}, {6900, 112, "red"}, {0, 0, "idle"}};
   for (int pg = 0; pg < rui::PG_COUNT; pg++) for (auto &c : cases) {
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;           // restart each picture from scratch
@@ -36,6 +36,7 @@ int main(int argc, char **argv) {
     for (int k = 0; k < 4; k++) { strcpy(d.rd[k].label, lab[k]); strcpy(d.rd[k].unit, unit[k]); strcpy(d.rd[k].text, txt[k]); d.rd[k].icon = k == 0 ? rui::IC_THERM : k == 1 ? rui::IC_AIR : k == 2 ? rui::IC_BATT : rui::IC_LOAD; d.rd[k].have = true; d.rd[k].frac = fr[k]; d.rd[k].col = k == 1 ? rui::ORANGE : rui::WHITE; }
     if (pg == rui::PG_DUAL) { strcpy(d.rd[1].label, "OIL TEMP"); d.rd[1].icon = rui::IC_BOOST; }
     d.gear = c.rpm > 6000 ? '5' : (c.rpm > 0 ? '3' : 'N');
+    { d.settings.n = 2; strcpy(d.settings.row[0].label, "BRIGHTNESS"); strcpy(d.settings.row[0].value, "85 %"); d.settings.row[0].icon = rui::IC_SUN; strcpy(d.settings.row[1].label, "DEBUG"); strcpy(d.settings.row[1].value, "cluster2"); d.settings.row[1].icon = rui::IC_BUG; }
     { rui::TripView &T = d.trip; T.have = c.rpm > 0; T.live = false; T.rating = c.rpm > 6000 ? 58 : 91; T.grade = c.rpm > 6000 ? 'F' : 'A'; T.sel = 1; T.nSaved = 3;
       const char *tl[6] = {"TOP MPH", "MAX RPM", "MAX F", "PEAK PSI", "VOLTS", "CODES"}; const char *tv[6] = {"74", "4850", "203", "-2.4", "13.1-14.2", c.rpm > 6000 ? "2" : "0"};
       for (int k = 0; k < 6; k++) { strcpy(T.t[k].label, tl[k]); strcpy(T.t[k].value, tv[k]); T.t[k].col = (k == 5 && c.rpm > 6000) ? rui::RED : rui::WHITE; }

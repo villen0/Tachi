@@ -33,6 +33,7 @@ int main() {
         for (int k = 0; k < C.nRows; k++) { snprintf(C.row[k].code, sizeof(C.row[k].code), "P0%d%d1", 3 + k % 2, k); snprintf(C.row[k].desc, sizeof(C.row[k].desc), k == 2 ? "" : "Misfire cylinder %d", k + 1); strcpy(C.row[k].tag, k == 0 ? "NEW" : "STORED"); C.row[k].col = k == 0 ? rui::ORANGE : rui::WHITE; }
         snprintf(C.status, sizeof(C.status), (i % 2) ? "HOLD 3 SECONDS TO CLEAR" : "READING..."); C.statusCol = rui::DIM; C.clearProg = (i % 30) / 30.0f; }
       d.ver += (i / 60) * 100 + (d.codes.answered ? 1000 : 0) + (d.trip.live ? 2000 : 0);   // every static field must be reflected in ver
+      { rui::SettingsView &V = d.settings; V.n = 2 + (i / 90) % 4; for (int k = 0; k < V.n; k++) { snprintf(V.row[k].label, sizeof(V.row[k].label), "ROW %d", k); snprintf(V.row[k].value, sizeof(V.row[k].value), "%d %%", (i / 45 + k) % 100); V.row[k].icon = (uint8_t)(rui::IC_SUN + (k & 1)); } d.ver += V.n * 100000 + (i / 45) * 7; }
       float ph = i * 0.07f;
       d.rpm = 800 + 3000 * (0.5f + 0.5f * sinf(ph)) + (i % 97 == 0 ? 3200 : 0); d.mph = 45 * (0.5f + 0.5f * sinf(ph * 0.6f));
       d.coolC = 80 + (i / 8) % 40; d.coolShown = (int)(d.coolC * 1.8f + 32); d.fuelPct = 100 - (i / 5) % 100; d.battV = 11.0f + (i % 50) * 0.08f; d.loadPct = (i * 3) % 100;

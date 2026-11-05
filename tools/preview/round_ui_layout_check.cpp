@@ -3,7 +3,7 @@
 //   - text that overlaps other text, pills / chips / buttons that overlap each other,
 //   - text wider than the pill, chip or button it sits in (6 px padding), text crossing a container edge,
 //   - fonts outside the page's type scale (the new pages use only label, small, title and medium text).
-// The pages in TARGET_PAGES must pass (exit code 1 otherwise); the other pages are only listed for information.
+// The Drive report, Fault codes and Settings pages must pass (exit code 1 otherwise); the other pages are only listed for information.
 // Build: g++ -std=c++17 -O2 -I../../src round_ui_layout_check.cpp -o round_ui_layout_check && ./round_ui_layout_check
 #define RUI_LAYOUT_CHECK
 #include <cstdio>
@@ -90,6 +90,25 @@ int main() {
   }
   printf("codes pages checked (all row counts, states and status lines)\n");
 
+  // ---- Settings hub: five rows with the longest plausible values, and the BACK chip shared by the sub-screens ----
+  {
+    rui::Data d; d.dotN = 13; d.dotCur = 12;
+    const char *lab[5] = {"BRIGHTNESS", "UNITS", "WARNINGS", "THEME", "DEBUG"}, *val[5] = {"100 %", "KMH C BAR", "4 CHANGED", "SPORT RED", "cluster2"};
+    d.settings.n = 5;
+    for (int i = 0; i < 5; i++) { snprintf(d.settings.row[i].label, sizeof(d.settings.row[i].label), "%s", lab[i]); snprintf(d.settings.row[i].value, sizeof(d.settings.row[i].value), "%s", val[i]); d.settings.row[i].icon = (uint8_t)(rui::IC_SUN + (i & 1)); }
+    rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+    rui::frame(fb.data(), rui::PG_SETTINGS, d, 1000, true);
+    int bad = check("settings-hub", rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
+    printf("%-14s %3d records, %d problems\n", "settings-hub", (int)rui::layoutLog().size(), bad);
+    rui::layoutLog().clear(); rui::backChip(fb.data());
+    bad = check("back-chip", rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
+    printf("%-14s %3d records, %d problems\n", "back-chip", (int)rui::layoutLog().size(), bad);
+    // the hub rows, the BACK chip and the brightness presets must not touch each other's touch zones
+    for (int i = 0; i < 5; i++) { int y = rui::ST_ROW_Y0 + (rui::ST_ROW_H + rui::ST_ROW_GAP) * i + rui::ST_ROW_H / 2; if (rui::settingsRowAt(rui::CX, y) != i) { printf("  settings row %d hit test fails\n", i); totalBad++; } }
+    if (rui::backAt(rui::CX, rui::BACK_Y + rui::BACK_H / 2) != 1 || rui::backAt(rui::CX, rui::BR_PRESET_Y1 - 4) == 1) { puts("  BACK hit zone overlaps the brightness presets or misses the chip"); totalBad++; }
+    if (rui::BR_PRESET_Y1 + 6 > rui::BACK_Y - 4) { puts("  brightness presets too close to the BACK chip"); totalBad++; }
+  }
+
   // ---- the other pages, for information only (not part of the clean-up scope) ----
   puts("\nother pages (information only):");
   Page others[] = {{rui::PG_SPORT, "sport"}, {rui::PG_TACH, "tach"}, {rui::PG_SPEEDO, "speedo"}, {rui::PG_VITALS, "vitals"}, {rui::PG_ARC, "arc"}, {rui::PG_CUSTOM, "custom"}, {rui::PG_QUAD, "quad"}, {rui::PG_DUAL, "dual"}, {rui::PG_GEAR, "gear"}};
@@ -105,6 +124,6 @@ int main() {
     printf("%-8s %3d records, %d problems\n", o.name, (int)rui::layoutLog().size(), bad);
   }
 
-  printf("\n%s (%d problems on the Drive report and Fault codes pages)\n", totalBad ? "FAIL" : "PASS", totalBad);
+  printf("\n%s (%d problems on the Drive report, Fault codes and Settings pages)\n", totalBad ? "FAIL" : "PASS", totalBad);
   return totalBad ? 1 : 0;
 }

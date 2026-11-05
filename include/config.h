@@ -39,7 +39,6 @@
 // Pages (swipe left / right, or tap, to change page). Set 0 to hide.
 #define SHOW_PAGE_CLUSTER  1   // sport cluster: RPM ring, big speed, coolant / fuel / battery chips
 #define SHOW_PAGE_DIALS    1   // analog tachometer, analog speedometer and the vitals rings
-#define SHOW_PAGE_BRIGHTNESS 1 // the brightness slider page (the level is saved across restarts)
 #define SHOW_PAGE_STYLES   1   // arc (boost), custom, quad, dual and gear pages (the two boost pages appear only if the car answers MAP)
 #define SHOW_PAGE_TRIP     1   // drive report: live trip, report after the engine stops, last 5 trips kept in flash
 #define SHOW_PAGE_CODES    1   // fault codes: read them, clear them with a 3 second hold (engine off only)
