@@ -15,6 +15,7 @@ static void run(mochi::Mochi &m, uint32_t &t, uint32_t ms) { uint32_t end = t + 
 
 int main(int argc, char **argv) {
   std::string out = argc > 1 ? argv[1] : "out";
+  if (argc > 4) mochi::setAccent(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), false);   // optional: preview with a theme accent (r g b)
   system(("mkdir -p " + out).c_str());
   MockGfx g(mochi::W, mochi::H);
   // 1. every expression, settled for 1.4 s (animated overlays are captured mid-animation)

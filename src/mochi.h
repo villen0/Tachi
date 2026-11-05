@@ -69,6 +69,14 @@ static_assert(sizeof(Pose) % sizeof(float) == 0, "Pose must be all floats");
 
 struct ExprDef { Pose pose; EyeStyle style; Mouth mouth; Overlay ovl; bool blinks; };
 
+// Eye colour of the plain faces (eye body r,g,b then glow r,g,b). The theme sets it with setAccent(); faces with their own colour
+// (angry, crying, love, sleepy...) keep it. Defaults are the original Tachi blue.
+inline float lookCol[6] = {205, 235, 255, 50, 130, 255};
+inline void setAccent(int r, int g, int b, bool original) {
+  if (original) { const float o[6] = {205, 235, 255, 50, 130, 255}; for (int i = 0; i < 6; i++) lookCol[i] = o[i]; return; }
+  lookCol[0] = r * 0.2f + 255 * 0.8f; lookCol[1] = g * 0.2f + 255 * 0.8f; lookCol[2] = b * 0.2f + 255 * 0.8f;   // eye body: the accent washed towards white
+  lookCol[3] = r * 0.85f; lookCol[4] = g * 0.85f; lookCol[5] = b * 0.85f;                                          // glow: the accent itself
+}
 inline Eye baseEye() { return Eye{34, 54, 14, 0, 0, 0, 0, 0, 0}; }
 inline Pose basePose() {
   Pose p;
@@ -76,8 +84,8 @@ inline Pose basePose() {
   p.gap = 66; p.ox = 0; p.oy = 0;
   p.mouthW = 16; p.mouthC = 5; p.mouthY = 22; p.mouthOpen = 0;
   p.ovl = 0; p.glow = 1;
-  p.cr = 205; p.cg = 235; p.cb = 255;
-  p.gr = 50; p.gg = 130; p.gb = 255;
+  p.cr = lookCol[0]; p.cg = lookCol[1]; p.cb = lookCol[2];
+  p.gr = lookCol[3]; p.gg = lookCol[4]; p.gb = lookCol[5];
   return p;
 }
 inline void setColor(Pose &p, float r, float g, float b, float gr, float gg, float gb) { p.cr = r; p.cg = g; p.cb = b; p.gr = gr; p.gg = gg; p.gb = gb; }

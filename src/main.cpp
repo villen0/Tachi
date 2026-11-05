@@ -83,6 +83,10 @@ static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP 
 
 // The user's settings (units, warning levels, theme): loaded in setup(), changed on the Settings pages, saved by the main loop (cfgSaveReq).
 static settings::Settings cfg;
+static void applyLook() {                            // the theme's accent colours the plain Tachi faces too
+  rui::applyTheme(cfg.theme, cfg.mode);
+  mochi::setAccent(rui::LOOK.accent.r, rui::LOOK.accent.g, rui::LOOK.accent.b, cfg.theme == 0 && cfg.mode == 0);
+}
 static volatile uint32_t cfgGen = 1;                 // bumped on every change so the trip tracker and the event detector pick up new levels
 static volatile bool cfgSaveReq = false;
 // The car reports deg C. Mood thresholds stay in deg C; only what is shown/logged is converted.
@@ -483,7 +487,7 @@ static void loadSettings() {                         // setup(): the saved setti
   settings::Settings c;
   if (pr.getBytes("cfg", &c, sizeof(c)) == sizeof(c) && settings::valid(c)) cfg = c;
   pr.end();
-  rui::applyTheme(cfg.theme, cfg.mode);
+  applyLook();
   tracker.setConfig(tripConfig());
 }
 static void persistTick() {                          // main loop
@@ -862,7 +866,7 @@ static int optKind(int sub) { return sub == SUB_WARN ? 1 : 0; }                 
 static void optApply(int sub, int row, int part) {
   if (sub == SUB_UNITS) { if (row == 0) cfg.speedKmh ^= 1; else if (row == 1) cfg.tempC ^= 1; else cfg.pressBar ^= 1; }
   else if (sub == SUB_WARN) settings::warnAdjust(cfg, row, part == 2 ? 1 : -1);
-  else if (sub == SUB_THEME) { if (row == 0) cfg.theme = (cfg.theme + 1) % settings::THEMES; else cfg.mode = (cfg.mode + 1) % settings::MODES; rui::applyTheme(cfg.theme, cfg.mode); }
+  else if (sub == SUB_THEME) { if (row == 0) cfg.theme = (cfg.theme + 1) % settings::THEMES; else cfg.mode = (cfg.mode + 1) % settings::MODES; applyLook(); }
   cfgGen = cfgGen + 1; cfgSaveReq = true; forceDraw = true;
 }
 static bool inBrightness() { return page == PAGE_SETTINGS && settingsSub == 1; }
