@@ -93,17 +93,17 @@ inline ExprDef def(Expr e) {
     case E_LOOK_R:  p.ox = 18; p.oy = -2; p.mouthC = 4; break;
     case E_LOOK_DOWN: p.oy = 16; both(p, &Eye::h, 36); both(p, &Eye::lidTop, 0.1f); p.mouthC = 2; p.mouthY = 16; break;
     case E_RASPBERRY: d.style = ES_CHEVRON; d.mouth = M_TONGUE; p.mouthW = 20; p.mouthY = 24; break;
-    case E_LOVE:    d.style = ES_HEART; d.mouth = M_OPEN; d.ovl = O_BLUSH; setColor(p, 255, 95, 150, 255, 40, 110); p.mouthW = 14; p.mouthOpen = 0.5f; p.mouthY = 26; break;
+    case E_LOVE:    both(p, &Eye::w, 40); both(p, &Eye::h, 40); d.style = ES_HEART; d.mouth = M_OPEN; d.ovl = O_BLUSH; setColor(p, 255, 95, 150, 255, 40, 110); p.mouthW = 14; p.mouthOpen = 0.5f; p.mouthY = 34; break;
     case E_ANGRY:   p.L.slantIn = p.R.slantIn = 22; both(p, &Eye::h, 50); d.mouth = M_FROWN; p.mouthC = -7; p.mouthY = 26; d.ovl = O_ANGRY_MARK; setColor(p, 255, 110, 90, 255, 50, 30); break;
     case E_CRYING:  p.L.slantOut = p.R.slantOut = 16; both(p, &Eye::lidTop, 0.10f); both(p, &Eye::h, 58); d.mouth = M_FROWN; p.mouthC = -5; p.mouthW = 16; p.mouthY = 28; d.ovl = O_TEARS; setColor(p, 150, 228, 255, 40, 120, 255); break;
     case E_STARS:   both(p, &Eye::w, 32); both(p, &Eye::h, 58); d.ovl = O_STARS; p.mouthC = 7; break;
     case E_SMIRK:   p.L.lidTop = 0.36f; p.L.slantIn = 9; p.R.h = 50; p.mouthC = 3; p.ox = 5; p.mouthW = 16; break;
     case E_SLEEPY:  both(p, &Eye::lidTop, 0.92f); d.mouth = M_O; p.mouthW = 10; p.mouthY = 22; d.ovl = O_ZZZ; setColor(p, 160, 195, 235, 40, 80, 170); d.blinks = false; break;
     case E_SNEEZE:  d.style = ES_CHEVRON; d.mouth = M_OPEN; p.mouthW = 16; p.mouthOpen = 0.8f; p.mouthY = 26; d.ovl = O_DROPLET; break;
-    case E_LAUGH:   d.style = ES_ARC_UP; d.mouth = M_OPEN; p.mouthW = 24; p.mouthOpen = 1.0f; p.mouthY = 24; d.blinks = false; break;
+    case E_LAUGH:   both(p, &Eye::w, 44); both(p, &Eye::h, 56); d.style = ES_ARC_UP; d.mouth = M_OPEN; p.mouthW = 24; p.mouthOpen = 0.8f; p.mouthY = 36; d.blinks = false; break;
     case E_SQUINT:  both(p, &Eye::lidTop, 0.32f); both(p, &Eye::lidBot, 0.32f); p.mouthC = 4; break;
     case E_DISTRACTED: both(p, &Eye::w, 31); both(p, &Eye::h, 46); p.mouthC = 0; p.mouthW = 12; p.mouthY = 20; break;
-    case E_UWU:     d.style = ES_U; d.mouth = M_CAT; p.mouthW = 20; p.mouthY = 22; d.blinks = false; d.ovl = O_BLUSH; break;
+    case E_UWU:     both(p, &Eye::w, 42); both(p, &Eye::h, 56); d.style = ES_U; d.mouth = M_CAT; p.mouthW = 20; p.mouthY = 34; d.blinks = false; d.ovl = O_BLUSH; break;
     case E_COOKIE:  both(p, &Eye::w, 31); both(p, &Eye::h, 44); d.mouth = M_CHOMP; p.mouthW = 16; p.mouthY = 24; p.ox = -4; break;
     case E_TURBO:   d.style = ES_TURBINE; both(p, &Eye::w, 46); both(p, &Eye::h, 46); p.gap = 70; d.mouth = M_FLAT; p.mouthW = 16; p.mouthC = 0; p.mouthY = 38; d.blinks = false; break;
     case E_HEADLIGHTS: d.style = ES_BEAM; p.gap = 80; d.mouth = M_SMILE; p.mouthY = 38; p.mouthW = 14; d.blinks = false; break;
@@ -293,6 +293,13 @@ class Mochi {
     float dx = x1 - x0, dy = y1 - y0; int n = (int)(sqrtf(dx * dx + dy * dy)) + 1;
     for (int i = 0; i <= n; i++) g->fillCircle((int16_t)(x0 + dx * i / n), (int16_t)(y0 + dy * i / n), r, col);
   }
+  // a path with the same soft halo the rounded eyes have: halo passes over the whole path first, then the solid core
+  template <class G> static void glowPath(G *g, const Pose &p, const float *xy, int n, int r) {
+    float gl = p.glow;
+    const int ex[3] = {7, 4, 2}; const float lv[3] = {0.10f, 0.25f, 0.55f};
+    if (gl > 0.02f) for (int k = 0; k < 3; k++) for (int i = 1; i < n; i++) dots(g, xy[2 * i - 2], xy[2 * i - 1], xy[2 * i], xy[2 * i + 1], r + ex[k], glowc(p, lv[k] * gl));
+    for (int i = 1; i < n; i++) dots(g, xy[2 * i - 2], xy[2 * i - 1], xy[2 * i], xy[2 * i + 1], r, scaled(p, 1.0f));
+  }
   template <class G> static void heart(G *g, float cx, float cy, float s, uint16_t col) {
     g->fillCircle((int16_t)(cx - s * 0.5f), (int16_t)(cy - s * 0.28f), (int16_t)(s * 0.52f), col);
     g->fillCircle((int16_t)(cx + s * 0.5f), (int16_t)(cy - s * 0.28f), (int16_t)(s * 0.52f), col);
@@ -319,28 +326,18 @@ class Mochi {
     float s = isLeft ? 1.0f : -1.0f;   // direction of the inner side
     switch (style) {
       case ES_NONE: return;
-      case ES_ARC_UP: {   // ^ ^ happy eyes
-        uint16_t col = scaled(p, 1.0f);
-        float hw = e.w * 0.5f, a = e.h * 0.30f;
-        float px = cx - hw, py = cy;
-        for (int i = 1; i <= 16; i++) {
-          float t = -1 + 2.0f * i / 16;
-          float x = cx + t * hw, y = cy - a * (1 - t * t) + a * 0.3f;
-          dots(g, px, py, x, y, 3, col); px = x; py = y;
-        }
+      case ES_ARC_UP: {   // ^ ^ happy eyes: a thick glowing arch
+        float hw = e.w * 0.5f, a = e.h * 0.34f, xy[2 * 17];
+        for (int i = 0; i <= 16; i++) { float t = -1 + 2.0f * i / 16; xy[2 * i] = cx + t * hw; xy[2 * i + 1] = cy - a * (1 - t * t) + a * 0.3f; }
+        glowPath(g, p, xy, 17, 4);
         return;
       }
-      case ES_U: {        // U shaped eyes
-        uint16_t col = scaled(p, 1.0f);
-        float hw = e.w * 0.38f, top = cy - e.h * 0.22f, bot = cy + e.h * 0.12f;
-        dots(g, cx - hw, top, cx - hw, bot - 6, 3, col);
-        dots(g, cx + hw, top, cx + hw, bot - 6, 3, col);
-        float px = cx - hw, py = bot - 6;
-        for (int i = 1; i <= 12; i++) {
-          float th = 3.14159f * i / 12;
-          float x = cx - hw * cosf(th), y = bot - 6 + 6 * sinf(th) + (hw * 0.55f) * sinf(th);
-          dots(g, px, py, x, y, 3, col); px = x; py = y;
-        }
+      case ES_U: {        // U shaped eyes: thick glowing "u" (a content, closed-eye smile)
+        float hw = e.w * 0.36f, top = cy - e.h * 0.20f, bot = cy + e.h * 0.14f - hw * 0.6f, xy[2 * 15];
+        xy[0] = cx - hw; xy[1] = top;
+        for (int i = 0; i <= 12; i++) { float th = 3.14159f * i / 12; xy[2 * (i + 1)] = cx - hw * cosf(th); xy[2 * (i + 1) + 1] = bot + hw * 0.9f * sinf(th); }
+        xy[28] = cx + hw; xy[29] = top;
+        glowPath(g, p, xy, 15, 4);
         return;
       }
       case ES_CHEVRON: {  // > <
@@ -353,8 +350,10 @@ class Mochi {
       }
       case ES_HEART: {
         float k = 1.0f + 0.10f * sinf(now / 170.0f);
-        heart(g, cx, cy - 2, e.w * 0.56f * k, scaled(p, 1.0f));
-        g->fillCircle((int16_t)(cx - e.w * 0.34f), (int16_t)(cy - e.w * 0.34f), 3, rgb(255, 235, 240));   // shine
+        float hs = e.w * 0.56f * k;
+        if (p.glow > 0.02f) { heart(g, cx, cy - 2, hs + 9, glowc(p, 0.10f * p.glow)); heart(g, cx, cy - 2, hs + 5, glowc(p, 0.25f * p.glow)); heart(g, cx, cy - 2, hs + 2, glowc(p, 0.55f * p.glow)); }
+        heart(g, cx, cy - 2, hs, scaled(p, 1.0f));
+        g->fillCircle((int16_t)(cx - e.w * 0.30f), (int16_t)(cy - e.w * 0.30f), 4, rgb(255, 235, 240));   // shine
         return;
       }
       case ES_TURBINE: {
