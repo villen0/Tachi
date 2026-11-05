@@ -133,7 +133,8 @@ static bool pageVisible(int p) {
   if (p == PAGE_DIAL_TACH || p == PAGE_DIAL_SPEEDO || p == PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_CUSTOM) return SHOW_PAGE_CUSTOM && SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p == PAGE_ARC) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
-  if (p >= PAGE_QUAD && p <= PAGE_GEAR) return SHOW_PAGE_STYLES && !dialFailed;
+  if (p == PAGE_GEAR) return SHOW_PAGE_GEAR && SHOW_PAGE_STYLES && !dialFailed;
+  if (p >= PAGE_QUAD && p <= PAGE_DUAL) return SHOW_PAGE_STYLES && !dialFailed;
   if (p == PAGE_TRIP || p == PAGE_HISTORY) return SHOW_PAGE_TRIP && !dialFailed;
   if (p == PAGE_CODES) return SHOW_PAGE_CODES && !dialFailed;
   if (p == PAGE_SETTINGS) return !dialFailed;
