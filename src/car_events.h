@@ -43,6 +43,7 @@ struct Input {
 class Detector {
  public:
   explicit Detector(const Config &c = Config()) : cfg(c) {}
+  void setConfig(const Config &c) { cfg = c; }   // new warning levels (Settings)
 
   // Call often (every frame is fine). Returns at most one event per call. Priority: hard brake, redline, hard launch,
   // engine start, smooth stop, engine off, engine warm, low battery, low fuel.

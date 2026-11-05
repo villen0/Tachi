@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   if (!rui::begin()) { puts("alloc failed"); return 1; }
   std::vector<uint16_t> fb(rui::W * rui::H, 0);
-  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "trip", "codes", "settings"};
+  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "trip", "codes", "settings", "options"};
   struct Case { float rpm, mph; const char *tag; } cases[] = {{3763, 63, "mid"}, {6900, 112, "red"}, {0, 0, "idle"}};
   for (int pg = 0; pg < rui::PG_COUNT; pg++) for (auto &c : cases) {
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;           // restart each picture from scratch
@@ -45,10 +45,24 @@ int main(int argc, char **argv) {
       const char *cc[4] = {"P0301", "P0420", "P1234", "P0171"}, *cd[4] = {"Misfire cylinder 1", "Catalyst weak B1", "", "Mixture too lean B1"}, *ct[4] = {"NEW", "STORED", "PENDING", "STORED"};
       for (int k = 0; k < 4; k++) { strcpy(C.row[k].code, cc[k]); strcpy(C.row[k].desc, cd[k]); strcpy(C.row[k].tag, ct[k]); C.row[k].col = k == 0 ? rui::ORANGE : (k == 2 ? rui::YELLOW : rui::WHITE); }
       strcpy(C.status, c.rpm > 6000 ? "CLEARING... KEEP HOLDING" : "HOLD 3 SECONDS TO CLEAR"); C.statusCol = rui::DIM; C.clearProg = c.rpm > 6000 ? 0.6f : 0; }
+    { rui::OptionsView &O = d.opts; O = rui::OptionsView(); strcpy(O.title, "WARNINGS"); O.n = 5; O.swatch = false;
+      const char *ol[5] = {"COOL WARM", "COOL HOT", "BATT LOW", "FUEL LOW", "REDLINE"}, *ov[5] = {"212 F", "226 F", "12.0 V", "15 %", "6500"};
+      for (int k = 0; k < 5; k++) { strcpy(O.row[k].label, ol[k]); strcpy(O.row[k].value, ov[k]); O.row[k].kind = 1; } }
     rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100);
     d.rpm = c.rpm; rui::frame(fb.data(), pg, d, 2000);
     save(fb, dir + "/" + names[pg] + "_" + c.tag + ".ppm");
   }
   puts("done");
+    // themes (sport, speedo in km/h, vitals) and the theme chooser
+  for (int t = 0; t < theme::THEMES; t++) for (int pg : {rui::PG_SPORT, rui::PG_SPEEDO, rui::PG_VITALS, rui::PG_OPTIONS}) {
+    rui::applyTheme(t, 0);
+    rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+    rui::Data d; d.theme = rui::themeGen; d.rpm = 5200; d.mph = 71; d.kmh = pg == rui::PG_SPEEDO; d.haveCool = d.haveFuel = d.haveBatt = d.haveLoad = true;
+    d.coolC = 92; d.coolShown = 198; d.fuelPct = 64; d.battV = 14.0f; d.loadPct = 68; d.dotN = 7; d.dotCur = 2;
+    { rui::OptionsView &O = d.opts; strcpy(O.title, "THEME"); O.n = 2; O.swatch = true; strcpy(O.row[0].label, "LOOK"); strcpy(O.row[0].value, theme::look(t).name); strcpy(O.row[1].label, "COLOUR"); strcpy(O.row[1].value, "THEME"); }
+    rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100);
+    save(fb, dir + "/theme" + std::to_string(t) + "_" + names[pg] + ".ppm");
+  }
+  rui::applyTheme(0, 0);
   return 0;
 }

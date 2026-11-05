@@ -74,6 +74,7 @@ class Tracker {
  public:
   enum Event : uint8_t { T_NONE, T_STARTED, T_ENDED, T_DISCARDED };
   explicit Tracker(const Config &c = Config()) : cfg(c) {}
+  void setConfig(const Config &c) { cfg = c; }   // new warning levels (Settings)
 
   // Call about once a second. Returns T_STARTED / T_ENDED (a finished trip is waiting in takeFinished()) / T_DISCARDED.
   Event update(const Sample &s) {

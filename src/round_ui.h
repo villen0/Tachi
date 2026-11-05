@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "round_font.h"
+#include "theme.h"
 #ifdef RUI_LAYOUT_CHECK
 #include <vector>
 #endif
@@ -22,15 +23,18 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_CODES, PG_SETTINGS, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
   return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
-const uint16_t BG = rgb(5, 7, 12), BEZEL = rgb(30, 37, 54), WHITE = rgb(240, 244, 255), DIM = rgb(118, 130, 160), FAINT = rgb(50, 58, 80),
-               PANEL = rgb(22, 30, 50), PANEL_EDGE = rgb(52, 66, 98), CYAN = rgb(0, 200, 255), MINT = rgb(110, 240, 190),
+const uint16_t BG = rgb(5, 7, 12), WHITE = rgb(240, 244, 255), DIM = rgb(118, 130, 160), FAINT = rgb(50, 58, 80),
                YELLOW = rgb(255, 208, 50), ORANGE = rgb(255, 120, 40), RED = rgb(255, 60, 56), GREEN = rgb(80, 230, 110);
+// themed colours: set by applyTheme() (theme.h); every page reads these, so a changed theme only needs a rebuild (themeGen)
+inline uint16_t BEZEL = rgb(30, 37, 54), PANEL = rgb(22, 30, 50), PANEL_EDGE = rgb(52, 66, 98), CYAN = rgb(0, 200, 255), MINT = rgb(110, 240, 190);
+inline theme::Look LOOK = theme::look(0);
+inline int themeGen = 0;               // counts applyTheme() calls that changed something
 
 inline uint16_t mix(uint16_t bg, uint16_t fg, int a) {   // a = 0..255 coverage of fg over bg
   int br = bg >> 11, bgc = (bg >> 5) & 63, bb = bg & 31, fr = fg >> 11, fgc = (fg >> 5) & 63, fb = fg & 31;
@@ -39,6 +43,16 @@ inline uint16_t mix(uint16_t bg, uint16_t fg, int a) {   // a = 0..255 coverage 
 inline uint16_t lerpc(int r0, int g0, int b0, int r1, int g1, int b1, float t) {
   t = t < 0 ? 0 : (t > 1 ? 1 : t);
   return rgb((int)(r0 + (r1 - r0) * t), (int)(g0 + (g1 - g0) * t), (int)(b0 + (b1 - b0) * t));
+}
+inline uint16_t lerpRGB(theme::RGB a, theme::RGB b, float t) { return lerpc(a.r, a.g, a.b, b.r, b.g, b.b, t); }
+inline uint16_t stopC(int i) { return rgb(LOOK.k[i].r, LOOK.k[i].g, LOOK.k[i].b); }
+inline void applyTheme(int t, int m) {
+  theme::Look l = theme::make(t, m);
+  if (memcmp(&l.k, &LOOK.k, sizeof(l.k)) == 0 && memcmp(&l.accent, &LOOK.accent, 3) == 0 && memcmp(&l.bezel, &LOOK.bezel, 3) == 0 && memcmp(&l.cold, &LOOK.cold, 9) == 0) return;
+  LOOK = l;
+  BEZEL = rgb(l.bezel.r, l.bezel.g, l.bezel.b); PANEL = rgb(l.panel.r, l.panel.g, l.panel.b); PANEL_EDGE = rgb(l.panelEdge.r, l.panelEdge.g, l.panelEdge.b);
+  CYAN = rgb(l.accent.r, l.accent.g, l.accent.b); MINT = stopC(1);
+  themeGen++;
 }
 inline uint16_t dimmed(uint16_t c) {   // the unlit version of a segment colour
   return rgb((((c >> 11) << 3) * 40 >> 8) + 6, ((((c >> 5) & 63) << 2) * 40 >> 8) + 8, (((c & 31) << 3) * 40 >> 8) + 12);
@@ -166,8 +180,11 @@ struct CodesView {
 // Settings hub: one tappable row per section (icon, label, current value).
 struct SettingsRow { char label[16] = ""; char value[16] = ""; uint8_t icon = 0; };
 struct SettingsView { int n = 0; SettingsRow row[5]; };
+// Options screen (units, warnings, theme): rows with a label and either a value you tap to change (kind 0) or a - value + stepper (kind 1).
+struct OptRow { char label[16] = ""; char value[16] = ""; uint8_t kind = 0; };
+struct OptionsView { char title[16] = ""; int n = 0; OptRow row[5]; bool swatch = false; };   // swatch: show the gradient of the chosen look under the rows
 struct Data {
-  TripView trip; CodesView codes; SettingsView settings;
+  TripView trip; CodesView codes; SettingsView settings; OptionsView opts;
   int ver = 0;                           // must change whenever any STATIC content changes (trip title/labels/chips/live, code rows/tags/mil/answered/total) so the page is rebuilt;
                                          // live numbers (tile values, footers, status, clear progress) are redrawn every frame without it
   // multi-value pages (filled by the caller): the arc gauge, up to four readouts, the page heading and the estimated gear
@@ -181,7 +198,8 @@ struct Data {
   float battV = 0;
   int redline = 6500, hotC = 100, worryC = 108, fuelLowPct = 15;
   float battCritV = 11.5f, battLowV = 12.4f;
-  bool unitF = true;
+  bool unitF = true, kmh = false;   // display units: coolant in F / C; speed in mph / km/h (values stay mph, converted here)
+  int theme = 0;                 // themeGen: the page is rebuilt when the colours change
   int dotN = 1, dotCur = 0;      // page dots: how many pages, which one is shown
 };
 
@@ -195,7 +213,7 @@ struct SBox { int16_t x0, y0, x1, y1; };
 struct State {
   bool ok = false; uint16_t *bg = nullptr; uint32_t *map = nullptr; int nmap = 0;
   Ring ring[MAX_RINGS]; int nring = 0;
-  int page = -1, dotN = -1, dotCur = -1; bool unitF = true; int redline = 0;
+  int page = -1, dotN = -1, dotCur = -1; bool unitF = true, kmh = false; int redline = 0, theme = -1;
   float rpm = 0, mph = 0; uint32_t lastT = 0;
   Slot slot[10];
   Box needle = {0, 0, -1, -1}; float needleAng = 1e9f; bool forceRings = true;
@@ -297,9 +315,9 @@ inline void pill(uint16_t *b, int cx, int y, int w, int h, const char *label) {
 inline uint16_t rpmColor(float v, int redline) {
   if (v >= redline) return RED;
   float f = v / redline;
-  if (f < 0.55f) return lerpc(0, 190, 255, 110, 240, 190, f / 0.55f);
-  if (f < 0.85f) return lerpc(110, 240, 190, 255, 208, 50, (f - 0.55f) / 0.30f);
-  return lerpc(255, 208, 50, 255, 110, 40, (f - 0.85f) / 0.15f);
+  if (f < 0.55f) return lerpRGB(LOOK.k[0], LOOK.k[1], f / 0.55f);
+  if (f < 0.85f) return lerpRGB(LOOK.k[1], LOOK.k[2], (f - 0.55f) / 0.30f);
+  return lerpRGB(LOOK.k[2], LOOK.k[3], (f - 0.85f) / 0.15f);
 }
 inline int rpmMax(int redline) { int m = ((redline + 1999) / 1000) * 1000; return m > 10000 ? 10000 : m; }   // first whole thousand at least 1000 above the redline
 
@@ -329,6 +347,14 @@ constexpr int ST_ROW_X0 = 90, ST_ROW_W = 300, ST_ROW_Y0 = 104, ST_ROW_H = 52, ST
 inline int settingsRowAt(int x, int y) {                                      // which row (0..4) is under the finger, or -1
   if (x < ST_ROW_X0 - 6 || x > ST_ROW_X0 + ST_ROW_W + 6) return -1;
   for (int i = 0; i < 5; i++) { int y0 = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * i; if (y >= y0 - 3 && y <= y0 + ST_ROW_H + 3) return i; }
+  return -1;
+}
+constexpr int OPT_BTN_W = 34, OPT_BTN_H = 28, OPT_PLUS_X = ST_ROW_X0 + ST_ROW_W - 10 - OPT_BTN_W, OPT_MINUS_X = OPT_PLUS_X - 104;   // - / + chips of a stepper row
+// 0 = tap on the row (kind 0), 1 = minus, 2 = plus, -1 = a stepper row's label / value (does nothing)
+inline int optionPart(int kind, int x) {
+  if (kind == 0) return 0;
+  if (x >= OPT_PLUS_X - 8) return 2;
+  if (x >= OPT_MINUS_X - 8 && x <= OPT_MINUS_X + OPT_BTN_W + 8) return 1;
   return -1;
 }
 constexpr int BACK_W = 84, BACK_H = 24, BACK_Y = 432, BACK_X = CX - BACK_W / 2;
@@ -415,9 +441,9 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     setRingColors(S.ring[0], [](float f, const void *p) {
       const A *a = (const A *)p;
       if (f >= a->red) return RED;
-      if (a->zero > 0 && f < a->zero) return lerpc(60, 120, 255, 0, 200, 255, f / a->zero);
+      if (a->zero > 0 && f < a->zero) return lerpRGB(LOOK.cold, LOOK.k[0], f / a->zero);
       float lo = a->zero > 0 ? a->zero : 0, u = (f - lo) / (a->red - lo > 0.01f ? a->red - lo : 0.01f);
-      return u < 0.5f ? lerpc(0, 200, 255, 110, 240, 190, u / 0.5f) : lerpc(110, 240, 190, 255, 208, 50, (u - 0.5f) / 0.5f); }, &a);
+      return u < 0.5f ? lerpRGB(LOOK.k[0], LOOK.k[1], u / 0.5f) : lerpRGB(LOOK.k[1], LOOK.k[2], (u - 0.5f) / 0.5f); }, &a);
   } else if (pg == PG_QUAD) {
     if (d.title[0]) textC(b, F_LBL, d.title, CX, 64, CYAN);
     taper(b, CX, 118, CX, 384, 0.7f, 0.7f, FAINT); taper(b, 84, CY + 2, 396, CY + 2, 0.7f, 0.7f, FAINT);
@@ -475,10 +501,30 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       text(b, F_LBL, R.label, ST_ROW_X0 + 46, y + (ST_ROW_H - F_LBL.h) / 2, WHITE);
       if (R.value[0]) text(b, F_SML, R.value, ST_ROW_X0 + ST_ROW_W - 14 - textW(F_SML, R.value), y + (ST_ROW_H - F_SML.h) / 2, DIM);
     }
+  } else if (pg == PG_OPTIONS) {
+    const OptionsView &O = d.opts;
+    textC(b, F_LBL, O.title, CX, 74, CYAN);
+    for (int i = 0; i < O.n && i < 5; i++) {
+      const OptRow &R = O.row[i]; int y = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * i;
+      pill(b, CX, y, ST_ROW_W, ST_ROW_H, "");
+      text(b, F_SML, R.label, ST_ROW_X0 + 16, y + (ST_ROW_H - F_SML.h) / 2, WHITE);
+      if (R.kind == 0) text(b, F_LBL, R.value, ST_ROW_X0 + ST_ROW_W - 16 - textW(F_LBL, R.value), y + (ST_ROW_H - F_LBL.h) / 2, CYAN);
+      else {
+        const int cy0 = y + (ST_ROW_H - OPT_BTN_H) / 2;
+        chip(b, OPT_MINUS_X, cy0, OPT_BTN_W, OPT_BTN_H, false, CYAN, "-");
+        chip(b, OPT_PLUS_X, cy0, OPT_BTN_W, OPT_BTN_H, false, CYAN, "+");
+        textC(b, F_SML, R.value, (OPT_MINUS_X + OPT_BTN_W + OPT_PLUS_X) / 2, y + (ST_ROW_H - F_SML.h) / 2, WHITE);
+      }
+    }
+    if (O.swatch) {                                  // the gradient of the chosen look (rev ring order: cool, mid, warm, hot)
+      const int x0 = ST_ROW_X0 + 10, x1 = ST_ROW_X0 + ST_ROW_W - 10, y0 = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * O.n + 8;
+      for (int x = x0; x < x1; x++) { uint16_t c = rpmColor((float)(x - x0) / (x1 - x0) * 7000.0f, 6500); for (int y = y0; y < y0 + 14; y++) b[y * W + x] = c; }
+    }
+    chip(b, BACK_X, BACK_Y, BACK_W, BACK_H, false, CYAN, "BACK");
   } else {   // PG_GEAR: the ladder 1..6, the current gear drawn large, the speed below
     textC(b, F_LBL, "GEAR", CX, 92, DIM);
     for (int g = 0; g < 6; g++) { snprintf(t, sizeof(t), "%d", g + 1); textC(b, F_MED, t, CX + (int)((g - 2.5f) * 48), 120, FAINT); }
-    textC(b, F_LBL, "MPH", CX, 352, DIM);
+    textC(b, F_LBL, d.kmh ? "KMH" : "MPH", CX, 352, DIM);
   }
 }
 
@@ -494,21 +540,21 @@ inline void buildPage(State &S, int pg, const Data &d) {
     buildRing(S, 0, CX, CY, 214, 226, 90, 0.9f); S.nring = 1;
     for (int v = 0; v <= mx; v += 500) tick(b, (float)v, (float)mx, v % 1000 ? 197.0f : 191.0f, 207, v % 1000 ? 0.9f : 1.5f, v % 1000 ? FAINT : DIM);
     textC(b, F_LBL, "RPM", CX, 102, DIM);
-    textC(b, F_LBL, "MPH", CX, 258, DIM);
+    textC(b, F_LBL, d.kmh ? "KMH" : "MPH", CX, 258, DIM);
     const int PW = 88, PY = 298, PH = 58;
     pill(b, CX - 94, PY, PW, PH, "COOL"); pill(b, CX, PY, PW, PH, "FUEL"); pill(b, CX + 94, PY, PW, PH, "BATT");
     textC(b, F_LBL, "TACHI", CX, 390, FAINT);
   } else if (pg == PG_TACH || pg == PG_SPEEDO) {
-    bool tach = pg == PG_TACH; float vmax = tach ? (float)mx : 160.0f;
+    bool tach = pg == PG_TACH; float vmax = tach ? (float)mx : (d.kmh ? 280.0f : 160.0f);
     buildRing(S, 0, CX, CY, 214, 226, 90, 0.7f); S.nring = 1;
-    float majorStep = tach ? 1000.0f : 20.0f, midStep = tach ? 500.0f : 10.0f, minStep = tach ? 250.0f : 5.0f;
+    float majorStep = tach ? 1000.0f : (d.kmh ? 40.0f : 20.0f), midStep = tach ? 500.0f : (d.kmh ? 20.0f : 10.0f), minStep = tach ? 250.0f : (d.kmh ? 10.0f : 5.0f);
     for (float v = 0; v <= vmax + 0.01f; v += minStep) {
       bool major = fmodf(v, majorStep) < 0.01f, mid = !major && fmodf(v, midStep) < 0.01f;
       tick(b, v, vmax, major ? 190.0f : (mid ? 196.0f : 200.0f), 207, major ? 1.8f : (mid ? 1.2f : 0.8f), major ? WHITE : (mid ? DIM : FAINT));
     }
     for (float v = 0; v <= vmax + 0.01f; v += majorStep) { snprintf(t, sizeof(t), "%d", (int)(tach ? v / 1000 + 0.5f : v + 0.5f)); numeral(b, v, vmax, 148.0f, t, v >= d.redline && tach ? RED : WHITE); }
-    textC(b, F_LBL, tach ? "X1000 RPM" : "MPH", CX, 290, DIM);
-    textC(b, F_LBL, tach ? "MPH" : "RPM", CX, 374, DIM);
+    textC(b, F_LBL, tach ? "X1000 RPM" : (d.kmh ? "KMH" : "MPH"), CX, 290, DIM);
+    textC(b, F_LBL, tach ? (d.kmh ? "KMH" : "MPH") : "RPM", CX, 374, DIM);
   } else if (pg == PG_VITALS) {   // vitals: four ring gauges
     static const int cxs[4] = {CX - 104, CX + 104, CX - 104, CX + 104}, cys[4] = {CY - 98, CY - 98, CY + 98, CY + 98};
     for (int i = 0; i < 4; i++) buildRing(S, i, (float)cxs[i], (float)cys[i], 66, 78, 45, 1.8f);
@@ -518,7 +564,7 @@ inline void buildPage(State &S, int pg, const Data &d) {
   } else {
     buildStyle(S, pg, d);                        // arc, custom, quad, dual, gear
   }
-  pageDots(b, d.dotN, d.dotCur);
+  if (pg != PG_OPTIONS) pageDots(b, d.dotN, d.dotCur);   // the options screens have a BACK chip instead
 
   // ring colours
   if (pg >= PG_ARC) {                            // the multi-value pages set their ring colours in buildStyle
@@ -526,19 +572,19 @@ inline void buildPage(State &S, int pg, const Data &d) {
     struct C { int mx, rl; } c = {mx, d.redline};
     setRingColors(S.ring[0], [](float f, const void *p) { const C *c = (const C *)p; return rpmColor(f * c->mx, c->rl); }, &c);
   } else if (pg == PG_SPEEDO) {
-    setRingColors(S.ring[0], [](float f, const void *) { return f < 0.6f ? lerpc(0, 200, 255, 70, 110, 255, f / 0.6f) : lerpc(70, 110, 255, 200, 70, 255, (f - 0.6f) / 0.4f); }, nullptr);
+    setRingColors(S.ring[0], [](float f, const void *) { return f < 0.6f ? lerpRGB(LOOK.k[0], LOOK.spd1, f / 0.6f) : lerpRGB(LOOK.spd1, LOOK.spd2, (f - 0.6f) / 0.4f); }, nullptr);
   } else {
     struct V { const Data *d; } v = {&d};
     setRingColors(S.ring[0], [](float f, const void *p) {            // coolant 40..130 C
       const Data *d = ((const V *)p)->d; float c = 40 + f * 90;
-      if (c >= d->worryC) return RED; if (c >= d->hotC) return YELLOW; if (c < 65) return lerpc(60, 140, 255, 0, 200, 255, (c - 40) / 25.0f); return lerpc(0, 200, 255, 110, 240, 190, (c - 65) / 30.0f); }, &v);
+      if (c >= d->worryC) return RED; if (c >= d->hotC) return YELLOW; if (c < 65) return lerpRGB(LOOK.cold, LOOK.k[0], (c - 40) / 25.0f); return lerpRGB(LOOK.k[0], LOOK.k[1], (c - 65) / 30.0f); }, &v);
     setRingColors(S.ring[1], [](float f, const void *p) {            // fuel 0..100 %
       const Data *d = ((const V *)p)->d; float pc = f * 100;
-      if (pc < d->fuelLowPct / 2.0f) return RED; if (pc < d->fuelLowPct) return ORANGE; if (pc < 30) return YELLOW; return lerpc(110, 240, 190, 0, 200, 255, (pc - 30) / 70.0f); }, &v);
+      if (pc < d->fuelLowPct / 2.0f) return RED; if (pc < d->fuelLowPct) return ORANGE; if (pc < 30) return YELLOW; return lerpRGB(LOOK.k[1], LOOK.k[0], (pc - 30) / 70.0f); }, &v);
     setRingColors(S.ring[2], [](float f, const void *p) {            // battery 10.5..15.5 V
       const Data *d = ((const V *)p)->d; float v = 10.5f + f * 5.0f;
-      if (v < d->battCritV) return RED; if (v < d->battLowV) return YELLOW; return lerpc(110, 240, 190, 0, 200, 255, (v - d->battLowV) / 3.0f); }, &v);
-    setRingColors(S.ring[3], [](float f, const void *) { return f < 0.7f ? lerpc(0, 200, 255, 255, 208, 50, f / 0.7f) : (f < 0.9f ? lerpc(255, 208, 50, 255, 70, 50, (f - 0.7f) / 0.2f) : RED); }, nullptr);
+      if (v < d->battCritV) return RED; if (v < d->battLowV) return YELLOW; return lerpRGB(LOOK.k[1], LOOK.k[0], (v - d->battLowV) / 3.0f); }, &v);
+    setRingColors(S.ring[3], [](float f, const void *) { return f < 0.7f ? lerpRGB(LOOK.k[0], LOOK.k[2], f / 0.7f) : (f < 0.9f ? lerpRGB(LOOK.k[2], LOOK.k[3], (f - 0.7f) / 0.2f) : RED); }, nullptr);
   }
 }
 
@@ -614,14 +660,14 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     const CodesView &C = d.codes;
     num(S, fb, 0, F_SML, C.status, CX, 340, 0, C.statusCol);
     barFill(S, fb, 0, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 5, CD_BTN_W - 12, 6, C.clearProg, RED);
-  } else if (pg == PG_SETTINGS) {
-    // static page: everything is in the background layer
+  } else if (pg == PG_SETTINGS || pg == PG_OPTIONS) {
+    // static pages: everything is in the background layer
   } else {   // PG_GEAR
     char g[2] = {d.gear, 0}; const bool known = d.gear >= '1' && d.gear <= '6';
     num(S, fb, 0, F_HUGE, g, CX, 178, 0, known ? WHITE : DIM);
     char l[2] = {known ? d.gear : (char)0, 0}; int gi = known ? d.gear - '1' : 2;
     num(S, fb, 1, F_MED, l, CX + (int)((gi - 2.5f) * 48), 120, 0, CYAN);
-    char sp[12]; snprintf(sp, sizeof(sp), "%d", (int)lroundf(S.mph)); num(S, fb, 2, F_NUM, sp, CX, 306, 0, WHITE);
+    char sp[12]; snprintf(sp, sizeof(sp), "%d", (int)lroundf(S.mph * (d.kmh ? 1.609344f : 1.0f))); num(S, fb, 2, F_NUM, sp, CX, 306, 0, WHITE);
   }
 }
 
@@ -630,15 +676,16 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
   State &S = st(); if (!S.ok) return;
   float k = S.lastT ? 1.0f - expf(-(float)(now - S.lastT) / 90.0f) : 1.0f; S.lastT = now;
   S.rpm += (d.rpm - S.rpm) * k; S.mph += (d.mph - S.mph) * k;
-  if (full || pg != S.page || d.dotN != S.dotN || d.dotCur != S.dotCur || d.unitF != S.unitF || d.redline != S.redline || d.ver != S.ver) {
+  if (full || pg != S.page || d.dotN != S.dotN || d.dotCur != S.dotCur || d.unitF != S.unitF || d.kmh != S.kmh || d.theme != S.theme || d.redline != S.redline || d.ver != S.ver) {
     buildPage(S, pg, d);
     memcpy(fb, S.bg, (size_t)W * H * 2);
-    S.page = pg; S.dotN = d.dotN; S.dotCur = d.dotCur; S.unitF = d.unitF; S.redline = d.redline; S.ver = d.ver;
+    S.page = pg; S.dotN = d.dotN; S.dotCur = d.dotCur; S.unitF = d.unitF; S.kmh = d.kmh; S.theme = d.theme; S.redline = d.redline; S.ver = d.ver;
     for (Slot &s : S.slot) { s.s[0] = '\x01'; s.s[1] = 0; s.col = 0; s.x0 = 0; s.x1 = -1; }
     S.needle = {0, 0, -1, -1}; S.needleAng = 1e9f; S.forceRings = true; S.nr0 = 0; S.nr1 = -1; S.barPx[0] = S.barPx[1] = -1;
     mark(S, 0, 0, W - 1, H - 1);
   }
-  int rpm = (int)lroundf(S.rpm), mph = (int)lroundf(S.mph), mx = rpmMax(d.redline);
+  const float spd = S.mph * (d.kmh ? 1.609344f : 1.0f), spdMax = d.kmh ? 280.0f : 160.0f;
+  int rpm = (int)lroundf(S.rpm), mph = (int)lroundf(spd), mx = rpmMax(d.redline);
   char t[16];
   if (pg == PG_SPORT) {
     ringLevel(S, 0, S.rpm / mx);
@@ -656,8 +703,8 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
     needle(S, fb, angOf(fminf(S.rpm, (float)mx), (float)mx), S.rpm >= d.redline ? RED : ORANGE);
     snprintf(t, sizeof(t), "%d", mph); num(S, fb, 0, F_MED, t, CX, 338, 130, WHITE);
   } else if (pg == PG_SPEEDO) {
-    ringLevel(S, 0, S.mph / 160.0f);
-    needle(S, fb, angOf(fminf(S.mph, 160.0f), 160.0f), CYAN);
+    ringLevel(S, 0, spd / spdMax);
+    needle(S, fb, angOf(fminf(spd, spdMax), spdMax), CYAN);
     snprintf(t, sizeof(t), "%d", rpm); num(S, fb, 0, F_MED, t, CX, 338, 110, WHITE);
   } else if (pg == PG_VITALS) {
     static const int cxs[4] = {CX - 104, CX + 104, CX - 104, CX + 104}, cys[4] = {CY - 98, CY - 98, CY + 98, CY + 98};

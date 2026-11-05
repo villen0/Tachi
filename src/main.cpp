@@ -18,6 +18,8 @@
 #include "trip.h"
 #include "dtc.h"
 #include "report_view.h"
+#include "settings.h"
+#include "theme.h"
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -79,9 +81,13 @@ static bool fresh(uint32_t ts, uint32_t maxAge) { return ts != 0 && millis() - t
 bool oilValid = false;       // oil temp PID (015C) answered at least once; many cars do not support it
 static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP we only retry occasionally
 
+// The user's settings (units, warning levels, theme): loaded in setup(), changed on the Settings pages, saved by the main loop (cfgSaveReq).
+static settings::Settings cfg;
+static volatile uint32_t cfgGen = 1;                 // bumped on every change so the trip tracker and the event detector pick up new levels
+static volatile bool cfgSaveReq = false;
 // The car reports deg C. Mood thresholds stay in deg C; only what is shown/logged is converted.
-static int tempOut(int c) { return TEMP_UNIT_F ? (c * 9 + 2) / 5 + 32 : c; }   // rounded
-static const char *tempUnit() { return TEMP_UNIT_F ? "deg F" : "deg C"; }
+static int tempOut(int c) { return settings::tempShown(c, cfg); }   // rounded
+static const char *tempUnit() { return cfg.tempC ? "deg C" : "deg F"; }
 static bool oilUnsupported() { return !oilValid && oilFails >= 5; }   // no usable oil reply so far (keeps retrying)
 static char oilReply[40] = "(not asked yet)";                          // last raw reply to the oil request, for the Debug page
 static uint32_t lastOilTry = 0;
@@ -443,7 +449,7 @@ static const uint16_t UI_WHITE = rui::rgb(240, 244, 255), UI_YELLOW = rui::rgb(2
 // ---------- Drive report and fault codes: state shared between the tasks, and the main task's adapter work ----------
 // The UI task draws and tracks the trip; only the main task talks to the adapter (the UI sets codeReq, the main loop does the work).
 static trip::Config tripConfig() {
-  trip::Config c; c.endMs = TRIP_END_MS; c.minSeconds = TRIP_MIN_S; c.minMiles = TRIP_MIN_MILES; c.uneasyC = TEMP_UNEASY_C; c.worriedC = TEMP_WORRIED_C; c.highRpm = RPM_REDLINE - 1000;
+  trip::Config c; c.endMs = TRIP_END_MS; c.minSeconds = TRIP_MIN_S; c.minMiles = TRIP_MIN_MILES; c.uneasyC = cfg.coolWarnC; c.worriedC = cfg.coolHotC; c.highRpm = cfg.redlineRpm - 1000;
   return c;
 }
 static trip::Tracker tracker(tripConfig());          // UI task only
@@ -471,7 +477,20 @@ static void loadTrips() {                            // setup(): the saved histo
   else if (haveLive) tripSaveReq = true;             // too short: just drop it
   tracker.setNextSeq(tripHist.nextSeq);
 }
+static void loadSettings() {                         // setup(): the saved settings (anything missing or damaged leaves the defaults)
+  Preferences pr; if (!pr.begin("tachi", true)) return;
+  settings::Settings c;
+  if (pr.getBytes("cfg", &c, sizeof(c)) == sizeof(c) && settings::valid(c)) cfg = c;
+  pr.end();
+  rui::applyTheme(cfg.theme, cfg.mode);
+  tracker.setConfig(tripConfig());
+}
 static void persistTick() {                          // main loop
+  if (cfgSaveReq) {
+    cfgSaveReq = false;
+    settings::Settings c = cfg;
+    Preferences pr; if (pr.begin("tachi", false)) { pr.putBytes("cfg", &c, sizeof(c)); pr.end(); Serial.println("saved settings"); }
+  }
   if (tripSaveReq) {
     tripSaveReq = false;
     trip::History h; portENTER_CRITICAL(&tripMux); h = tripHist; portEXIT_CRITICAL(&tripMux);
@@ -571,8 +590,8 @@ static Mood rawMood() {
   if (now - lastValidMs > STALE_AFTER_MS && (everData || now > BOOT_SLEEP_GRACE_MS)) return SLEEPY;   // engine off / no data
   // Coolant only counts when it is a recent, plausible reading (no stale / garbled value can turn the face angry).
   bool coolOk = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30 && coolantC < 150;
-  if (coolOk && coolantC >= TEMP_WORRIED_C) return WORRIED;
-  if (coolOk && coolantC >= TEMP_UNEASY_C) return UNEASY;
+  if (coolOk && coolantC >= cfg.coolHotC) return WORRIED;
+  if (coolOk && coolantC >= cfg.coolWarnC) return UNEASY;
 
   // Excited: high revs (with hysteresis so it doesn't flicker) or hard acceleration.
   // Acceleration is judged only between two consecutive fresh speed samples, so the first reading after
@@ -629,7 +648,7 @@ void sdInit() {
   }
   logFile = SD_MMC.open(name, FILE_WRITE);
   if (!logFile) { Serial.println("SD: cannot create log file"); return; }
-  logFile.println(TEMP_UNIT_F ? "ms,rpm,mph,coolant_f,oil_f,batt_v,intake_f,ambient_f,fuel_pct,throttle_pct,load_pct"
+  logFile.println((!cfg.tempC) ? "ms,rpm,mph,coolant_f,oil_f,batt_v,intake_f,ambient_f,fuel_pct,throttle_pct,load_pct"
                               : "ms,rpm,mph,coolant_c,oil_c,batt_v,intake_c,ambient_c,fuel_pct,throttle_pct,load_pct");
   logFile.flush();
   sdOk = true;
@@ -762,9 +781,9 @@ void drawDebugPage() {
     if (useF) snprintf(cards[k].val, sizeof(cards[k].val), fmt, f); else snprintf(cards[k].val, sizeof(cards[k].val), fmt, v);
   };
   setCard(0, "RPM", cText, "%d", rpm, 0, false);
-  setCard(1, "MPH", cText, "%d", mph, 0, false);
-  setCard(2, TEMP_UNIT_F ? "COOL F" : "COOL C", cText, "%d", tempOut(coolantC), 0, false);
-  if (oilValid) setCard(3, TEMP_UNIT_F ? "OIL F" : "OIL C", cText, "%d", tempOut(oilC), 0, false); else { cards[3].label = "OIL"; cards[3].col = cDim; strcpy(cards[3].val, "--"); }
+  setCard(1, cfg.speedKmh ? "KMH" : "MPH", cText, "%d", (int)lroundf(settings::speedShown((float)mph, cfg)), 0, false);
+  setCard(2, (!cfg.tempC) ? "COOL F" : "COOL C", cText, "%d", tempOut(coolantC), 0, false);
+  if (oilValid) setCard(3, (!cfg.tempC) ? "OIL F" : "OIL C", cText, "%d", tempOut(oilC), 0, false); else { cards[3].label = "OIL"; cards[3].col = cDim; strcpy(cards[3].val, "--"); }
   if (gOk[G_BATT]) setCard(4, "BATT V", cText, "%.1f", 0, gVal[G_BATT], true); else { cards[4].label = "BATT V"; cards[4].col = cDim; strcpy(cards[4].val, "--"); }
   setCard(5, "FPS", cText, "%d", (int)faceFps, 0, false);
   for (int k = 0; k < 6; k++) {
@@ -832,8 +851,19 @@ void IRAM_ATTR onButtonEdge() {
 
 // UI-side state of the two report pages
 // Settings page: the hub, or one of its sub-screens (UI task only). Leaving the page always returns to the hub.
-static int settingsSub = 0;                          // 0 = hub, 1 = brightness, 2 = debug
-static const int SETTINGS_ROWS = 2;                  // rows of the hub: brightness, debug (more come later)
+enum { SUB_HUB, SUB_BRIGHT, SUB_DEBUG, SUB_UNITS, SUB_WARN, SUB_THEME };
+static int settingsSub = SUB_HUB;                    // which Settings screen is showing
+static const int SETTINGS_ROWS = 5;                  // rows of the hub
+static const int ROW_SUB[SETTINGS_ROWS] = {SUB_BRIGHT, SUB_UNITS, SUB_WARN, SUB_THEME, SUB_DEBUG};
+static int optCount(int sub) { return sub == SUB_UNITS ? 3 : sub == SUB_WARN ? settings::W_COUNT : sub == SUB_THEME ? 2 : 0; }   // rows of the options screens
+static int optKind(int sub) { return sub == SUB_WARN ? 1 : 0; }                                  // 1 = - value + stepper, 0 = tap to change
+// A tap on an options row: change the setting, apply it, ask the main loop to save it.
+static void optApply(int sub, int row, int part) {
+  if (sub == SUB_UNITS) { if (row == 0) cfg.speedKmh ^= 1; else if (row == 1) cfg.tempC ^= 1; else cfg.pressBar ^= 1; }
+  else if (sub == SUB_WARN) settings::warnAdjust(cfg, row, part == 2 ? 1 : -1);
+  else if (sub == SUB_THEME) { if (row == 0) cfg.theme = (cfg.theme + 1) % settings::THEMES; else cfg.mode = (cfg.mode + 1) % settings::MODES; rui::applyTheme(cfg.theme, cfg.mode); }
+  cfgGen = cfgGen + 1; cfgSaveReq = true; forceDraw = true;
+}
 static bool inBrightness() { return page == PAGE_SETTINGS && settingsSub == 1; }
 static int tripSel = 0;                              // drive report chip: 0 = this / the last trip, 1.. = earlier trips
 static float codeClearProg = 0;                      // 0..1 while CLEAR is being held
@@ -848,7 +878,7 @@ static void pollTouch() {
   static bool slider = false;               // the finger went down on the brightness slider: it drags the slider, nothing else
   static bool preset = false;               // ... or on one of the preset chips: it jumps to that level
   static int tripChip = -1, codeBtn = -1;   // drive report chip / fault codes button the finger went down on (-1 none)
-  static int setRow = -1; static bool backBtn = false;   // Settings hub row / BACK chip the finger went down on
+  static int setRow = -1, optRow = -1, optPart = 0; static bool backBtn = false;   // Settings hub row / options row (and its - / + part) / BACK chip the finger went down on
   static uint32_t holdStart = 0; static bool clearFired = false;
   uint32_t ms = millis();
   if (ms - lastPoll < 15) return;
@@ -861,10 +891,13 @@ static void pollTouch() {
     lastTouchMs = ms;
     if (!btnDown) { swallowTouch = !screenLit; btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (inBrightness() && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); preset = (inBrightness() && rui::presetAt(x, y) >= 0);
       tripChip = (!swallowTouch && page == PAGE_TRIP) ? rui::tripChipAt(x, y) : -1; codeBtn = (!swallowTouch && page == PAGE_CODES) ? rui::codesButtonAt(x, y) : -1;   // a touch that only wakes the screen never presses a button
-      setRow = (!swallowTouch && page == PAGE_SETTINGS && settingsSub == 0) ? rui::settingsRowAt(x, y) : -1;
+      setRow = (!swallowTouch && page == PAGE_SETTINGS && settingsSub == SUB_HUB) ? rui::settingsRowAt(x, y) : -1;
+      optRow = (!swallowTouch && page == PAGE_SETTINGS && optCount(settingsSub) > 0) ? rui::settingsRowAt(x, y) : -1;
+      if (optRow >= optCount(settingsSub)) optRow = -1;
+      optPart = optRow >= 0 ? rui::optionPart(optKind(settingsSub), x) : -1; if (optPart < 0) optRow = -1;   // a stepper's label and value are not buttons
       if (setRow >= SETTINGS_ROWS) setRow = -1;                                // the empty part of the hub is an ordinary tap area
       backBtn = (!swallowTouch && page == PAGE_SETTINGS && settingsSub != 0 && rui::backAt(x, y) > 0 && !slider && !preset);
-      if (tripChip >= 0 || codeBtn >= 0 || setRow >= 0 || backBtn) btnLongFired = true;   // a button press: not a page tap, a swipe or the demo long press
+      if (tripChip >= 0 || codeBtn >= 0 || setRow >= 0 || optRow >= 0 || backBtn) btnLongFired = true;   // a button press: not a page tap, a swipe or the demo long press
       holdStart = ms; clearFired = false; }
     lx = x; ly = y;
     if (codeBtn == 1 && !clearFired && !swallowTouch) {                       // CLEAR has to be held (and never from a touch that woke the screen)
@@ -876,13 +909,14 @@ static void pollTouch() {
     else if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
   } else if (release && btnDown) {
     btnDown = false;
-    if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = setRow = -1; backBtn = false; codeClearProg = 0; return; }      // this touch only woke the screen
-    if (statusActive && !statusHidden && !demo) { statusHidden = true; forceDraw = true; tripChip = codeBtn = setRow = -1; backBtn = false; return; }   // a touch on the status screen skips it
-    if (setRow >= 0 || backBtn) {                                                                          // Settings: open a row, or go back to the hub
-      int sr = setRow; bool bk = backBtn; setRow = -1; backBtn = false;
+    if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = setRow = optRow = -1; backBtn = false; codeClearProg = 0; return; }      // this touch only woke the screen
+    if (statusActive && !statusHidden && !demo) { statusHidden = true; forceDraw = true; tripChip = codeBtn = setRow = optRow = -1; backBtn = false; return; }   // a touch on the status screen skips it
+    if (setRow >= 0 || optRow >= 0 || backBtn) {                                                           // Settings: open a row, change an option, or go back to the hub
+      int sr = setRow, orow = optRow, opart = optPart; bool bk = backBtn; setRow = optRow = -1; backBtn = false;
       bool moved = abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX;       // a finger that travelled is a swipe, not a press: handled below
       if (!moved) {
-        if (sr >= 0 && rui::settingsRowAt(lx, ly) == sr) { settingsSub = sr + 1; forceDraw = true; }
+        if (sr >= 0 && rui::settingsRowAt(lx, ly) == sr) { settingsSub = ROW_SUB[sr]; forceDraw = true; }
+        if (orow >= 0 && rui::settingsRowAt(lx, ly) == orow && rui::optionPart(optKind(settingsSub), lx) == opart) optApply(settingsSub, orow, opart);
         if (bk && rui::backAt(lx, ly) > 0) { settingsSub = 0; forceDraw = true; }
         return;
       }
@@ -948,13 +982,16 @@ static mochi::Expr moodExpr(Mood m) {
 // Short face reactions to one-off car events (engine start, hard braking, low battery / fuel). The detector keeps
 // sampling during the welcome / settle period (so its state stays right) but nothing is played until the face is settled.
 static void carEventReact(uint32_t now, bool settling) {
-  static carevents::Detector det([] {
+  auto mkCfg = [] {
     carevents::Config c;
     c.engineOffMs = EVENT_ENGINE_OFF_MS; c.brakeMinMph = EVENT_BRAKE_MIN_MPH; c.brakeDropMph = EVENT_BRAKE_DROP_MPH;
-    c.battCritV = BATT_CRIT_V; c.fuelLowPct = EVENT_FUEL_LOW_PCT;
-    c.redlineRpm = RPM_REDLINE; c.launchMinRpm = EVENT_LAUNCH_MIN_RPM; c.warmC = EVENT_WARM_C;
+    c.battCritV = settings::battCritV(cfg); c.fuelLowPct = cfg.fuelLowPct / 2;
+    c.redlineRpm = cfg.redlineRpm; c.launchMinRpm = EVENT_LAUNCH_MIN_RPM; c.warmC = EVENT_WARM_C;
     return c;
-  }());
+  };
+  static carevents::Detector det(mkCfg());
+  static uint32_t seenGen = cfgGen;
+  if (seenGen != cfgGen) { seenGen = cfgGen; det.setConfig(mkCfg()); }       // levels changed in Settings
   carevents::Input in;
   in.now = now;
   in.rpmFresh = fresh(tsRpm, FAST_FRESH_MS);   in.rpm = rpm;
@@ -1100,12 +1137,12 @@ static void fillReadout(rui::Readout &r, int id) {
   r = rui::Readout();
   r.col = UI_WHITE;
   auto have = [&](int g) { return gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS); };
-  const char *tu = TEMP_UNIT_F ? "F" : "C";
+  const char *tu = (!cfg.tempC) ? "F" : "C";
   switch (id) {
     case RD_COOL:
       r.have = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30; r.icon = rui::IC_THERM; strcpy(r.label, "COOLANT"); strcpy(r.unit, tu);
       snprintf(r.text, sizeof(r.text), "%d", tempOut(coolantC)); r.frac = (coolantC - 40) / 90.0f;
-      r.col = coolantC >= TEMP_WORRIED_C ? UI_RED : (coolantC >= TEMP_UNEASY_C ? UI_YELLOW : UI_WHITE); break;
+      r.col = coolantC >= cfg.coolHotC ? UI_RED : (coolantC >= cfg.coolWarnC ? UI_YELLOW : UI_WHITE); break;
     case RD_INTAKE: case RD_AMBIENT: {
       int g = id == RD_INTAKE ? G_INTAKE : G_AMBIENT;
       r.have = have(g); r.icon = rui::IC_AIR; strcpy(r.label, id == RD_INTAKE ? "INTAKE" : "OUTSIDE"); strcpy(r.unit, tu);
@@ -1114,11 +1151,11 @@ static void fillReadout(rui::Readout &r, int id) {
     case RD_BATT:
       r.have = have(G_BATT); r.icon = rui::IC_BATT; strcpy(r.label, "BATTERY"); strcpy(r.unit, "V");
       snprintf(r.text, sizeof(r.text), "%.1f", gVal[G_BATT]); r.frac = (gVal[G_BATT] - 10.5f) / 5.0f;
-      r.col = gVal[G_BATT] < BATT_CRIT_V ? UI_RED : (gVal[G_BATT] < (rpm > 600 ? BATT_LOW_RUN_V : BATT_LOW_OFF_V) ? UI_YELLOW : UI_WHITE); break;
+      r.col = gVal[G_BATT] < settings::battCritV(cfg) ? UI_RED : (gVal[G_BATT] < (rpm > 600 ? settings::battLowRunV(cfg) : settings::battLowOffV(cfg)) ? UI_YELLOW : UI_WHITE); break;
     case RD_FUEL:
       r.have = have(G_FUEL); r.icon = rui::IC_FUEL; strcpy(r.label, "FUEL"); strcpy(r.unit, "%");
       snprintf(r.text, sizeof(r.text), "%d", (int)lroundf(gVal[G_FUEL])); r.frac = gVal[G_FUEL] / 100.0f;
-      r.col = gVal[G_FUEL] < FUEL_LOW_PCT / 2 ? UI_RED : (gVal[G_FUEL] < FUEL_LOW_PCT ? UI_YELLOW : UI_WHITE); break;
+      r.col = gVal[G_FUEL] < cfg.fuelLowPct / 2 ? UI_RED : (gVal[G_FUEL] < cfg.fuelLowPct ? UI_YELLOW : UI_WHITE); break;
     case RD_LOAD: case RD_THROTTLE: {
       int g = id == RD_LOAD ? G_LOAD : G_THROTTLE;
       r.have = have(g); r.icon = id == RD_LOAD ? rui::IC_LOAD : rui::IC_THROTTLE; strcpy(r.label, id == RD_LOAD ? "LOAD" : "THROTTLE"); strcpy(r.unit, "%");
@@ -1126,11 +1163,8 @@ static void fillReadout(rui::Readout &r, int id) {
     }
     case RD_BOOST: {
       float kpa = 0; r.have = boostValue(&kpa); r.icon = rui::IC_BOOST; strcpy(r.label, "BOOST");
-#if BOOST_UNIT_PSI
-      float v = kpa * 0.145038f; strcpy(r.unit, "PSI"); snprintf(r.text, sizeof(r.text), "%.1f", v); r.frac = (v + 20) / 50.0f;
-#else
-      float v = kpa / 100.0f; strcpy(r.unit, "BAR"); snprintf(r.text, sizeof(r.text), "%.2f", v); r.frac = (v + 1.0f) / 3.0f;
-#endif
+      if (!cfg.pressBar) { float v = kpa * 0.145038f; strcpy(r.unit, "PSI"); snprintf(r.text, sizeof(r.text), "%.1f", v); r.frac = (v + 20) / 50.0f; }
+      else { float v = kpa / 100.0f; strcpy(r.unit, "BAR"); snprintf(r.text, sizeof(r.text), "%.2f", v); r.frac = (v + 1.0f) / 3.0f; }
       break;
     }
     default: break;
@@ -1150,11 +1184,9 @@ static char gearShown() {
 static void fillStyleData(rui::Data &d, int p) {
   if (p == PAGE_ARC || p == PAGE_CUSTOM) {
     float kpa = 0; d.haveArc = boostValue(&kpa);
-#if BOOST_UNIT_PSI
-    float v = kpa * 0.145038f; d.arcMin = -20; d.arcMax = 30; d.arcMajor = 10; d.arcMinor = 2; d.arcRed = 24; d.arcDec = 0; strcpy(d.arcUnit, "PSI"); snprintf(d.arcText, sizeof(d.arcText), "%.1f", v);
-#else
-    float v = kpa / 100.0f; d.arcMin = -1; d.arcMax = 2; d.arcMajor = 0.5f; d.arcMinor = 0.1f; d.arcRed = 1.6f; d.arcDec = 1; strcpy(d.arcUnit, "BAR"); snprintf(d.arcText, sizeof(d.arcText), "%.2f", v);
-#endif
+    float v;
+    if (!cfg.pressBar) { v = kpa * 0.145038f; d.arcMin = -20; d.arcMax = 30; d.arcMajor = 10; d.arcMinor = 2; d.arcRed = 24; d.arcDec = 0; strcpy(d.arcUnit, "PSI"); snprintf(d.arcText, sizeof(d.arcText), "%.1f", v); }
+    else { v = kpa / 100.0f; d.arcMin = -1; d.arcMax = 2; d.arcMajor = 0.5f; d.arcMinor = 0.1f; d.arcRed = 1.6f; d.arcDec = 1; strcpy(d.arcUnit, "BAR"); snprintf(d.arcText, sizeof(d.arcText), "%.2f", v); }
     d.arcVal = v; strcpy(d.arcLabel, "BOOST");
   }
   if (p == PAGE_CUSTOM) { static const int rows[3] = CUSTOM_ROWS; for (int i = 0; i < 3; i++) fillReadout(d.rd[i], rows[i]); }
@@ -1167,6 +1199,7 @@ static void fillStyleData(rui::Data &d, int p) {
 // Feeds the trip tracker once a second (UI task, also while the screen is dark) and reacts to its events.
 static report::CodeList tripBase; static bool haveTripBase = false;       // the codes that were there when the trip started
 static void tripTick(uint32_t now) {
+  { static uint32_t seenGen = cfgGen; if (seenGen != cfgGen) { seenGen = cfgGen; tracker.setConfig(tripConfig()); } }   // levels changed in Settings
   static uint32_t last = 0, lastLive = 0; static bool wasDemo = false;
   if (demo) {                                                                // made-up values must never become a trip
     if (!wasDemo) { uint16_t sq = tracker.nextSeq(); tracker = trip::Tracker(tripConfig()); tracker.setNextSeq(sq); }
@@ -1210,7 +1243,7 @@ static void tripTick(uint32_t now) {
 
 // What the two report pages show. Demo mode shows made-up content and never touches the car.
 static void fillReportData(rui::Data &d, int p) {
-  report::Units u; u.mph = true; u.tempF = TEMP_UNIT_F; u.psi = BOOST_UNIT_PSI;
+  report::Units u; u.mph = !cfg.speedKmh; u.tempF = !cfg.tempC; u.psi = !cfg.pressBar;
   if (p == PAGE_TRIP) {
     static trip::Record demoRec; static bool demoInit = false;
     if (!demoInit) { demoInit = true; demoRec.seq = 12; demoRec.durationS = 1980; demoRec.idleS = 150; demoRec.distCentiMi = 1120; demoRec.topMph = 68; demoRec.avgMph = 34; demoRec.maxRpm = 4300; demoRec.maxCoolC = 96; demoRec.maxIntakeC = 41;
@@ -1244,10 +1277,32 @@ static void fillReportData(rui::Data &d, int p) {
 // The Settings hub: one row per section with its current value.
 static void fillSettingsData(rui::Data &d) {
   rui::SettingsView &v = d.settings; v = rui::SettingsView();
-  v.n = 2;
-  snprintf(v.row[0].label, sizeof(v.row[0].label), "BRIGHTNESS"); snprintf(v.row[0].value, sizeof(v.row[0].value), "%d %%", backlightPct); v.row[0].icon = rui::IC_SUN;
-  snprintf(v.row[1].label, sizeof(v.row[1].label), "DEBUG");      snprintf(v.row[1].value, sizeof(v.row[1].value), "%s", FW_TAG); v.row[1].icon = rui::IC_BUG;
-  d.ver = backlightPct;
+  v.n = 5;
+  auto row = [&](int i, const char *label, const char *value, uint8_t icon) { snprintf(v.row[i].label, sizeof(v.row[i].label), "%s", label); snprintf(v.row[i].value, sizeof(v.row[i].value), "%s", value); v.row[i].icon = icon; };
+  char b[16];
+  snprintf(b, sizeof(b), "%d %%", backlightPct);                                       row(0, "BRIGHTNESS", b, rui::IC_SUN);
+  snprintf(b, sizeof(b), "%s %s %s", settings::speedUnit(cfg), settings::tempUnit(cfg), settings::pressUnit(cfg)); row(1, "UNITS", b, rui::IC_BOOST);
+  int ch = settings::warnChanged(cfg); if (ch) snprintf(b, sizeof(b), "%d CHANGED", ch); else snprintf(b, sizeof(b), "STANDARD"); row(2, "WARNINGS", b, rui::IC_ENGINE);
+  row(3, "THEME", theme::look(cfg.theme).name, rui::IC_AIR);
+  row(4, "DEBUG", FW_TAG, rui::IC_BUG);
+  d.ver = backlightPct + 128 * ch + 4096 * cfg.theme + 65536 * cfg.speedKmh + 131072 * cfg.tempC + 262144 * cfg.pressBar;
+}
+
+// The options screens: units (tap to switch), warnings (- value +), theme (tap to switch look / colour mode).
+static void fillOptionsData(rui::Data &d, int sub) {
+  rui::OptionsView &o = d.opts; o = rui::OptionsView(); o.n = optCount(sub);
+  auto row = [&](int i, const char *label, const char *value) { snprintf(o.row[i].label, sizeof(o.row[i].label), "%s", label); snprintf(o.row[i].value, sizeof(o.row[i].value), "%s", value); o.row[i].kind = (uint8_t)optKind(sub); };
+  if (sub == SUB_UNITS) {
+    snprintf(o.title, sizeof(o.title), "UNITS");
+    row(0, "SPEED", settings::speedUnit(cfg)); row(1, "TEMPERATURE", settings::tempUnit(cfg)); row(2, "PRESSURE", settings::pressUnit(cfg));
+  } else if (sub == SUB_WARN) {
+    snprintf(o.title, sizeof(o.title), "WARNINGS");
+    for (int i = 0; i < settings::W_COUNT; i++) { char t[16]; settings::warnText(i, cfg, t, sizeof(t)); row(i, settings::warnLabel(i), t); }
+  } else {
+    snprintf(o.title, sizeof(o.title), "THEME"); o.swatch = true;
+    row(0, "LOOK", theme::look(cfg.theme).name); row(1, "COLOUR", theme::modeName(cfg.mode));
+  }
+  d.ver = (int)((uint32_t)(sub * 1000003u + cfg.speedKmh * 7u + cfg.tempC * 11u + cfg.pressBar * 13u + cfg.theme * 17u + cfg.mode * 19u + (uint32_t)cfg.coolWarnC * 23u + (uint32_t)cfg.coolHotC * 29u + cfg.battLowDeciV * 31u + cfg.fuelLowPct * 37u + cfg.redlineRpm * 41u) & 0x3FFFFFFF);
 }
 
 static void roundDialFrame(int p, uint32_t now) {
@@ -1263,14 +1318,15 @@ static void roundDialFrame(int p, uint32_t now) {
   d.haveFuel = have(G_FUEL); d.fuelPct = (int)lroundf(gVal[G_FUEL]);
   d.haveBatt = have(G_BATT); d.battV = gVal[G_BATT];
   d.haveLoad = have(G_LOAD); d.loadPct = (int)lroundf(gVal[G_LOAD]);
-  d.redline = RPM_REDLINE; d.hotC = TEMP_UNEASY_C; d.worryC = TEMP_WORRIED_C; d.fuelLowPct = FUEL_LOW_PCT;
-  d.battCritV = BATT_CRIT_V; d.battLowV = BATT_LOW_OFF_V; d.unitF = TEMP_UNIT_F;
+  d.redline = cfg.redlineRpm; d.hotC = cfg.coolWarnC; d.worryC = cfg.coolHotC; d.fuelLowPct = cfg.fuelLowPct;
+  d.battCritV = settings::battCritV(cfg); d.battLowV = settings::battLowOffV(cfg); d.unitF = !cfg.tempC; d.kmh = cfg.speedKmh != 0; d.theme = rui::themeGen;
   d.dotN = visibleCount(); d.dotCur = visibleIndex(page);
   fillStyleData(d, p);
   fillReportData(d, p);
-  if (p == PAGE_SETTINGS) fillSettingsData(d);
+  if (p == PAGE_SETTINGS) { if (optCount(settingsSub) > 0) fillOptionsData(d, settingsSub); else fillSettingsData(d); }
+  d.ver = (int)(((uint32_t)d.ver * 8u + (cfg.speedKmh ? 1u : 0u) + (cfg.tempC ? 2u : 0u) + (cfg.pressBar ? 4u : 0u)) & 0x3FFFFFFF);   // unit labels are part of the static content
   int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : p == PAGE_ARC ? rui::PG_ARC
-         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? rui::PG_SETTINGS : rui::PG_VITALS;
+         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
   uint32_t t0 = micros();
   uint16_t *fb = fullCanvas->getFramebuffer();
   rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen
@@ -1517,6 +1573,7 @@ void setup() {
   character.startIntro(millis(), bootQuickRestart);
 #endif
   sdInit();
+  loadSettings();
   loadTrips();
   NimBLEDevice::init("");
   Serial.printf("Tachi starting [%s, built %s %s], demo mode %s\n", FW_TAG, __DATE__, __TIME__, demo ? "ON" : "OFF");
@@ -1566,7 +1623,7 @@ void loop() {
   if (millis() - lastPrint >= 1000) {   // one summary line per second on the serial monitor
     lastPrint = millis();
     static uint32_t lastCount = 0;
-    Serial.printf("rpm=%d mph=%d coolant=%d%c oil=%s%d page=%d  (%lu req/s)\n", rpm, mph, tempOut(coolantC), TEMP_UNIT_F ? 'F' : 'C', oilValid ? "" : "n/a:", tempOut(oilC), page,
+    Serial.printf("rpm=%d mph=%d coolant=%d%c oil=%s%d page=%d  (%lu req/s)\n", rpm, mph, tempOut(coolantC), (!cfg.tempC) ? 'F' : 'C', oilValid ? "" : "n/a:", tempOut(oilC), page,
                   (unsigned long)(pollCount - lastCount));
     reqPerSec = pollCount - lastCount;
     if (page == PAGE_FACE) reqPerSecFace = reqPerSec;   // polling rate while the animation is running

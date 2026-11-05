@@ -17,6 +17,7 @@ static const float CIRCLE_C = 239.5f, TEXT_R = 230.0f, BOX_R = 233.0f;
 static const int PAD = 6;
 
 static bool hit(const LayoutRec &a, const LayoutRec &b) { return a.x0 <= b.x1 + 1 && b.x0 <= a.x1 + 1 && a.y0 <= b.y1 + 1 && b.y0 <= a.y1 + 1; }
+static bool contains(const LayoutRec &a, const LayoutRec &b) { return a.x0 <= b.x0 && a.y0 <= b.y0 && a.x1 >= b.x1 && a.y1 >= b.y1; }   // b sits inside a (a chip on a row)
 static float cornerR(int x, int y) { float dx = x - CIRCLE_C, dy = y - CIRCLE_C; return sqrtf(dx * dx + dy * dy); }
 static bool inside(const LayoutRec &r, float maxR) { return cornerR(r.x0, r.y0) <= maxR && cornerR(r.x1, r.y0) <= maxR && cornerR(r.x0, r.y1) <= maxR && cornerR(r.x1, r.y1) <= maxR; }
 
@@ -35,7 +36,7 @@ static int check(const char *name, const std::vector<LayoutRec> &log, const int 
   for (size_t i = 0; i < log.size(); i++) for (size_t j = i + 1; j < log.size(); j++) {
     const LayoutRec &a = log[i], &b = log[j];
     if (a.kind == 't' && b.kind == 't' && hit(a, b)) fail("text overlaps text:", a, &b);
-    if (a.kind == 'c' && b.kind == 'c' && hit(a, b)) fail("boxes overlap", a, &b);
+    if (a.kind == 'c' && b.kind == 'c' && hit(a, b) && !contains(a, b) && !contains(b, a)) fail("boxes overlap", a, &b);
   }
   for (const LayoutRec &t : log) if (t.kind == 't') for (const LayoutRec &c : log) if (c.kind == 'c') {
     int cx = (t.x0 + t.x1) / 2, cy = (t.y0 + t.y1) / 2;
@@ -103,6 +104,21 @@ int main() {
     rui::layoutLog().clear(); rui::backChip(fb.data());
     bad = check("back-chip", rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
     printf("%-14s %3d records, %d problems\n", "back-chip", (int)rui::layoutLog().size(), bad);
+    // options screens: worst-case labels and values, both row kinds
+    for (int kind = 0; kind < 2; kind++) {
+      rui::Data o; o.dotN = 13; o.dotCur = 12; strcpy(o.opts.title, "WARNINGS"); o.opts.n = 5; o.opts.swatch = kind == 0;
+      const char *ol[5] = {"COOL WARM", "COOL HOT", "BATT LOW", "FUEL LOW", "REDLINE"}, *ov[5] = {"226 F", "226 F", "14.0 V", "50 %", "10000"};
+      const char *cl[5] = {"SPEED", "TEMPERATURE", "PRESSURE", "LOOK", "COLOUR"}, *cv[5] = {"MPH", "F", "PSI", "TRACK ORANGE", "VIOLET"};
+      for (int k = 0; k < 5; k++) { snprintf(o.opts.row[k].label, sizeof(o.opts.row[k].label), "%s", kind ? ol[k] : cl[k]); snprintf(o.opts.row[k].value, sizeof(o.opts.row[k].value), "%s", kind ? ov[k] : cv[k]); o.opts.row[k].kind = (uint8_t)kind; }
+      if (kind == 0) o.opts.n = 5;
+      rui::layoutLog().clear(); rui::State &S2 = rui::st(); S2.page = -1; S2.lastT = 0;
+      rui::frame(fb.data(), rui::PG_OPTIONS, o, 1000, true);
+      char nm[24]; snprintf(nm, sizeof(nm), "options-%s", kind ? "steppers" : "cycle");
+      int bad2 = check(nm, rui::layoutLog(), scaleNew, 4, true); totalBad += bad2;
+      printf("%-14s %3d records, %d problems\n", nm, (int)rui::layoutLog().size(), bad2);
+    }
+    // the stepper chips must not overlap each other
+    if (rui::OPT_MINUS_X + rui::OPT_BTN_W >= rui::OPT_PLUS_X || rui::optionPart(1, rui::OPT_PLUS_X + 5) != 2 || rui::optionPart(1, rui::OPT_MINUS_X + 5) != 1 || rui::optionPart(1, rui::ST_ROW_X0 + 30) != -1) { puts("  stepper hit zones wrong"); totalBad++; }
     // the hub rows, the BACK chip and the brightness presets must not touch each other's touch zones
     for (int i = 0; i < 5; i++) { int y = rui::ST_ROW_Y0 + (rui::ST_ROW_H + rui::ST_ROW_GAP) * i + rui::ST_ROW_H / 2; if (rui::settingsRowAt(rui::CX, y) != i) { printf("  settings row %d hit test fails\n", i); totalBad++; } }
     if (rui::backAt(rui::CX, rui::BACK_Y + rui::BACK_H / 2) != 1 || rui::backAt(rui::CX, rui::BR_PRESET_Y1 - 4) == 1) { puts("  BACK hit zone overlaps the brightness presets or misses the chip"); totalBad++; }

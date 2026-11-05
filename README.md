@@ -29,7 +29,7 @@ tap for the next page, touch and hold about 1.5 s for demo mode. The BOOT button
 2. **Sport**: segmented RPM ring, big speed, RPM, coolant / fuel / battery chips.
 3. **Tach** and 4. **Speedo**: analog dials with a needle (0-160 mph).
 5. **Vitals**: four ring gauges: coolant, fuel, battery, load.
-6. **Arc** and 7. **Custom** (boost): a 270 degree boost sweep (manifold pressure minus barometric, psi or bar via `BOOST_UNIT_PSI`), Custom adds three icon readouts.
+6. **Arc** and 7. **Custom** (boost): a 270 degree boost sweep (manifold pressure minus barometric, psi or bar from Settings), Custom adds three icon readouts.
    These two appear only if the car answers manifold pressure (PID 010B).
 8. **Quad**: four values at once. 9. **Dual**: two values, each with a bar. What the Custom / Quad / Dual pages show is set by `CUSTOM_ROWS`, `QUAD_CELLS`, `DUAL_ROWS`.
 10. **Gear**: the estimated gear (1-6, N when stopped, - when unsure), a 1-6 ladder and the speed. OBD has no gear value, so it is worked out from RPM and speed with the ratios in
@@ -76,7 +76,7 @@ The Face page sends its area without waiting (faster); the serial log prints `di
   Each has its own cooldown. Skipped during the welcome and the settle period and in demo mode; they play only while the Face page is shown.
 - **Gear test** (`GEAR_SNIFF_TEST`): at the first connection it listens about 45 s for the CAN message that the open-source Mazda definitions list as the gear selector (ID 0x01F)
   and reports what it saw on the Debug page and Serial. Set it to 0 once you have the result.
-- Temperatures are shown in deg F (`TEMP_UNIT_F`, 0 for deg C). Mood thresholds stay in deg C.
+- Temperatures, speed and pressure units are chosen in Settings, Units (the car itself reports deg C and km/h). Mood thresholds stay in deg C.
 - Serial log (115200) of every command and raw reply, and of every BLE device seen during scans.
 - microSD logging exists in the code (`SD_LOG_ENABLED`) but is off: the TF slot shares pins with the display's init bus and has not been confirmed.
 
@@ -124,7 +124,13 @@ Not included yet: sound, motion sensing, Wi-Fi.
 - A code that was not there when the trip started is tagged NEW and counted in the drive report.
 - **CLEAR** (mode 04) needs a 3 second press-and-hold on the button (`CODE_CLEAR_HOLD_MS`) and is refused while the engine is running. A touch that only woke the screen can never press a button. Clearing also resets the car's emissions readiness monitors and the saved freeze-frame data, so do not clear just before an emissions test. Nothing is ever cleared automatically. Demo mode shows made-up codes and sends nothing to the car.
 
-**Page order and Settings.** The swipe order is Face, Cluster, Tach, Speedo, Vitals, Arc, Custom, Quad, Dual, Gear, Drive report, Fault codes, **Settings** (always last: a `static_assert` in `main.cpp` keeps it there, so new pages go before it). Brightness and Debug are not pages of their own: they are inside Settings. The hub lists them as rows (icon, name, current value); tap a row to open it, tap BACK (or swipe) to return. Inside a sub-screen a stray tap does nothing, and swiping away from Settings always returns it to the hub. The hub has room for five rows, the next sections (units, warnings, themes) will be added there.
+**Page order and Settings.** The swipe order is Face, Cluster, Tach, Speedo, Vitals, Arc, Custom, Quad, Dual, Gear, Drive report, Fault codes, **Settings** (always last: a `static_assert` in `main.cpp` keeps it there, so new pages go before it). Brightness and Debug are not pages of their own: they are inside Settings. The hub lists them as rows (icon, name, current value); tap a row to open it, tap BACK (or swipe) to return. Inside a sub-screen a stray tap does nothing, and swiping away from Settings always returns it to the hub. The hub has five rows: Brightness, Units, Warnings, Theme, Debug.
+
+**Units, warnings, themes.** All three are saved in flash (`src/settings.h`, a validated blob, so a damaged or older save falls back to the defaults) and apply at once, on every page, the drive report, the face moods and the event reactions.
+- *Units*: speed mph / km/h (the speedo dial switches to a 0 to 280 scale), temperature F / C, pressure psi / bar. Values are stored as mph / deg C / psi and converted only for display.
+- *Warnings*: tap - or + to change the coolant warm and hot levels, battery low, fuel low and the redline (shift lights, red zone). The compile-time values in `config.h` are only the defaults now.
+- *Theme*: tap LOOK to cycle CLASSIC, SPORT RED, ICE SILVER, TRACK ORANGE (our own colour moods: gradient, accent, bezel and panel tones, `src/theme.h`), tap COLOUR to swap the accent for cyan, green, amber, orange, red or violet. A gradient bar previews the choice.
+Not compiled or run on the board yet: the host tests (`tools/tests/settings_test.cpp`, `theme_test.cpp`), the layout checker and the draw self-test cover the logic and layout.
 
 **Connecting.** Scanning, connecting and link-lost screens show how long the wait has lasted, and after 15 s they say "tap to skip": touching the screen hides the status screen so the normal pages (with `--` values) can be used while Tachi keeps connecting in the background; it comes back if the link is lost. A setup that gets no answer to two commands in a row is abandoned and retried, and the Bluetooth client is rebuilt after any failed attempt. The gear-selector sniffing test (`GEAR_SNIFF_TEST`) is off: it kept the screen on "SHIFT P R N D" for about a minute after every power-up and found no gear data anyway.
 

@@ -52,7 +52,7 @@ inline const char *distUnit(const Settings &s) { return s.speedKmh ? "KM" : "MI"
 
 // ---- warning levels: what the page shows and how a + / - press changes them ----
 inline const char *warnLabel(int item) {
-  static const char *l[W_COUNT] = {"COOLANT WARM", "COOLANT HOT", "BATTERY LOW", "FUEL LOW", "REDLINE"};
+  static const char *l[W_COUNT] = {"COOL WARM", "COOL HOT", "BATT LOW", "FUEL LOW", "REDLINE"};
   return item >= 0 && item < W_COUNT ? l[item] : "";
 }
 inline void warnText(int item, const Settings &s, char *out, size_t n) {
