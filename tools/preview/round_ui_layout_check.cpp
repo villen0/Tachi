@@ -1,0 +1,110 @@
+// Layout checker for the round pages (src/round_ui.h): renders pages with worst-case content and reports
+//   - text or pills that leave the round panel (8 px margin from the bezel, corners included),
+//   - text that overlaps other text, pills / chips / buttons that overlap each other,
+//   - text wider than the pill, chip or button it sits in (6 px padding), text crossing a container edge,
+//   - fonts outside the page's type scale (the new pages use only label, small, title and medium text).
+// The pages in TARGET_PAGES must pass (exit code 1 otherwise); the other pages are only listed for information.
+// Build: g++ -std=c++17 -O2 -I../../src round_ui_layout_check.cpp -o round_ui_layout_check && ./round_ui_layout_check
+#define RUI_LAYOUT_CHECK
+#include <cstdio>
+#include <cstring>
+#include <vector>
+#include "round_ui.h"
+#include "dtc_text.h"
+
+using rui::LayoutRec;
+static const float CIRCLE_C = 239.5f, TEXT_R = 230.0f, BOX_R = 233.0f;
+static const int PAD = 6;
+
+static bool hit(const LayoutRec &a, const LayoutRec &b) { return a.x0 <= b.x1 + 1 && b.x0 <= a.x1 + 1 && a.y0 <= b.y1 + 1 && b.y0 <= a.y1 + 1; }
+static float cornerR(int x, int y) { float dx = x - CIRCLE_C, dy = y - CIRCLE_C; return sqrtf(dx * dx + dy * dy); }
+static bool inside(const LayoutRec &r, float maxR) { return cornerR(r.x0, r.y0) <= maxR && cornerR(r.x1, r.y0) <= maxR && cornerR(r.x0, r.y1) <= maxR && cornerR(r.x1, r.y1) <= maxR; }
+
+static int check(const char *name, const std::vector<LayoutRec> &log, const int *allowedFonts, int nAllowed, bool verbose) {
+  int bad = 0;
+  auto fail = [&](const char *what, const LayoutRec &a, const LayoutRec *b) {
+    bad++; if (!verbose) return;
+    printf("  %s: %s '%s' [%d,%d..%d,%d]", name, what, a.s, a.x0, a.y0, a.x1, a.y1);
+    if (b) printf("  with '%s' [%d,%d..%d,%d]", b->s, b->x0, b->y0, b->x1, b->y1);
+    printf("\n");
+  };
+  for (const LayoutRec &r : log) {
+    if (!inside(r, r.kind == 't' ? TEXT_R : BOX_R)) fail("outside the panel:", r, nullptr);
+    if (r.kind == 't' && nAllowed) { bool ok = false; for (int i = 0; i < nAllowed; i++) if (r.fontH == allowedFonts[i]) ok = true; if (!ok) fail("font outside the type scale (height off):", r, nullptr); }
+  }
+  for (size_t i = 0; i < log.size(); i++) for (size_t j = i + 1; j < log.size(); j++) {
+    const LayoutRec &a = log[i], &b = log[j];
+    if (a.kind == 't' && b.kind == 't' && hit(a, b)) fail("text overlaps text:", a, &b);
+    if (a.kind == 'c' && b.kind == 'c' && hit(a, b)) fail("boxes overlap", a, &b);
+  }
+  for (const LayoutRec &t : log) if (t.kind == 't') for (const LayoutRec &c : log) if (c.kind == 'c') {
+    int cx = (t.x0 + t.x1) / 2, cy = (t.y0 + t.y1) / 2;
+    bool centreIn = cx >= c.x0 && cx <= c.x1 && cy >= c.y0 && cy <= c.y1;
+    if (centreIn) { if (t.x0 < c.x0 + PAD || t.x1 > c.x1 - PAD || t.y0 < c.y0 + 2 || t.y1 > c.y1 - 2) fail("text does not fit its box:", t, &c); }
+    else if (hit(t, c)) fail("text crosses a box edge:", t, &c);
+  }
+  return bad;
+}
+
+struct Page { int pg; const char *name; bool target; };
+
+int main() {
+  if (!rui::begin()) { puts("alloc failed"); return 1; }
+  std::vector<uint16_t> fb(rui::W * rui::H, 0);
+  const int scaleNew[] = {13, 11, 16, 21};               // F_LBL, F_SML, F_TTL, F_MED
+  int totalBad = 0;
+
+  // ---- Drive report: worst-case content ----
+  struct TripCase { const char *name; bool have, live; int sel, saved; };
+  TripCase tcs[] = {{"trip-worst", true, false, 2, 5}, {"trip-live", true, true, 0, 5}, {"trip-empty", false, false, 0, 0}};
+  for (auto &tc : tcs) {
+    rui::Data d; d.dotN = 13; d.dotCur = 10; rui::TripView &T = d.trip;
+    T.have = tc.have; T.live = tc.live; T.sel = tc.sel; T.nSaved = tc.saved; T.rating = 100; T.grade = 'D';
+    snprintf(T.title, sizeof(T.title), tc.live ? "LIVE TRIP" : "TRIP 65535");
+    const char *lab[6] = {"TOP KMH", "MAX RPM", "MAX F", "PEAK PSI", "VOLTS", "CODES"}, *val[6] = {"155", "8000", "260", "-14.7", "10.5-15.5", "99"};
+    for (int i = 0; i < 6; i++) { snprintf(T.t[i].label, sizeof(T.t[i].label), "%s", lab[i]); snprintf(T.t[i].value, sizeof(T.t[i].value), "%s", val[i]); }
+    snprintf(T.foot1, sizeof(T.foot1), "10H 59M  999.9 MI"); snprintf(T.foot2, sizeof(T.foot2), "99 HARD BRAKES  99 LAUNCHES");
+    rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+    rui::frame(fb.data(), rui::PG_TRIP, d, 1000, true);
+    int bad = check(tc.name, rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
+    printf("%-14s %3d records, %d problems\n", tc.name, (int)rui::layoutLog().size(), bad);
+  }
+
+  // ---- Fault codes: the widest description, all tags, the longest status lines, 0..4 rows ----
+  const char *widest = ""; int ww = 0; for (const dtc::Text &t : dtc::TEXTS) { int w = rui::textW(rui::F_SML, t.text); if (w > ww) { ww = w; widest = t.text; } }
+  printf("widest code description: '%s' (%d px)\n", widest, ww);
+  const int ROW_W = 280;                                  // the code rows are 280 px wide (the divider line): every description has to fit it
+  for (const dtc::Text &t : dtc::TEXTS) { int w = rui::textW(rui::F_SML, t.text); if (w > ROW_W - 8) { printf("  description too wide for a row: %s '%s' (%d px, max %d)\n", t.code, t.text, w, ROW_W - 8); totalBad++; } }
+  const char *stat[] = {"HOLD CLEAR 3 SECONDS TO ERASE", "COUNT SAYS 12, READ 12", "NOT CONNECTED TO THE CAR", "KEEP HOLDING TO CLEAR", "TURN THE ENGINE OFF FIRST"};
+  for (int rows = 0; rows <= 4; rows++) for (int answered = 0; answered <= 1; answered++) for (int mil = 0; mil <= 1; mil++) for (int sIdx = 0; sIdx < 5; sIdx++) {
+    if (rows > 0 && !answered) continue;
+    rui::Data d; d.dotN = 13; d.dotCur = 11; rui::CodesView &C = d.codes;
+    C.answered = answered; C.mil = mil; C.nRows = rows; C.total = rows == 0 ? 0 : 16;
+    const char *tag[4] = {"PENDING", "STORED", "NEW", "PENDING"}; const char *code[4] = {"P0301", "P0420", "U0121", "P2097"};
+    for (int i = 0; i < rows; i++) { snprintf(C.row[i].code, sizeof(C.row[i].code), "%s", code[i]); snprintf(C.row[i].desc, sizeof(C.row[i].desc), "%s", widest); snprintf(C.row[i].tag, sizeof(C.row[i].tag), "%s", tag[i]); }
+    snprintf(C.status, sizeof(C.status), "%s", stat[sIdx]); C.clearProg = 0.5f;
+    rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+    rui::frame(fb.data(), rui::PG_CODES, d, 1000, true);
+    char nm[48]; snprintf(nm, sizeof(nm), "codes r%d a%d m%d s%d", rows, answered, mil, sIdx);
+    int bad = check(nm, rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
+  }
+  printf("codes pages checked (all row counts, states and status lines)\n");
+
+  // ---- the other pages, for information only (not part of the clean-up scope) ----
+  puts("\nother pages (information only):");
+  Page others[] = {{rui::PG_SPORT, "sport"}, {rui::PG_TACH, "tach"}, {rui::PG_SPEEDO, "speedo"}, {rui::PG_VITALS, "vitals"}, {rui::PG_ARC, "arc"}, {rui::PG_CUSTOM, "custom"}, {rui::PG_QUAD, "quad"}, {rui::PG_DUAL, "dual"}, {rui::PG_GEAR, "gear"}};
+  for (auto &o : others) {
+    rui::Data d; d.dotN = 13; d.dotCur = 5; d.rpm = 6500; d.mph = 120; d.haveCool = d.haveFuel = d.haveBatt = d.haveLoad = true; d.coolShown = 260; d.fuelPct = 100; d.battV = 14.8f; d.loadPct = 100;
+    d.haveArc = true; d.arcVal = -14.7f; strcpy(d.arcText, "-14.7"); strcpy(d.arcUnit, "PSI"); strcpy(d.arcLabel, "BOOST"); d.arcMin = -20; d.arcMax = 30; d.arcMajor = 10; d.arcMinor = 2; d.arcRed = 24; d.arcDec = 0; strcpy(d.title, "ENGINE");
+    const char *lb[4] = {"COOLANT", "INTAKE", "BATTERY", "LOAD"}, *un[4] = {"F", "F", "V", "%"}, *tx[4] = {"260", "104", "14.8", "100"};
+    for (int i = 0; i < 4; i++) { strcpy(d.rd[i].label, lb[i]); strcpy(d.rd[i].unit, un[i]); strcpy(d.rd[i].text, tx[i]); d.rd[i].have = true; d.rd[i].icon = i + 1; }
+    d.gear = '6';
+    rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+    rui::frame(fb.data(), o.pg, d, 1000, true);
+    int bad = check(o.name, rui::layoutLog(), nullptr, 0, true);
+    printf("%-8s %3d records, %d problems\n", o.name, (int)rui::layoutLog().size(), bad);
+  }
+
+  printf("\n%s (%d problems on the Drive report and Fault codes pages)\n", totalBad ? "FAIL" : "PASS", totalBad);
+  return totalBad ? 1 : 0;
+}

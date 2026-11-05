@@ -42,13 +42,14 @@ inline void tripView(rui::TripView &v, const trip::Record *r, bool live, int sel
     snprintf(v.t[4].value, sizeof(v.t[4].value), "%.1f-%.1f", r->minBattDeciV / 10.0f, r->maxBattDeciV / 10.0f);
     if (r->minBattDeciV < 115) v.t[4].col = rui::RED; else if (r->minBattDeciV < 124) v.t[4].col = rui::YELLOW;
   }
-  snprintf(v.t[5].value, sizeof(v.t[5].value), "%d", (int)r->newCodeCount);
+  auto cap = [](int n) { return n > 99 ? 99 : n; };
+  snprintf(v.t[5].value, sizeof(v.t[5].value), "%d", cap(r->newCodeCount));
   if (r->newCodeCount > 0) v.t[5].col = rui::RED;
   int min = (int)((r->durationS + 30) / 60);
   float dist = r->distCentiMi / 100.0f * (u.mph ? 1.0f : 1.609f);
   if (min >= 60) snprintf(v.foot1, sizeof(v.foot1), "%dH %02dM  %.1f %s", min / 60, min % 60, dist, u.mph ? "MI" : "KM");
   else snprintf(v.foot1, sizeof(v.foot1), "%d MIN  %.1f %s", min < 1 ? 1 : min, dist, u.mph ? "MI" : "KM");
-  snprintf(v.foot2, sizeof(v.foot2), "%d HARD BRAKE%s  %d LAUNCH%s", (int)r->hardBrakes, r->hardBrakes == 1 ? "" : "S", (int)r->hardLaunches, r->hardLaunches == 1 ? "" : "ES");
+  snprintf(v.foot2, sizeof(v.foot2), "%d HARD BRAKE%s  %d LAUNCH%s", cap(r->hardBrakes), r->hardBrakes == 1 ? "" : "S", cap(r->hardLaunches), r->hardLaunches == 1 ? "" : "ES");
 }
 
 // The fault-code list shared between the main task (reads the codes) and the UI task (shows them).

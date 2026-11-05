@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
       for (int k = 0; k < 6; k++) { strcpy(T.t[k].label, tl[k]); strcpy(T.t[k].value, tv[k]); T.t[k].col = (k == 5 && c.rpm > 6000) ? rui::RED : rui::WHITE; }
       strcpy(T.foot1, "42 MIN  18.4 MI"); strcpy(T.foot2, c.rpm > 6000 ? "5 HARD BRAKES  3 LAUNCHES" : "0 HARD BRAKES  0 LAUNCHES"); }
     { rui::CodesView &C = d.codes; C.answered = true; C.mil = c.rpm > 0; C.nRows = c.rpm > 6000 ? 4 : (c.rpm > 0 ? 2 : 0); C.total = c.rpm > 6000 ? 5 : C.nRows;
-      const char *cc[4] = {"P0301", "P0420", "P1234", "P0171"}, *cd[4] = {"Misfire cylinder 1", "Catalyst efficiency low B1", "", "Mixture too lean B1"}, *ct[4] = {"NEW", "STORED", "PENDING", "STORED"};
+      const char *cc[4] = {"P0301", "P0420", "P1234", "P0171"}, *cd[4] = {"Misfire cylinder 1", "Catalyst weak B1", "", "Mixture too lean B1"}, *ct[4] = {"NEW", "STORED", "PENDING", "STORED"};
       for (int k = 0; k < 4; k++) { strcpy(C.row[k].code, cc[k]); strcpy(C.row[k].desc, cd[k]); strcpy(C.row[k].tag, ct[k]); C.row[k].col = k == 0 ? rui::ORANGE : (k == 2 ? rui::YELLOW : rui::WHITE); }
       strcpy(C.status, c.rpm > 6000 ? "CLEARING... KEEP HOLDING" : "HOLD 3 SECONDS TO CLEAR"); C.statusCol = rui::DIM; C.clearProg = c.rpm > 6000 ? 0.6f : 0; }
     rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100);

@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "round_font.h"
+#ifdef RUI_LAYOUT_CHECK
+#include <vector>
+#endif
 #if defined(ARDUINO)
 #include <esp_heap_caps.h>
 #endif
@@ -117,7 +120,14 @@ const Font F_SML = {roundfont::SML_CHARS, roundfont::SML_G, roundfont::SML_D, ro
 const Font F_LBL = {roundfont::LBL_CHARS, roundfont::LBL_G, roundfont::LBL_D, roundfont::LBL_H, 1};
 inline int glyphIndex(const Font &f, char ch) { if (ch >= 'a' && ch <= 'z') ch -= 32; const char *p = ch ? strchr(f.chars, ch) : nullptr; return p ? (int)(p - f.chars) : -1; }
 inline int textW(const Font &f, const char *s) { int w = 0; for (int i = 0; s[i]; i++) { int k = glyphIndex(f, s[i]); if (k >= 0) w += f.g[k].adv; } return w > f.gap ? w - f.gap : w; }
+#ifdef RUI_LAYOUT_CHECK
+struct LayoutRec { int x0, y0, x1, y1; char kind; int fontH; char s[48]; };      // kind: 't' text, 'c' container (pill / chip / button)
+inline std::vector<LayoutRec> &layoutLog() { static std::vector<LayoutRec> v; return v; }
+#endif
 inline void text(uint16_t *b, const Font &f, const char *s, int x, int y, uint16_t col) {
+#ifdef RUI_LAYOUT_CHECK
+  if (s[0]) { LayoutRec r{x, y, x + textW(f, s) - 1, y + f.h - 1, 't', f.h, {0}}; strncpy(r.s, s, 47); layoutLog().push_back(r); }
+#endif
   for (int i = 0; s[i]; i++) {
     int k = glyphIndex(f, s[i]); if (k < 0) continue;
     const roundfont::Glyph &gl = f.g[k];
@@ -269,6 +279,9 @@ inline void pageDots(uint16_t *b, int n, int cur) {
 }
 inline void pill(uint16_t *b, int cx, int y, int w, int h, const char *label) {
   float r = 12; int x = cx - w / 2;
+#ifdef RUI_LAYOUT_CHECK
+  { LayoutRec c{x, y, x + w - 1, y + h - 1, 'c', 0, {0}}; layoutLog().push_back(c); }
+#endif
   for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
     float px = i + 0.5f, py = j + 0.5f, qx = fabsf(px - w / 2.0f) - (w / 2.0f - r), qy = fabsf(py - h / 2.0f) - (h / 2.0f - r);
     float d = sqrtf((qx > 0 ? qx : 0) * (qx > 0 ? qx : 0) + (qy > 0 ? qy : 0) * (qy > 0 ? qy : 0)) + fminf(fmaxf(qx, qy), 0.0f) - r;   // signed distance to the rounded rect
@@ -292,22 +305,24 @@ inline void setRingColors(Ring &R, uint16_t (*f)(float frac, const void *), cons
 }
 
 // ---- drive report / fault codes layout constants and touch zones -----------------------------------------------------
-constexpr int TR_CHIP_Y = 388, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
-// The six tiles: three equal ones on top, below them a narrow boost tile, a wide volts tile (a "13.1-14.2" range) and a narrow codes tile.
+constexpr int TR_CHIP_Y = 356, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
+// Eight pills in three rows with the Sport page's pill size (58 px high, label at y+10, value at y+30, values in F_MED):
+// GRADE and RATING; top speed, max rpm, max coolant; peak boost, volts (wide, for a "13.1-14.2" range) and new codes.
+constexpr int TR_PILL_H = 58;
 inline void tripTile(int i, int *cx, int *y, int *w) {
-  static const int xs[6] = {CX - 128, CX, CX + 128, 87, 246, 399}, ws[6] = {120, 120, 120, 112, 190, 100};
-  *cx = xs[i]; *w = ws[i]; *y = i < 3 ? 190 : 266;
+  static const int xs[8] = {CX - 70, CX + 70, CX - 120, CX, CX + 120, 98, 254, 396}, ws[8] = {130, 130, 112, 112, 112, 112, 184, 84}, ys[8] = {100, 100, 168, 168, 168, 236, 236, 236};
+  *cx = xs[i]; *w = ws[i]; *y = ys[i];
 }
-inline int tripChipW(int k) { return k == 0 ? 58 : 36; }                    // chip 0 is "NOW", then 1..5
-inline int tripChipX(int k) { int total = 58 + 5 * 36 + 5 * TR_CHIP_GAP, x = CX - total / 2; for (int i = 0; i < k; i++) x += tripChipW(i) + TR_CHIP_GAP; return x; }
+inline int tripChipW(int k) { return k == 0 ? 70 : 36; }                    // chip 0 is "NOW" / "LAST", then 1..5
+inline int tripChipX(int k) { int total = 70 + 5 * 36 + 5 * TR_CHIP_GAP, x = CX - total / 2; for (int i = 0; i < k; i++) x += tripChipW(i) + TR_CHIP_GAP; return x; }
 // which chip (0 = this trip, 1..5 = earlier trips) is under the finger, or -1
 inline int tripChipAt(int x, int y) {
   if (y < TR_CHIP_Y - 8 || y > TR_CHIP_Y + TR_CHIP_H + 8) return -1;
   for (int k = 0; k < 6; k++) { int x0 = tripChipX(k); if (x >= x0 - 4 && x <= x0 + tripChipW(k) + 4) return k; }
   return -1;
 }
-constexpr int CD_BTN_Y = 354, CD_BTN_H = 40, CD_BTN_W = 150;
-inline int cdBtnX(int k) { return k == 0 ? CX - 160 : CX + 10; }              // 0 = READ AGAIN, 1 = CLEAR (hold)
+constexpr int CD_BTN_Y = 366, CD_BTN_H = 42, CD_BTN_W = 110;                  // the preset chips' height on the brightness page
+inline int cdBtnX(int k) { return k == 0 ? CX - 120 : CX + 10; }              // 0 = READ, 1 = CLEAR (hold)
 inline int codesButtonAt(int x, int y) {
   if (y < CD_BTN_Y - 8 || y > CD_BTN_Y + CD_BTN_H + 8) return -1;
   for (int k = 0; k < 2; k++) if (x >= cdBtnX(k) - 6 && x <= cdBtnX(k) + CD_BTN_W + 6) return k;
@@ -402,10 +417,8 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     }
   } else if (pg == PG_TRIP) {
     const TripView &T = d.trip;
-    textC(b, F_LBL, T.title, CX, 70, CYAN);
-    textC(b, F_LBL, "RATING", CX + 70, 94, DIM);
-    textC(b, F_LBL, "/100", CX + 70, 166, DIM);
-    for (int i = 0; i < 6; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); pill(b, cx, y, w, 68, T.t[i].label); }
+    textC(b, F_LBL, T.title, CX, 74, CYAN);
+    for (int i = 0; i < 8; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); pill(b, cx, y, w, TR_PILL_H, i == 0 ? "GRADE" : i == 1 ? "RATING" : T.t[i - 2].label); }
     for (int k = 0; k <= 5; k++) {
       char l[8]; if (k == 0) snprintf(l, sizeof(l), T.live ? "NOW" : "LAST"); else snprintf(l, sizeof(l), "%d", k);
       bool avail = k == 0 ? true : k <= T.nSaved;
@@ -413,22 +426,22 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     }
   } else if (pg == PG_CODES) {
     const CodesView &C = d.codes;
-    textC(b, F_LBL, "FAULT CODES", CX, 70, CYAN);
-    iconDraw(b, IC_ENGINE, CX - 108, 112, C.mil ? ORANGE : DIM);
-    text(b, F_TTL, "CHECK ENGINE", CX - 82, 98, WHITE);
-    text(b, F_TTL, C.mil ? "ON" : "OFF", CX - 82 + textW(F_TTL, "CHECK ENGINE") + 14, 98, C.mil ? ORANGE : MINT);
+    textC(b, F_LBL, "FAULT CODES", CX, 74, CYAN);
+    iconDraw(b, IC_ENGINE, CX - 104, 108, C.mil ? ORANGE : DIM);
+    text(b, F_LBL, "CHECK ENGINE", CX - 80, 96, WHITE);
+    text(b, F_LBL, C.mil ? "ON" : "OFF", CX - 80 + textW(F_LBL, "CHECK ENGINE") + 12, 96, C.mil ? ORANGE : MINT);
     char hl[36];
     if (!C.answered) snprintf(hl, sizeof(hl), "NOT READ YET"); else if (C.total == 0) snprintf(hl, sizeof(hl), "NO CODES STORED"); else snprintf(hl, sizeof(hl), "%d CODE%s FOUND", C.total, C.total == 1 ? "" : "S");
-    text(b, F_SML, hl, CX - 82, 122, C.total > 0 ? YELLOW : DIM);
+    text(b, F_SML, hl, CX - 80, 116, C.total > 0 ? YELLOW : DIM);
     for (int i = 0; i < C.nRows && i < 4; i++) {
-      const int y0 = 150 + 50 * i;
-      text(b, F_TTL, C.row[i].code, CX - 150, y0, C.row[i].col);
-      if (C.row[i].tag[0]) text(b, F_SML, C.row[i].tag, CX + 150 - textW(F_SML, C.row[i].tag), y0 + 3, C.row[i].col);
-      text(b, F_SML, C.row[i].desc[0] ? C.row[i].desc : "SEE SERVICE MANUAL", CX - 150, y0 + 24, DIM);
-      taper(b, CX - 150, y0 + 42, CX + 150, y0 + 42, 0.6f, 0.6f, FAINT);
+      const int y0 = 138 + 50 * i;
+      text(b, F_TTL, C.row[i].code, CX - 140, y0, C.row[i].col);
+      if (C.row[i].tag[0]) text(b, F_SML, C.row[i].tag, CX + 140 - textW(F_SML, C.row[i].tag), y0 + 3, C.row[i].col);
+      text(b, F_SML, C.row[i].desc[0] ? C.row[i].desc : "SEE SERVICE MANUAL", CX - 140, y0 + 22, DIM);
+      taper(b, CX - 140, y0 + 38, CX + 140, y0 + 38, 0.6f, 0.6f, FAINT);
     }
-    if (C.nRows == 0) textC(b, F_TTL, C.answered ? "ALL CLEAR" : "TAP READ AGAIN", CX, 230, C.answered ? MINT : DIM);
-    chip(b, cdBtnX(0), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, CYAN, "READ AGAIN");
+    if (C.nRows == 0) textC(b, F_TTL, C.answered ? "ALL CLEAR" : "TAP READ", CX, 214, C.answered ? MINT : DIM);
+    chip(b, cdBtnX(0), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, CYAN, "READ");
     chip(b, cdBtnX(1), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, RED, "CLEAR");
     taper(b, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 8, cdBtnX(1) + CD_BTN_W - 6, CD_BTN_Y + CD_BTN_H + 8, 3, 3, PANEL);
   } else {   // PG_GEAR: the ladder 1..6, the current gear drawn large, the speed below
@@ -558,14 +571,17 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     const TripView &T = d.trip;
     char g[2] = {T.have ? T.grade : '-', 0}; char r[8]; if (T.have) snprintf(r, sizeof(r), "%d", T.rating); else snprintf(r, sizeof(r), "--");
     uint16_t gc = !T.have ? DIM : (T.rating >= 80 ? MINT : (T.rating >= 60 ? YELLOW : RED));
-    num(S, fb, 0, F_HUGE, g, CX - 70, 96, 0, gc);
-    num(S, fb, 1, F_BIG, r, CX + 70, 116, 0, gc);
-    for (int i = 0; i < 6; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); const Font &f = i == 4 ? F_MED : F_NUM; num(S, fb, 2 + i, f, T.have ? T.t[i].value : "--", cx, y + 30 + (F_NUM.h - f.h) / 2, 0, T.have ? T.t[i].col : DIM); }
-    num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 350, 0, DIM);
-    num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 368, 0, DIM);
+    for (int i = 0; i < 8; i++) {
+      int cx, y, w; tripTile(i, &cx, &y, &w);
+      const char *v = i == 0 ? g : i == 1 ? r : (T.have ? T.t[i - 2].value : "--");
+      uint16_t c = i < 2 ? gc : (T.have ? T.t[i - 2].col : DIM);
+      num(S, fb, i, F_MED, v, cx, y + 30, 0, c);
+    }
+    num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 306, 0, DIM);
+    num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 324, 0, DIM);
   } else if (pg == PG_CODES) {
     const CodesView &C = d.codes;
-    num(S, fb, 0, F_SML, C.status, CX, 418, 0, C.statusCol);
+    num(S, fb, 0, F_SML, C.status, CX, 340, 0, C.statusCol);
     barFill(S, fb, 0, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 5, CD_BTN_W - 12, 6, C.clearProg, RED);
   } else {   // PG_GEAR
     char g[2] = {d.gear, 0}; const bool known = d.gear >= '1' && d.gear <= '6';
@@ -644,6 +660,9 @@ inline int presetAt(int x, int y) {
 }
 inline void chip(uint16_t *b, int x, int y, int w, int h, bool on, uint16_t col, const char *label) {
   float r = h / 2.0f;
+#ifdef RUI_LAYOUT_CHECK
+  { LayoutRec c{x, y, x + w - 1, y + h - 1, 'c', 0, {0}}; layoutLog().push_back(c); }
+#endif
   for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
     float px = i + 0.5f, py = j + 0.5f, qx = fabsf(px - w / 2.0f) - (w / 2.0f - r), qy = fabsf(py - h / 2.0f) - (h / 2.0f - r);
     float d = sqrtf((qx > 0 ? qx : 0) * (qx > 0 ? qx : 0) + (qy > 0 ? qy : 0) * (qy > 0 ? qy : 0)) + fminf(fmaxf(qx, qy), 0.0f) - r;
