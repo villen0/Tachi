@@ -419,11 +419,6 @@ class Mochi {
     if (vh < 5) { top = cy - 2.5f; vh = 5; }
     float r = e.r; if (r > vh / 2) r = vh / 2; if (r > w / 2) r = w / 2;
     glowRR(g, cx - w / 2, top, w, vh, r, p);
-    if (style == ES_RECT && vh > 22) {                                   // a small eyeball: dark pupil in the eye's own tint, with a tiny shine
-      float pr = fminf(w * 0.22f, vh * 0.16f), py = top + vh * 0.5f + vh * 0.04f;
-      g->fillCircle((int16_t)cx, (int16_t)py, (int16_t)(pr + 0.5f), rgb((int)(p.gr * 0.16f), (int)(p.gg * 0.22f), (int)(p.gb * 0.38f)));
-      g->fillCircle((int16_t)(cx - pr * 0.35f), (int16_t)(py - pr * 0.4f), (int16_t)(pr * 0.30f + 0.5f), rgb(235, 245, 255));
-    }
     if (e.slantIn > 0.5f || e.slantOut > 0.5f) {
       float xOut = cx - s * w / 2, xIn = cx + s * w / 2;
       float x0 = xOut - s * 10, x1 = xIn + s * 10;
