@@ -52,6 +52,17 @@ inline void tripView(rui::TripView &v, const trip::Record *r, bool live, int sel
   snprintf(v.foot2, sizeof(v.foot2), "%d HARD BRAKE%s  %d LAUNCH%s", cap(r->hardBrakes), r->hardBrakes == 1 ? "" : "S", cap(r->hardLaunches), r->hardLaunches == 1 ? "" : "ES");
 }
 
+// One row of the trip history: "#12", "42 MIN 18.4 MI", "A 91".
+inline void histRow(rui::HistRow &h, const trip::Record &r, bool live, const Units &u) {
+  h = rui::HistRow();
+  if (live) snprintf(h.tag, sizeof(h.tag), "LIVE"); else snprintf(h.tag, sizeof(h.tag), "#%u", (unsigned)(r.seq % 1000));
+  int min = (int)((r.durationS + 30) / 60); float dist = r.distCentiMi / 100.0f * (u.mph ? 1.0f : 1.609f);
+  if (min >= 60) snprintf(h.mid, sizeof(h.mid), "%dH%02dM %.1f %s", min / 60, min % 60, dist, u.mph ? "MI" : "KM");
+  else snprintf(h.mid, sizeof(h.mid), "%d MIN %.1f %s", min < 1 ? 1 : min, dist, u.mph ? "MI" : "KM");
+  snprintf(h.right, sizeof(h.right), "%c %d", trip::gradeOf(r.rating), r.rating > 99 ? 99 : r.rating);
+  h.col = r.rating >= 80 ? rui::MINT : (r.rating >= 60 ? rui::YELLOW : rui::RED);
+}
+
 // The fault-code list shared between the main task (reads the codes) and the UI task (shows them).
 struct CodeList {
   bool answered = false;              // the car has answered a code request at least once

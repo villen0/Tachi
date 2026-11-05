@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   if (!rui::begin()) { puts("alloc failed"); return 1; }
   std::vector<uint16_t> fb(rui::W * rui::H, 0);
-  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "trip", "codes", "settings", "options"};
+  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "trip", "history", "codes", "settings", "options"};
   struct Case { float rpm, mph; const char *tag; } cases[] = {{3763, 63, "mid"}, {6900, 112, "red"}, {0, 0, "idle"}};
   for (int pg = 0; pg < rui::PG_COUNT; pg++) for (auto &c : cases) {
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;           // restart each picture from scratch
@@ -48,6 +48,8 @@ int main(int argc, char **argv) {
     { rui::OptionsView &O = d.opts; O = rui::OptionsView(); strcpy(O.title, "WARNINGS"); O.n = 5; O.swatch = false;
       const char *ol[5] = {"COOL WARM", "COOL HOT", "BATT LOW", "FUEL LOW", "REDLINE"}, *ov[5] = {"212 F", "226 F", "12.0 V", "15 %", "6500"};
       for (int k = 0; k < 5; k++) { strcpy(O.row[k].label, ol[k]); strcpy(O.row[k].value, ov[k]); O.row[k].kind = 1; } }
+    { rui::HistoryView &Hv = d.hist; Hv = rui::HistoryView(); Hv.n = c.rpm > 0 ? 6 : 0; const char *tg[6] = {"LIVE", "#12", "#11", "#10", "#9", "#8"}, *md[6] = {"12 MIN 4.2 MI", "42 MIN 18.4 MI", "1H05M 31.0 MI", "9 MIN 2.1 MI", "27 MIN 11.6 MI", "55 MIN 24.8 MI"}, *rt[6] = {"B 84", "A 91", "C 72", "F 48", "A 95", "D 63"};
+      for (int k = 0; k < Hv.n; k++) { strcpy(Hv.row[k].tag, tg[k]); strcpy(Hv.row[k].mid, md[k]); strcpy(Hv.row[k].right, rt[k]); Hv.row[k].col = k == 3 ? rui::RED : (k == 2 || k == 5 ? rui::YELLOW : rui::MINT); } }
     rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100);
     d.rpm = c.rpm; rui::frame(fb.data(), pg, d, 2000);
     save(fb, dir + "/" + names[pg] + "_" + c.tag + ".ppm");

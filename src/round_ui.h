@@ -23,7 +23,7 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -168,6 +168,9 @@ struct TripView {
   char foot1[40] = "", foot2[40] = "";
   int sel = 0, nSaved = 0;               // chips: 0 = this trip, 1..nSaved = earlier trips
 };
+// Trip history page: one row per trip (the live one first while driving), the caller formats the text.
+struct HistRow { char tag[10] = ""; char mid[22] = ""; char right[8] = ""; uint16_t col = 0xFFFF; };
+struct HistoryView { int n = 0; HistRow row[6]; };
 // Fault codes page.
 struct CodeRow { char code[6] = ""; char desc[30] = ""; char tag[8] = ""; uint16_t col = 0xFFFF; };
 struct CodesView {
@@ -184,7 +187,7 @@ struct SettingsView { int n = 0; SettingsRow row[5]; };
 struct OptRow { char label[16] = ""; char value[16] = ""; uint8_t kind = 0; };
 struct OptionsView { char title[16] = ""; int n = 0; OptRow row[5]; bool swatch = false; };   // swatch: show the gradient of the chosen look under the rows
 struct Data {
-  TripView trip; CodesView codes; SettingsView settings; OptionsView opts;
+  TripView trip; HistoryView hist; CodesView codes; SettingsView settings; OptionsView opts;
   int ver = 0;                           // must change whenever any STATIC content changes (trip title/labels/chips/live, code rows/tags/mil/answered/total) so the page is rebuilt;
                                          // live numbers (tile values, footers, status, clear progress) are redrawn every frame without it
   // multi-value pages (filled by the caller): the arc gauge, up to four readouts, the page heading and the estimated gear
@@ -334,12 +337,14 @@ inline void tripTile(int i, int *cx, int *y, int *w) {
   static const int xs[8] = {CX - 70, CX + 70, CX - 120, CX, CX + 120, 98, 254, 396}, ws[8] = {130, 130, 112, 112, 112, 112, 184, 84}, ys[8] = {100, 100, 168, 168, 168, 236, 236, 236};
   *cx = xs[i]; *w = ws[i]; *y = ys[i];
 }
-inline int tripChipW(int k) { return k == 0 ? 70 : 36; }                    // chip 0 is "NOW" / "LAST", then 1..5
-inline int tripChipX(int k) { int total = 70 + 5 * 36 + 5 * TR_CHIP_GAP, x = CX - total / 2; for (int i = 0; i < k; i++) x += tripChipW(i) + TR_CHIP_GAP; return x; }
-// which chip (0 = this trip, 1..5 = earlier trips) is under the finger, or -1
-inline int tripChipAt(int x, int y) {
-  if (y < TR_CHIP_Y - 8 || y > TR_CHIP_Y + TR_CHIP_H + 8) return -1;
-  for (int k = 0; k < 6; k++) { int x0 = tripChipX(k); if (x >= x0 - 4 && x <= x0 + tripChipW(k) + 4) return k; }
+// The Drive report page has one button, "TRIPS", that opens the trip history page.
+constexpr int TR_BTN_W = 96, TR_BTN_X = CX - TR_BTN_W / 2;
+inline int tripChipAt(int x, int y) { return (y >= TR_CHIP_Y - 8 && y <= TR_CHIP_Y + TR_CHIP_H + 8 && x >= TR_BTN_X - 6 && x <= TR_BTN_X + TR_BTN_W + 6) ? 0 : -1; }
+// Trip history rows (up to 6: the live trip and the 5 saved ones)
+constexpr int HI_X0 = 90, HI_W = 300, HI_Y0 = 90, HI_H = 42, HI_GAP = 6;
+inline int histRowAt(int x, int y) {
+  if (x < HI_X0 - 6 || x > HI_X0 + HI_W + 6) return -1;
+  for (int i = 0; i < 6; i++) { int y0 = HI_Y0 + (HI_H + HI_GAP) * i; if (y >= y0 - 2 && y <= y0 + HI_H + 2) return i; }
   return -1;
 }
 // Settings hub rows and the BACK chip of the sub-screens (brightness, debug)
@@ -467,10 +472,17 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     const TripView &T = d.trip;
     textC(b, F_LBL, T.title, CX, 74, CYAN);
     for (int i = 0; i < 8; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); pill(b, cx, y, w, TR_PILL_H, i == 0 ? "GRADE" : i == 1 ? "RATING" : T.t[i - 2].label); }
-    for (int k = 0; k <= 5; k++) {
-      char l[8]; if (k == 0) snprintf(l, sizeof(l), T.live ? "NOW" : "LAST"); else snprintf(l, sizeof(l), "%d", k);
-      bool avail = k == 0 ? true : k <= T.nSaved;
-      chip(b, tripChipX(k), TR_CHIP_Y, tripChipW(k), TR_CHIP_H, k == T.sel, avail ? CYAN : FAINT, l);
+    chip(b, TR_BTN_X, TR_CHIP_Y, TR_BTN_W, TR_CHIP_H, false, CYAN, "TRIPS");
+  } else if (pg == PG_HISTORY) {
+    const HistoryView &Hv = d.hist;
+    textC(b, F_LBL, "TRIP HISTORY", CX, 66, CYAN);
+    if (Hv.n == 0) { textC(b, F_TTL, "NO TRIPS YET", CX, 190, DIM); textC(b, F_SML, "DRIVE REPORTS APPEAR HERE", CX, 222, FAINT); }
+    for (int i = 0; i < Hv.n && i < 6; i++) {
+      const HistRow &R = Hv.row[i]; int y = HI_Y0 + (HI_H + HI_GAP) * i;
+      pill(b, CX, y, HI_W, HI_H, "");
+      text(b, F_SML, R.tag, HI_X0 + 14, y + (HI_H - F_SML.h) / 2, WHITE);
+      text(b, F_SML, R.mid, HI_X0 + 70, y + (HI_H - F_SML.h) / 2, DIM);
+      text(b, F_LBL, R.right, HI_X0 + HI_W - 14 - textW(F_LBL, R.right), y + (HI_H - F_LBL.h) / 2, R.col);
     }
   } else if (pg == PG_CODES) {
     const CodesView &C = d.codes;
@@ -656,6 +668,8 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     }
     num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 306, 0, DIM);
     num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 324, 0, DIM);
+  } else if (pg == PG_HISTORY) {
+    // static page: everything is in the background layer
   } else if (pg == PG_CODES) {
     const CodesView &C = d.codes;
     num(S, fb, 0, F_SML, C.status, CX, 340, 0, C.statusCol);

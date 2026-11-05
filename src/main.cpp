@@ -108,7 +108,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_TRIP, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_TRIP, PAGE_HISTORY, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
 static_assert(PAGE_SETTINGS == PAGE_COUNT - 1, "Settings must stay the last page: add new pages before it");
 volatile int page = PAGE_FACE;       // a tap or swipe changes the page (see pageVisible)
 
@@ -134,7 +134,7 @@ static bool pageVisible(int p) {
   if (p == PAGE_CUSTOM) return SHOW_PAGE_CUSTOM && SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p == PAGE_ARC) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p >= PAGE_QUAD && p <= PAGE_GEAR) return SHOW_PAGE_STYLES && !dialFailed;
-  if (p == PAGE_TRIP) return SHOW_PAGE_TRIP && !dialFailed;
+  if (p == PAGE_TRIP || p == PAGE_HISTORY) return SHOW_PAGE_TRIP && !dialFailed;
   if (p == PAGE_CODES) return SHOW_PAGE_CODES && !dialFailed;
   if (p == PAGE_SETTINGS) return !dialFailed;
   return true;
@@ -879,9 +879,10 @@ static void optApply(int sub, int row, int part) {
   cfgGen = cfgGen + 1; cfgSaveReq = true; forceDraw = true;
 }
 static bool inBrightness() { return page == PAGE_SETTINGS && settingsSub == 1; }
-static int tripSel = 0;                              // drive report chip: 0 = this / the last trip, 1.. = earlier trips
+static int tripSel = 0;                              // which trip the Drive report shows: 0 = this / the last trip, 1.. = earlier ones (opened from the history)
 static float codeClearProg = 0;                      // 0..1 while CLEAR is being held
 static int tripChipsAvailable() { return tracker.active() ? tripHist.count : (tripHist.count > 0 ? tripHist.count - 1 : 0); }
+static int histRows() { return tripChipsAvailable() + ((tracker.active() || tripHist.count > 0) ? 1 : 0); }   // trips listed on the history page (demo: 4)
 
 // The touch screen acts as the button: a tap is a short press, holding a finger down LONG_PRESS_MS toggles demo mode, and a
 // horizontal swipe changes the page: swipe left = next page, swipe right = previous page.
@@ -891,7 +892,7 @@ static void pollTouch() {
   static int sx = 0, sy = 0, lx = 0, ly = 0;
   static bool slider = false;               // the finger went down on the brightness slider: it drags the slider, nothing else
   static bool preset = false;               // ... or on one of the preset chips: it jumps to that level
-  static int tripChip = -1, codeBtn = -1;   // drive report chip / fault codes button the finger went down on (-1 none)
+  static int tripChip = -1, codeBtn = -1, histRow = -1;   // drive report chip / fault codes button the finger went down on (-1 none)
   static int setRow = -1, optRow = -1, optPart = 0; static bool backBtn = false;   // Settings hub row / options row (and its - / + part) / BACK chip the finger went down on
   static uint32_t holdStart = 0; static bool clearFired = false;
   uint32_t ms = millis();
@@ -904,14 +905,15 @@ static void pollTouch() {
   if (got && dn) {
     lastTouchMs = ms;
     if (!btnDown) { swallowTouch = !screenLit; btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (inBrightness() && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); preset = (inBrightness() && rui::presetAt(x, y) >= 0);
-      tripChip = (!swallowTouch && page == PAGE_TRIP) ? rui::tripChipAt(x, y) : -1; codeBtn = (!swallowTouch && page == PAGE_CODES) ? rui::codesButtonAt(x, y) : -1;   // a touch that only wakes the screen never presses a button
+      tripChip = (!swallowTouch && page == PAGE_TRIP) ? rui::tripChipAt(x, y) : -1; codeBtn = (!swallowTouch && page == PAGE_CODES) ? rui::codesButtonAt(x, y) : -1;
+      histRow = (!swallowTouch && page == PAGE_HISTORY) ? rui::histRowAt(x, y) : -1; if (histRow >= (demo ? 4 : histRows())) histRow = -1;   // a touch that only wakes the screen never presses a button
       setRow = (!swallowTouch && page == PAGE_SETTINGS && settingsSub == SUB_HUB) ? rui::settingsRowAt(x, y) : -1;
       optRow = (!swallowTouch && page == PAGE_SETTINGS && optCount(settingsSub) > 0) ? rui::settingsRowAt(x, y) : -1;
       if (optRow >= optCount(settingsSub)) optRow = -1;
       optPart = optRow >= 0 ? rui::optionPart(optKind(settingsSub), x) : -1; if (optPart < 0) optRow = -1;   // a stepper's label and value are not buttons
       if (setRow >= SETTINGS_ROWS) setRow = -1;                                // the empty part of the hub is an ordinary tap area
       backBtn = (!swallowTouch && page == PAGE_SETTINGS && settingsSub != 0 && rui::backAt(x, y) > 0 && !slider && !preset);
-      if (tripChip >= 0 || codeBtn >= 0 || setRow >= 0 || optRow >= 0 || backBtn) btnLongFired = true;   // a button press: not a page tap, a swipe or the demo long press
+      if (tripChip >= 0 || codeBtn >= 0 || histRow >= 0 || setRow >= 0 || optRow >= 0 || backBtn) btnLongFired = true;   // a button press: not a page tap, a swipe or the demo long press
       holdStart = ms; clearFired = false; }
     lx = x; ly = y;
     if (codeBtn == 1 && !clearFired && !swallowTouch) {                       // CLEAR has to be held (and never from a touch that woke the screen)
@@ -923,8 +925,8 @@ static void pollTouch() {
     else if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
   } else if (release && btnDown) {
     btnDown = false;
-    if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = setRow = optRow = -1; backBtn = false; codeClearProg = 0; return; }      // this touch only woke the screen
-    if (statusActive && !statusHidden && !demo) { statusHidden = true; forceDraw = true; tripChip = codeBtn = setRow = optRow = -1; backBtn = false; return; }   // a touch on the status screen skips it
+    if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = false; codeClearProg = 0; return; }      // this touch only woke the screen
+    if (statusActive && !statusHidden && !demo) { statusHidden = true; forceDraw = true; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = false; return; }   // a touch on the status screen skips it
     if (setRow >= 0 || optRow >= 0 || backBtn) {                                                           // Settings: open a row, change an option, or go back to the hub
       int sr = setRow, orow = optRow, opart = optPart; bool bk = backBtn; setRow = optRow = -1; backBtn = false;
       bool moved = abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX;       // a finger that travelled is a swipe, not a press: handled below
@@ -935,11 +937,13 @@ static void pollTouch() {
         return;
       }
     }
-    if (tripChip >= 0 || codeBtn >= 0) {
-      int tc = tripChip, cb = codeBtn; tripChip = codeBtn = -1; codeClearProg = 0;
-      if (tc >= 0 && rui::tripChipAt(lx, ly) == tc && (tc == 0 || tc <= tripChipsAvailable())) tripSel = tc;   // lifted on the same chip
+    if (tripChip >= 0 || codeBtn >= 0 || histRow >= 0) {
+      int tc = tripChip, cb = codeBtn, hr = histRow; tripChip = codeBtn = histRow = -1; codeClearProg = 0;
+      bool movedH = abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX;
+      if (tc >= 0 && rui::tripChipAt(lx, ly) == tc) { page = PAGE_HISTORY; forceDraw = true; }                  // TRIPS button: the list of trips
+      if (hr >= 0 && !movedH && rui::histRowAt(lx, ly) == hr) { tripSel = hr; page = PAGE_TRIP; forceDraw = true; }   // a row: open that trip's report
       if (cb == 0 && rui::codesButtonAt(lx, ly) == 0) { codeReq = 1; setCodeStatus("ASKING THE CAR...", UI_WHITE); }
-      return;
+      if (!(movedH && cb < 0)) return;                                          // a finger that travelled over a trip button / row is a page swipe: handled below
     }
     if (preset) { preset = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }
     if (slider) { slider = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }   // keep the level across restarts
@@ -1268,6 +1272,23 @@ static void fillReportData(rui::Data &d, int p) {
     else r = tripHist.get(tracker.active() ? tripSel - 1 : tripSel);
     report::tripView(d.trip, r, isLive, tripSel, chips, u);
     d.ver = tripSel + 8 * chips + 64 * (isLive ? 1 : 0) + 128 * (r ? 1 : 0) + 256 * (int)tripHist.nextSeq;
+  } else if (p == PAGE_HISTORY) {
+    rui::HistoryView &hv = d.hist; hv = rui::HistoryView();
+    uint32_t h = 2166136261u;
+    if (demo) {
+      for (int i = 0; i < 4; i++) { trip::Record r; r.seq = (uint16_t)(12 - i); r.durationS = (uint16_t)(1980 - 400 * i); r.distCentiMi = (uint16_t)(1120 - 230 * i); r.rating = (uint8_t)(88 - 11 * i); report::histRow(hv.row[i], r, false, u); }
+      hv.n = 4;
+    } else {
+      int rows = histRows(); if (rows > 6) rows = 6;
+      for (int i = 0; i < rows; i++) {
+        bool isLive = tracker.active() && i == 0; trip::Record live; const trip::Record *r;
+        if (isLive) { live = tracker.live(); r = &live; } else r = tripHist.get(tracker.active() ? i - 1 : i);
+        if (!r) continue;
+        report::histRow(hv.row[hv.n++], *r, isLive, u);
+      }
+    }
+    for (int i = 0; i < hv.n; i++) { for (const char *c = hv.row[i].tag; *c; c++) h = report::hashStep(h, (uint8_t)*c); for (const char *c = hv.row[i].mid; *c; c++) h = report::hashStep(h, (uint8_t)*c); for (const char *c = hv.row[i].right; *c; c++) h = report::hashStep(h, (uint8_t)*c); h = report::hashStep(h, hv.row[i].col); }
+    d.ver = (int)(h & 0x3FFFFFFF);
   } else if (p == PAGE_CODES) {
     report::CodeList cl; char st[40]; uint16_t sc; uint32_t sa;
     if (demo) {
@@ -1339,7 +1360,7 @@ static void roundDialFrame(int p, uint32_t now) {
   if (p == PAGE_SETTINGS) { if (optCount(settingsSub) > 0) fillOptionsData(d, settingsSub); else fillSettingsData(d); }
   d.ver = (int)(((uint32_t)d.ver * 8u + (cfg.speedKmh ? 1u : 0u) + (cfg.tempC ? 2u : 0u) + (cfg.pressBar ? 4u : 0u)) & 0x3FFFFFFF);   // unit labels are part of the static content
   int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : p == PAGE_ARC ? rui::PG_ARC
-         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
+         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
   uint32_t t0 = micros();
   uint16_t *fb = fullCanvas->getFramebuffer();
   rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen
@@ -1377,7 +1398,7 @@ void uiTick() {
   lastTick = t;
   if (t - gapWindowStart >= 5000) { maxTickGapMs = gapMax; gapMax = 0; gapWindowStart = t; }
   handleButton();
-  { static int lastPg = -1; if (page != lastPg) { if (lastPg == PAGE_SETTINGS) settingsSub = 0; lastPg = page; } }   // leaving Settings always returns it to the hub
+  { static int lastPg = -1; if (page != lastPg) { if (lastPg == PAGE_SETTINGS) settingsSub = 0; if (page != PAGE_TRIP && page != PAGE_HISTORY) tripSel = 0; lastPg = page; } }   // leaving Settings always returns it to the hub
   if (!pageVisible(page)) { page = nextPage(page, 1); forceDraw = true; }   // the page on screen vanished (e.g. demo ended)
 
   uint32_t now = millis();

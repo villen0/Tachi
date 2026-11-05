@@ -91,6 +91,21 @@ int main() {
   }
   printf("codes pages checked (all row counts, states and status lines)\n");
 
+  // ---- Trip history: six rows with the longest plausible text ----
+  {
+    for (int n : {0, 6}) {
+      rui::Data d; d.dotN = 13; d.dotCur = 10; d.hist.n = n;
+      for (int k = 0; k < n; k++) { snprintf(d.hist.row[k].tag, sizeof(d.hist.row[k].tag), k ? "#%d" : "LIVE", 988 + k); snprintf(d.hist.row[k].mid, sizeof(d.hist.row[k].mid), "%dH%02dM 123.4 MI", 10 + k, 5 + k); strcpy(d.hist.row[k].right, "A 99"); }
+      rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+      rui::frame(fb.data(), rui::PG_HISTORY, d, 1000, true);
+      char nm[24]; snprintf(nm, sizeof(nm), "history-%d", n);
+      int bad = check(nm, rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
+      printf("%-14s %3d records, %d problems\n", nm, (int)rui::layoutLog().size(), bad);
+    }
+    for (int i = 0; i < 6; i++) { int y = rui::HI_Y0 + (rui::HI_H + rui::HI_GAP) * i + rui::HI_H / 2; if (rui::histRowAt(rui::CX, y) != i) { printf("  history row %d hit test fails\n", i); totalBad++; } }
+    if (rui::HI_Y0 + (rui::HI_H + rui::HI_GAP) * 6 > 400) { puts("  history rows run too low"); totalBad++; }
+  }
+
   // ---- Settings hub: five rows with the longest plausible values, and the BACK chip shared by the sub-screens ----
   {
     rui::Data d; d.dotN = 13; d.dotCur = 12;
