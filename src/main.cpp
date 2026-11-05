@@ -99,7 +99,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_ARC, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_TRIP, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_TRIP, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
 static_assert(PAGE_SETTINGS == PAGE_COUNT - 1, "Settings must stay the last page: add new pages before it");
 volatile int page = PAGE_FACE;       // a tap or swipe changes the page (see pageVisible)
 
@@ -121,7 +121,7 @@ static bool dialFailed = false;                  // the dial pages' buffers coul
 static bool boostVisible() { return gSupported[G_MAP] && (gOk[G_MAP] || gFails[G_MAP] < 5); }   // the car answers MAP (intake manifold pressure)
 static bool pageVisible(int p) {
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !dialFailed;
-  if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
+  if (p == PAGE_DIAL_TACH || p == PAGE_DIAL_SPEEDO || p == PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_CUSTOM) return SHOW_PAGE_CUSTOM && SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p == PAGE_ARC) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p >= PAGE_QUAD && p <= PAGE_GEAR) return SHOW_PAGE_STYLES && !dialFailed;
