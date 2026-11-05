@@ -30,6 +30,12 @@ enum Expr : uint8_t {
   E_SMIRK, E_SLEEPY, E_SNEEZE, E_LAUGH, E_SQUINT, E_DISTRACTED, E_UWU, E_COOKIE, E_TURBO, E_HEADLIGHTS,
   E_POLICE, E_GLITCH, E_SWEAT, E_STARTLE, E_WAKE, E_TITLE, E_RAINBOW, E_COUNT
 };
+// The faces that are kept: everything else stays in the table below but is never shown (idle, moods, events and demo mode only use these).
+// E_WAKE (eyes open from shut, then the default face) and E_TITLE (the welcome) are internal steps.
+inline bool exprKept(Expr e) {
+  return e == E_DEFAULT || e == E_LOVE || e == E_ANGRY || e == E_CRYING || e == E_STARS || e == E_SLEEPY || e == E_LAUGH || e == E_UWU ||
+         e == E_TURBO || e == E_POLICE || e == E_GLITCH;
+}
 inline const char *exprName(Expr e) {
   static const char *n[E_COUNT] = {"Default", "Shrink", "LookLeft", "LookRight", "LookDown", "Raspberry", "Love", "Angry",
     "Crying", "Stars", "Smirk", "Sleepy", "Sneeze", "Laugh", "Squint", "Distracted", "UwU", "Cookie", "Turbo",
@@ -186,12 +192,11 @@ class Mochi {
   void idleTick(uint32_t now, bool parked) {
     if (intro || reaction != E_COUNT || base != E_DEFAULT) { if (now > nextIdle) nextIdle = now + 4000; return; }
     if (now < nextIdle) return;
-    static const Expr calmPool[] = {E_LOOK_L, E_LOOK_R, E_LOOK_DOWN, E_SMIRK, E_SQUINT, E_DISTRACTED, E_UWU, E_COOKIE, E_SNEEZE,
-                                    E_RASPBERRY, E_LOVE, E_LAUGH, E_STARS, E_SHRINK};
-    static const uint16_t calmHold[] = {1400, 1400, 1400, 2200, 2000, 3000, 2500, 3000, 1800, 1800, 2500, 2200, 2200, 1500};
-    static const Expr wildPool[] = {E_POLICE, E_HEADLIGHTS, E_GLITCH, E_RAINBOW};
-    static const uint16_t wildHold[] = {3000, 2500, 1800, 3000};
-    if (parked && rng.range(0, 3) == 0) { int i = rng.range(0, 3); react(wildPool[i], wildHold[i], now); }
+    static const Expr calmPool[] = {E_UWU, E_LOVE, E_LAUGH, E_STARS};   // the happy faces
+    static const uint16_t calmHold[] = {2500, 2500, 2200, 2200};
+    static const Expr wildPool[] = {E_POLICE, E_GLITCH};
+    static const uint16_t wildHold[] = {3000, 1800};
+    if (parked && rng.range(0, 3) == 0) { int i = rng.range(0, 1); react(wildPool[i], wildHold[i], now); }
     else { int i = rng.range(0, (int)(sizeof(calmPool) / sizeof(calmPool[0])) - 1); react(calmPool[i], calmHold[i], now); }
     nextIdle = now + (uint32_t)rng.range(6000, 15000);
   }

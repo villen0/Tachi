@@ -970,11 +970,11 @@ static mochi::Mochi character;
 
 static mochi::Expr moodExpr(Mood m) {
   switch (m) {
-    case UNEASY:  return mochi::E_SWEAT;
+    case UNEASY:  return mochi::E_DEFAULT;
     case WORRIED: return mochi::E_ANGRY;
     case SLEEPY:  return mochi::E_SLEEPY;
     case EXCITED: return mochi::E_TURBO;
-    case CALM:    return mochi::E_SQUINT;
+    case CALM:    return mochi::E_DEFAULT;
     default:      return mochi::E_DEFAULT;
   }
 }
@@ -1004,7 +1004,7 @@ static void carEventReact(uint32_t now, bool settling) {
   if (settling) return;
   switch (ev) {
     case carevents::EV_ENGINE_START: character.react(mochi::E_STARS, 1800, now); break;
-    case carevents::EV_HARD_BRAKE:   character.react(mochi::E_STARTLE, 1200, now); break;
+    case carevents::EV_HARD_BRAKE:   character.react(mochi::E_ANGRY, 1500, now); break;
     case carevents::EV_REDLINE:      character.react(mochi::E_GLITCH, 1000, now); break;       // overload flash at the limiter
     case carevents::EV_HARD_LAUNCH:  character.react(mochi::E_LAUGH, 1500, now); break;        // whee
     case carevents::EV_SMOOTH_STOP:  character.react(mochi::E_UWU, 2000, now); break;          // content after a gentle stop
@@ -1052,8 +1052,8 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
   if (d) {
     if (!character.introActive() && now >= showAt) {
       mochi::Expr e = (mochi::Expr)showIdx;
+      for (int guard = 0; guard < mochi::E_COUNT && !mochi::exprKept(e); guard++) { showIdx = (showIdx + 1) % mochi::E_COUNT; e = (mochi::Expr)showIdx; }   // demo shows only the kept faces
       showIdx = (showIdx + 1) % mochi::E_COUNT;
-      if (e == mochi::E_TITLE) { e = (mochi::Expr)showIdx; showIdx = (showIdx + 1) % mochi::E_COUNT; }
       character.setBase(e, now);
       showAt = now + 2800;
       clearBg(UI_LABEL_X0, UI_LABEL_Y, UI_LABEL_W, UI_LABEL_H);
