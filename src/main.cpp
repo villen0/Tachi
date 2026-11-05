@@ -1007,7 +1007,6 @@ static void carEventReact(uint32_t now, bool settling) {
     case carevents::EV_HARD_BRAKE:   character.react(mochi::E_ANGRY, 1500, now); break;
     case carevents::EV_REDLINE:      character.react(mochi::E_GLITCH, 1000, now); break;       // overload flash at the limiter
     case carevents::EV_HARD_LAUNCH:  character.react(mochi::E_LAUGH, 1500, now); break;        // whee
-    case carevents::EV_SMOOTH_STOP:  character.react(mochi::E_UWU, 2000, now); break;          // content after a gentle stop
     case carevents::EV_ENGINE_OFF:   character.react(mochi::E_SLEEPY, 3000, now); break;       // drifts off when the engine stops
     case carevents::EV_ENGINE_WARM:  character.react(mochi::E_LOVE, 2200, now); break;         // warmed up, ready to go
     case carevents::EV_LOW_BATTERY:

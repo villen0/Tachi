@@ -33,7 +33,7 @@ enum Expr : uint8_t {
 // The faces that are kept: everything else stays in the table below but is never shown (idle, moods, events and demo mode only use these).
 // E_WAKE (eyes open from shut, then the default face) and E_TITLE (the welcome) are internal steps.
 inline bool exprKept(Expr e) {
-  return e == E_DEFAULT || e == E_LOVE || e == E_ANGRY || e == E_CRYING || e == E_STARS || e == E_SLEEPY || e == E_LAUGH || e == E_UWU ||
+  return e == E_DEFAULT || e == E_LOVE || e == E_ANGRY || e == E_CRYING || e == E_STARS || e == E_SLEEPY || e == E_LAUGH ||
          e == E_TURBO || e == E_POLICE || e == E_GLITCH;
 }
 inline const char *exprName(Expr e) {
@@ -93,14 +93,14 @@ inline ExprDef def(Expr e) {
     case E_LOOK_R:  p.ox = 18; p.oy = -2; p.mouthC = 4; break;
     case E_LOOK_DOWN: p.oy = 16; both(p, &Eye::h, 36); both(p, &Eye::lidTop, 0.1f); p.mouthC = 2; p.mouthY = 16; break;
     case E_RASPBERRY: d.style = ES_CHEVRON; d.mouth = M_TONGUE; p.mouthW = 20; p.mouthY = 24; break;
-    case E_LOVE:    both(p, &Eye::w, 40); both(p, &Eye::h, 40); d.style = ES_HEART; d.mouth = M_OPEN; d.ovl = O_BLUSH; setColor(p, 255, 95, 150, 255, 40, 110); p.mouthW = 14; p.mouthOpen = 0.5f; p.mouthY = 34; break;
+    case E_LOVE:    setColor(p, 255, 150, 190, 255, 60, 130); both(p, &Eye::h, 50); d.ovl = O_BLUSH; p.mouthC = 8; p.mouthW = 20; p.mouthY = 26; break;   // soft pink eyes, blush, a warm smile
     case E_ANGRY:   p.L.slantIn = p.R.slantIn = 22; both(p, &Eye::h, 50); d.mouth = M_FROWN; p.mouthC = -7; p.mouthY = 26; d.ovl = O_ANGRY_MARK; setColor(p, 255, 110, 90, 255, 50, 30); break;
     case E_CRYING:  p.L.slantOut = p.R.slantOut = 16; both(p, &Eye::lidTop, 0.10f); both(p, &Eye::h, 58); d.mouth = M_FROWN; p.mouthC = -5; p.mouthW = 16; p.mouthY = 28; d.ovl = O_TEARS; setColor(p, 150, 228, 255, 40, 120, 255); break;
     case E_STARS:   both(p, &Eye::w, 32); both(p, &Eye::h, 58); d.ovl = O_STARS; p.mouthC = 7; break;
     case E_SMIRK:   p.L.lidTop = 0.36f; p.L.slantIn = 9; p.R.h = 50; p.mouthC = 3; p.ox = 5; p.mouthW = 16; break;
     case E_SLEEPY:  both(p, &Eye::lidTop, 0.92f); d.mouth = M_O; p.mouthW = 10; p.mouthY = 22; d.ovl = O_ZZZ; setColor(p, 160, 195, 235, 40, 80, 170); d.blinks = false; break;
     case E_SNEEZE:  d.style = ES_CHEVRON; d.mouth = M_OPEN; p.mouthW = 16; p.mouthOpen = 0.8f; p.mouthY = 26; d.ovl = O_DROPLET; break;
-    case E_LAUGH:   both(p, &Eye::w, 44); both(p, &Eye::h, 56); d.style = ES_ARC_UP; d.mouth = M_OPEN; p.mouthW = 24; p.mouthOpen = 0.8f; p.mouthY = 36; d.blinks = false; break;
+    case E_LAUGH:   both(p, &Eye::h, 40); d.mouth = M_OPEN; p.mouthW = 36; p.mouthOpen = 1.0f; p.mouthY = 48; d.blinks = false; break;   // the usual eyes, a big laughing mouth
     case E_SQUINT:  both(p, &Eye::lidTop, 0.32f); both(p, &Eye::lidBot, 0.32f); p.mouthC = 4; break;
     case E_DISTRACTED: both(p, &Eye::w, 31); both(p, &Eye::h, 46); p.mouthC = 0; p.mouthW = 12; p.mouthY = 20; break;
     case E_UWU:     both(p, &Eye::w, 42); both(p, &Eye::h, 56); d.style = ES_U; d.mouth = M_CAT; p.mouthW = 20; p.mouthY = 34; d.blinks = false; d.ovl = O_BLUSH; break;
@@ -192,8 +192,8 @@ class Mochi {
   void idleTick(uint32_t now, bool parked) {
     if (intro || reaction != E_COUNT || base != E_DEFAULT) { if (now > nextIdle) nextIdle = now + 4000; return; }
     if (now < nextIdle) return;
-    static const Expr calmPool[] = {E_UWU, E_LOVE, E_LAUGH, E_STARS};   // the happy faces
-    static const uint16_t calmHold[] = {2500, 2500, 2200, 2200};
+    static const Expr calmPool[] = {E_LOVE, E_LAUGH, E_STARS};   // the happy faces
+    static const uint16_t calmHold[] = {2500, 2200, 2200};
     static const Expr wildPool[] = {E_POLICE, E_GLITCH};
     static const uint16_t wildHold[] = {3000, 1800};
     if (parked && rng.range(0, 3) == 0) { int i = rng.range(0, 1); react(wildPool[i], wildHold[i], now); }
@@ -411,6 +411,11 @@ class Mochi {
     if (vh < 5) { top = cy - 2.5f; vh = 5; }
     float r = e.r; if (r > vh / 2) r = vh / 2; if (r > w / 2) r = w / 2;
     glowRR(g, cx - w / 2, top, w, vh, r, p);
+    if (style == ES_RECT && vh > 22) {                                   // a small eyeball: dark pupil in the eye's own tint, with a tiny shine
+      float pr = fminf(w * 0.22f, vh * 0.16f), py = top + vh * 0.5f + vh * 0.04f;
+      g->fillCircle((int16_t)cx, (int16_t)py, (int16_t)(pr + 0.5f), rgb((int)(p.gr * 0.16f), (int)(p.gg * 0.22f), (int)(p.gb * 0.38f)));
+      g->fillCircle((int16_t)(cx - pr * 0.35f), (int16_t)(py - pr * 0.4f), (int16_t)(pr * 0.30f + 0.5f), rgb(235, 245, 255));
+    }
     if (e.slantIn > 0.5f || e.slantOut > 0.5f) {
       float xOut = cx - s * w / 2, xIn = cx + s * w / 2;
       float x0 = xOut - s * 10, x1 = xIn + s * 10;
