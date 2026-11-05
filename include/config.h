@@ -41,6 +41,14 @@
 #define SHOW_PAGE_DIALS    1   // analog tachometer, analog speedometer and the vitals rings
 #define SHOW_PAGE_BRIGHTNESS 1 // the brightness slider page (the level is saved across restarts)
 #define SHOW_PAGE_STYLES   1   // arc (boost), custom, quad, dual and gear pages (the two boost pages appear only if the car answers MAP)
+#define SHOW_PAGE_TRIP     1   // drive report: live trip, report after the engine stops, last 5 trips kept in flash
+#define SHOW_PAGE_CODES    1   // fault codes: read them, clear them with a 3 second hold (engine off only)
+#define DRIVE_REPORT_AUTO_OPEN 1   // when a trip ends, open the drive report by itself
+#define TRIP_END_MS        30000   // engine off or no car data this long ends the trip
+#define TRIP_MIN_S         90      // shorter trips are thrown away
+#define TRIP_MIN_MILES     0.2f
+#define CODE_CLEAR_HOLD_MS 3000    // how long CLEAR has to be held
+#define CODE_CHECK_MS      30000   // how often the check-engine status (0101) is checked while connected
 #define BOOST_UNIT_PSI     1   // boost in psi (1) or bar (0)
 // What the multi-value pages show. Pick from: RD_COOL RD_INTAKE RD_BATT RD_FUEL RD_LOAD RD_THROTTLE RD_AMBIENT RD_BOOST
 #define RD_COOL 0

@@ -15,6 +15,9 @@
 #include "obd_parse.h"
 #include "car_events.h"
 #include "screen_sleep.h"
+#include "trip.h"
+#include "dtc.h"
+#include "report_view.h"
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -63,7 +66,8 @@ NimBLERemoteCharacteristic *txChar = nullptr;  // write:  board -> adapter
 
 // Receive buffer: written by the BLE callback task, read by the main task. Guarded by rxMux.
 static portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
-static char rxBuf[128];
+static char rxBuf[384];                 // long enough for a multi-line fault code reply
+static volatile bool rxKeepLines = false;   // while codes are read, line breaks are kept as '|' (see dtc.h)
 static size_t rxLen = 0;
 static volatile bool gotPrompt = false;
 
@@ -85,7 +89,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_ARC, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_BRIGHTNESS, PAGE_DEBUG, PAGE_COUNT };   // the Debug page is always last
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_DIAL_VITALS, PAGE_ARC, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_TRIP, PAGE_CODES, PAGE_BRIGHTNESS, PAGE_DEBUG, PAGE_COUNT };   // the Debug page is always last
 volatile int page = PAGE_FACE;       // a tap or swipe changes the page (see pageVisible)
 
 // ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load, boost) ----------
@@ -109,6 +113,8 @@ static bool pageVisible(int p) {
   if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_ARC || p == PAGE_CUSTOM) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p >= PAGE_QUAD && p <= PAGE_GEAR) return SHOW_PAGE_STYLES && !dialFailed;
+  if (p == PAGE_TRIP) return SHOW_PAGE_TRIP && !dialFailed;
+  if (p == PAGE_CODES) return SHOW_PAGE_CODES && !dialFailed;
   if (p == PAGE_BRIGHTNESS) return SHOW_PAGE_BRIGHTNESS && !dialFailed;
   return true;
 }
@@ -210,6 +216,7 @@ void onNotify(NimBLERemoteCharacteristic *, uint8_t *data, size_t len, bool) {
   for (size_t i = 0; i < len; i++) {
     char c = (char)data[i];
     if (c == '>') gotPrompt = true;                                // ELM327 "ready" prompt
+    else if ((c == '\r' || c == '\n') && rxKeepLines) { if (rxLen > 0 && rxBuf[rxLen - 1] != '|' && rxLen < sizeof(rxBuf) - 1) rxBuf[rxLen++] = '|'; }
     else if (c != '\r' && c != '\n' && c != ' ' && rxLen < sizeof(rxBuf) - 1) rxBuf[rxLen++] = c;
   }
   rxBuf[rxLen] = 0;
@@ -427,6 +434,110 @@ static void discoverPids(String r0) {
   if (!sup.have[0]) snprintf(supText[0], sizeof(supText[0]), "sup: none read");
   Serial.printf("discovery: %s%s%s\n", supText[0], supText[1][0] ? " |" : "", supText[1]);
 }
+
+// Colours for the multi-value and report pages, built with rui::rgb(): the short names WHITE / RED / YELLOW are macros in this file.
+static const uint16_t UI_WHITE = rui::rgb(240, 244, 255), UI_YELLOW = rui::rgb(255, 208, 50), UI_RED = rui::rgb(255, 60, 56), UI_ORANGE = rui::rgb(255, 120, 40);
+
+// >>> report-main-begin
+// ---------- Drive report and fault codes: state shared between the tasks, and the main task's adapter work ----------
+// The UI task draws and tracks the trip; only the main task talks to the adapter (the UI sets codeReq, the main loop does the work).
+static trip::Config tripConfig() {
+  trip::Config c; c.endMs = TRIP_END_MS; c.minSeconds = TRIP_MIN_S; c.minMiles = TRIP_MIN_MILES; c.uneasyC = TEMP_UNEASY_C; c.worriedC = TEMP_WORRIED_C; c.highRpm = RPM_REDLINE - 1000;
+  return c;
+}
+static trip::Tracker tracker(tripConfig());          // UI task only
+static trip::History tripHist;                       // newest 5 finished trips; written by the UI task, copied for saving under tripMux
+static trip::Record liveSnap;                        // the running trip, saved every minute so a power cut loses little
+static portMUX_TYPE tripMux = portMUX_INITIALIZER_UNLOCKED, codeMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool tripSaveReq = false, liveSaveReq = false;
+static report::CodeList codeList;                    // main task writes, UI task reads, under codeMux
+static char codeStatus[40] = ""; static uint16_t codeStatusCol = 0; static uint32_t codeStatusAt = 0;   // under codeMux
+static volatile uint8_t codeReq = 0;                 // UI -> main: 1 = read the codes, 2 = clear them
+static int lastMilCount = -1;
+
+static void setCodeStatus(const char *msg, uint16_t col) {
+  portENTER_CRITICAL(&codeMux); snprintf(codeStatus, sizeof(codeStatus), "%s", msg); codeStatusCol = col; codeStatusAt = millis(); portEXIT_CRITICAL(&codeMux);
+}
+
+static void loadTrips() {                            // setup(): the saved history, and a trip that was running when the power went
+  Preferences pr; if (!pr.begin("tachi", true)) return;
+  trip::History h;
+  if (pr.getBytes("trips", &h, sizeof(h)) == sizeof(h) && h.valid()) tripHist = h;
+  trip::Record r;
+  bool haveLive = pr.getBytes("live", &r, sizeof(r)) == sizeof(r);
+  pr.end();
+  if (haveLive && r.durationS >= TRIP_MIN_S && r.distCentiMi >= (uint16_t)(TRIP_MIN_MILES * 100)) { r.seq = tripHist.nextSeq; tripHist.push(r); tripSaveReq = true; Serial.println("recovered a trip that was running at power loss"); }
+  else if (haveLive) tripSaveReq = true;             // too short: just drop it
+  tracker.setNextSeq(tripHist.nextSeq);
+}
+static void persistTick() {                          // main loop
+  if (tripSaveReq) {
+    tripSaveReq = false;
+    trip::History h; portENTER_CRITICAL(&tripMux); h = tripHist; portEXIT_CRITICAL(&tripMux);
+    Preferences pr; if (pr.begin("tachi", false)) { pr.putBytes("trips", &h, sizeof(h)); pr.remove("live"); pr.end(); Serial.printf("saved %d trips\n", h.count); }
+  }
+  if (liveSaveReq) {
+    liveSaveReq = false;
+    trip::Record r = liveSnap;
+    Preferences pr; if (pr.begin("tachi", false)) { pr.putBytes("live", &r, sizeof(r)); pr.end(); }
+  }
+}
+
+// Reads the check-engine status (0101) and the stored (03) and pending (07) codes. Main task only.
+static void readAllCodes() {
+  setCodeStatus("READING...", UI_WHITE);
+  rxKeepLines = true;
+  String r1 = sendCmd("0101", 3000), r3 = sendCmd("03", 4000), r7 = sendCmd("07", 4000);
+  rxKeepLines = false;
+  dtc::Mil mil = dtc::parseMil(r1.c_str());
+  dtc::Result st = dtc::parseReply(r3.c_str(), 3), pe = dtc::parseReply(r7.c_str(), 7);
+  if (!st.answered && !pe.answered && !mil.valid) { setCodeStatus("NO ANSWER FROM THE CAR", UI_ORANGE); return; }
+  portENTER_CRITICAL(&codeMux);
+  report::CodeList old = codeList;
+  codeList.clear();
+  codeList.answered = true; codeList.mil = mil.valid ? mil.on : false; codeList.milCount = mil.valid ? mil.count : -1;
+  for (int i = 0; i < st.n; i++) codeList.add(st.codes[i], 0);
+  for (int i = 0; i < pe.n; i++) codeList.add(pe.codes[i], 1);
+  for (int i = 0; i < codeList.n; i++) { int k = old.find(codeList.code[i]); if (k >= 0) codeList.isNew[i] = old.isNew[k]; }   // keep the NEW tag
+  int total = codeList.n;
+  portEXIT_CRITICAL(&codeMux);
+  if (mil.valid) lastMilCount = mil.count;
+  char msg[40];
+  if (mil.valid && mil.count > st.n) snprintf(msg, sizeof(msg), "COUNT SAYS %d, READ %d", mil.count, st.n);
+  else if (total == 0) snprintf(msg, sizeof(msg), "NO CODES");
+  else snprintf(msg, sizeof(msg), "UPDATED: %d CODE%s", total, total == 1 ? "" : "S");
+  setCodeStatus(msg, (total > 0 || (mil.valid && mil.count > st.n)) ? UI_YELLOW : UI_WHITE);
+  Serial.printf("codes: %d stored/pending, MIL %s, count %d\n", total, mil.valid ? (mil.on ? "on" : "off") : "?", mil.valid ? mil.count : -1);
+}
+
+// Clears the codes (mode 04). Only with the engine not running; this also resets the readiness monitors and the freeze frame.
+static void clearAllCodes() {
+  if (fresh(tsRpm, FAST_FRESH_MS) && rpm >= 400) { setCodeStatus("TURN THE ENGINE OFF FIRST", UI_ORANGE); return; }
+  setCodeStatus("CLEARING...", UI_WHITE);
+  rxKeepLines = true; String r = sendCmd("04", 5000); rxKeepLines = false;
+  bool ok = r.indexOf("44") >= 0;
+  Serial.printf("fault codes cleared: %s (reply %s)\n", ok ? "yes" : "NO", r.c_str());
+  if (!ok) { setCodeStatus("CLEAR FAILED", UI_RED); return; }
+  readAllCodes();
+  portENTER_CRITICAL(&codeMux); int left = codeList.n; portEXIT_CRITICAL(&codeMux);
+  char msg[40]; if (left == 0) snprintf(msg, sizeof(msg), "CLEARED"); else snprintf(msg, sizeof(msg), "CLEARED, %d REMAIN", left);
+  setCodeStatus(msg, left == 0 ? UI_WHITE : UI_YELLOW);
+}
+
+// Main loop: a request from the UI, and a cheap check of the check-engine status every CODE_CHECK_MS (a rising count triggers a full read).
+static void codeTick() {
+  uint8_t rq = codeReq;
+  if (rq) { codeReq = 0; if (rq == 2) clearAllCodes(); else readAllCodes(); return; }
+  static uint32_t lastCheck = 0;
+  if (millis() - lastCheck < CODE_CHECK_MS) return;
+  lastCheck = millis();
+  String r = sendCmd("0101", 2000);
+  dtc::Mil mil = dtc::parseMil(r.c_str());
+  if (!mil.valid) return;
+  portENTER_CRITICAL(&codeMux); bool needRead = !codeList.answered; codeList.mil = mil.on; codeList.milCount = mil.count; portEXIT_CRITICAL(&codeMux);
+  if (needRead || mil.count != lastMilCount) readAllCodes();
+}
+// <<< report-main-end
 
 // Fake data that sweeps through every mood: idle, driving, then a slow overheat.
 void demoStep() {
@@ -711,6 +822,11 @@ void IRAM_ATTR onButtonEdge() {
   }
 }
 
+// UI-side state of the two report pages
+static int tripSel = 0;                              // drive report chip: 0 = this / the last trip, 1.. = earlier trips
+static float codeClearProg = 0;                      // 0..1 while CLEAR is being held
+static int tripChipsAvailable() { return tracker.active() ? tripHist.count : (tripHist.count > 0 ? tripHist.count - 1 : 0); }
+
 // The touch screen acts as the button: a tap is a short press, holding a finger down LONG_PRESS_MS toggles demo mode, and a
 // horizontal swipe changes the page: swipe left = next page, swipe right = previous page.
 static const int SWIPE_MIN_PX = 60, TAP_MAX_PX = 24;
@@ -719,6 +835,8 @@ static void pollTouch() {
   static int sx = 0, sy = 0, lx = 0, ly = 0;
   static bool slider = false;               // the finger went down on the brightness slider: it drags the slider, nothing else
   static bool preset = false;               // ... or on one of the preset chips: it jumps to that level
+  static int tripChip = -1, codeBtn = -1;   // drive report chip / fault codes button the finger went down on (-1 none)
+  static uint32_t holdStart = 0; static bool clearFired = false;
   uint32_t ms = millis();
   if (ms - lastPoll < 15) return;
   lastPoll = ms;
@@ -728,14 +846,27 @@ static void pollTouch() {
   bool release = (got && !dn) || (btnDown && !got && ms - lastReport > 250);   // no report for a while also counts as lifted
   if (got && dn) {
     lastTouchMs = ms;
-    if (!btnDown) { swallowTouch = !screenLit; btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (page == PAGE_BRIGHTNESS && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); preset = (page == PAGE_BRIGHTNESS && rui::presetAt(x, y) >= 0); }
+    if (!btnDown) { swallowTouch = !screenLit; btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (page == PAGE_BRIGHTNESS && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); preset = (page == PAGE_BRIGHTNESS && rui::presetAt(x, y) >= 0);
+      tripChip = (!swallowTouch && page == PAGE_TRIP) ? rui::tripChipAt(x, y) : -1; codeBtn = (!swallowTouch && page == PAGE_CODES) ? rui::codesButtonAt(x, y) : -1;   // a touch that only wakes the screen never presses a button
+      if (tripChip >= 0 || codeBtn >= 0) btnLongFired = true;                  // a button press: not a page tap, a swipe or the demo long press
+      holdStart = ms; clearFired = false; }
     lx = x; ly = y;
+    if (codeBtn == 1 && !clearFired && !swallowTouch) {                       // CLEAR has to be held (and never from a touch that woke the screen)
+      float pr = (ms - holdStart) / (float)CODE_CLEAR_HOLD_MS; codeClearProg = pr > 1 ? 1 : pr;
+      if (pr >= 1) { clearFired = true; codeReq = 2; }
+    }
     if (preset) { btnLongFired = true; int pv = rui::presetAt(sx, sy); if (pv >= 0 && pv != backlightPct) setBacklight(pv); }
     else if (slider) { btnLongFired = true; int pct = rui::pctFromX(x); if (pct != backlightPct) setBacklight(pct); }   // live: the screen dims or brightens under the finger
     else if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
   } else if (release && btnDown) {
     btnDown = false;
-    if (swallowTouch) { swallowTouch = false; return; }      // this touch only woke the screen
+    if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = -1; codeClearProg = 0; return; }      // this touch only woke the screen
+    if (tripChip >= 0 || codeBtn >= 0) {
+      int tc = tripChip, cb = codeBtn; tripChip = codeBtn = -1; codeClearProg = 0;
+      if (tc >= 0 && rui::tripChipAt(lx, ly) == tc && (tc == 0 || tc <= tripChipsAvailable())) tripSel = tc;   // lifted on the same chip
+      if (cb == 0 && rui::codesButtonAt(lx, ly) == 0) { codeReq = 1; setCodeStatus("ASKING THE CAR...", UI_WHITE); }
+      return;
+    }
     if (preset) { preset = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }
     if (slider) { slider = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }   // keep the level across restarts
     int dx = lx - sx, dy = ly - sy;
@@ -926,7 +1057,6 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
 // Round-board dial pages (src/round_ui.h): sport cluster, analog tach, analog speedo, vitals rings.
 // ---------- Multi-value pages (arc / custom / quad / dual / gear): what they show ----------
 // Colours are built here with rui::rgb(): the short names WHITE / RED / YELLOW are macros in this file.
-static const uint16_t UI_WHITE = rui::rgb(240, 244, 255), UI_YELLOW = rui::rgb(255, 208, 50), UI_RED = rui::rgb(255, 60, 56), UI_ORANGE = rui::rgb(255, 120, 40);
 
 // Boost = intake manifold pressure (MAP) minus barometric pressure, in kPa. Barometric falls back to 101.3 kPa (sea level).
 static bool boostValue(float *kpa) {
@@ -1003,6 +1133,84 @@ static void fillStyleData(rui::Data &d, int p) {
   if (p == PAGE_GEAR) d.gear = gearShown();
 }
 
+// >>> report-ui-begin
+// Feeds the trip tracker once a second (UI task, also while the screen is dark) and reacts to its events.
+static report::CodeList tripBase; static bool haveTripBase = false;       // the codes that were there when the trip started
+static void tripTick(uint32_t now) {
+  static uint32_t last = 0, lastLive = 0; static bool wasDemo = false;
+  if (demo) {                                                                // made-up values must never become a trip
+    if (!wasDemo) { uint16_t sq = tracker.nextSeq(); tracker = trip::Tracker(tripConfig()); tracker.setNextSeq(sq); }
+    wasDemo = true; return;
+  }
+  wasDemo = false;
+  if (now - last < 1000) return;
+  last = now;
+  trip::Sample sm; sm.now = now;
+  sm.rpmFresh = fresh(tsRpm, FAST_FRESH_MS); sm.rpm = rpm; sm.speedFresh = fresh(tsMph, FAST_FRESH_MS); sm.mph = mph;
+  sm.coolFresh = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30; sm.coolC = coolantC;
+  sm.intakeFresh = gOk[G_INTAKE] && fresh(gTs[G_INTAKE], GAUGE_FRESH_MS); sm.intakeC = (int)lroundf(gVal[G_INTAKE]);
+  sm.battFresh = gOk[G_BATT] && fresh(gTs[G_BATT], GAUGE_FRESH_MS); sm.battV = gVal[G_BATT];
+  float kpa = 0; sm.boostFresh = boostValue(&kpa); sm.boostPsi = kpa * 0.145038f;
+  sm.fuelFresh = gOk[G_FUEL] && fresh(gTs[G_FUEL], GAUGE_FRESH_MS); sm.fuelPct = gVal[G_FUEL];
+  trip::Tracker::Event ev = tracker.update(sm);
+  if (ev == trip::Tracker::T_STARTED) {
+    portENTER_CRITICAL(&codeMux); tripBase = codeList; haveTripBase = codeList.answered; portEXIT_CRITICAL(&codeMux);
+    codeReq = 1;                                                             // a fresh look at the codes at the start of the drive
+    Serial.println("trip started");
+  }
+  if (tracker.active()) {
+    portENTER_CRITICAL(&codeMux);                                            // a code that was not there at the start is NEW for this trip
+    if (!haveTripBase && codeList.answered) { tripBase = codeList; haveTripBase = true; }
+    for (int i = 0; i < codeList.n; i++) { bool isNew = haveTripBase && tripBase.find(codeList.code[i]) < 0; codeList.isNew[i] = isNew; if (isNew) tracker.addNewCode(codeList.code[i]); }
+    portEXIT_CRITICAL(&codeMux);
+    if (now - lastLive >= 60000) { lastLive = now; liveSnap = tracker.live(); liveSaveReq = true; }
+  }
+  if (ev == trip::Tracker::T_ENDED) {
+    trip::Record r;
+    if (tracker.takeFinished(&r)) {
+      portENTER_CRITICAL(&tripMux); tripHist.push(r); portEXIT_CRITICAL(&tripMux);
+      tripSaveReq = true;
+      Serial.printf("trip ended: %u s, %.2f mi, top %u mph, rating %u\n", (unsigned)r.durationS, r.distCentiMi / 100.0f, (unsigned)r.topMph, (unsigned)r.rating);
+#if DRIVE_REPORT_AUTO_OPEN
+      tripSel = 0; page = PAGE_TRIP; forceDraw = true; lastTouchMs = now;   // show the report; the touch time keeps the screen on for a while
+#endif
+    }
+  } else if (ev == trip::Tracker::T_DISCARDED) Serial.println("trip discarded (too short)");
+}
+
+// What the two report pages show. Demo mode shows made-up content and never touches the car.
+static void fillReportData(rui::Data &d, int p) {
+  report::Units u; u.mph = true; u.tempF = TEMP_UNIT_F; u.psi = BOOST_UNIT_PSI;
+  if (p == PAGE_TRIP) {
+    static trip::Record demoRec; static bool demoInit = false;
+    if (!demoInit) { demoInit = true; demoRec.seq = 12; demoRec.durationS = 1980; demoRec.idleS = 150; demoRec.distCentiMi = 1120; demoRec.topMph = 68; demoRec.avgMph = 34; demoRec.maxRpm = 4300; demoRec.maxCoolC = 96; demoRec.maxIntakeC = 41;
+      demoRec.peakBoostDeciPsi = -18; demoRec.minBattDeciV = 132; demoRec.maxBattDeciV = 142; demoRec.hardBrakes = 1; demoRec.hardLaunches = 2; demoRec.rating = 88; }
+    const trip::Record *r = nullptr; trip::Record live; bool isLive = false; int chips = tripChipsAvailable();
+    if (tripSel > chips) tripSel = 0;
+    if (demo) { r = &demoRec; chips = 3; if (tripSel > chips) tripSel = 0; }
+    else if (tracker.active() && tripSel == 0) { live = tracker.live(); r = &live; isLive = true; }
+    else r = tripHist.get(tracker.active() ? tripSel - 1 : tripSel);
+    report::tripView(d.trip, r, isLive, tripSel, chips, u);
+    d.ver = tripSel + 8 * chips + 64 * (isLive ? 1 : 0) + 128 * (r ? 1 : 0) + 256 * (int)tripHist.nextSeq;
+  } else if (p == PAGE_CODES) {
+    report::CodeList cl; char st[40]; uint16_t sc; uint32_t sa;
+    if (demo) {
+      cl.answered = true; cl.mil = true; cl.add("P0420", 0); cl.add("P0171", 1); cl.add("P0301", 0); cl.isNew[cl.find("P0301")] = true;
+      snprintf(st, sizeof(st), "DEMO: NOTHING IS SENT"); sc = UI_YELLOW; sa = millis();
+    } else {
+      portENTER_CRITICAL(&codeMux); cl = codeList; snprintf(st, sizeof(st), "%s", codeStatus); sc = codeStatusCol; sa = codeStatusAt; portEXIT_CRITICAL(&codeMux);
+      if (!linked) { snprintf(st, sizeof(st), "NOT CONNECTED TO THE CAR"); sc = UI_ORANGE; sa = millis(); }
+    }
+    uint32_t v = report::codesView(d.codes, cl);
+    d.ver = (int)(v & 0x3FFFFFFF);
+    d.codes.clearProg = codeClearProg;
+    if (codeClearProg > 0) { snprintf(d.codes.status, sizeof(d.codes.status), "KEEP HOLDING TO CLEAR"); d.codes.statusCol = UI_ORANGE; }
+    else if (st[0] && (millis() - sa < 10000 || !strcmp(st, "READING...") || !strcmp(st, "CLEARING..."))) { snprintf(d.codes.status, sizeof(d.codes.status), "%s", st); d.codes.statusCol = sc; }
+    else { snprintf(d.codes.status, sizeof(d.codes.status), "HOLD CLEAR 3 SECONDS TO ERASE"); d.codes.statusCol = rui::DIM; }
+  }
+}
+// <<< report-ui-end
+
 static void roundDialFrame(int p, uint32_t now) {
   static bool started = false;
   if (!started) {
@@ -1020,8 +1228,9 @@ static void roundDialFrame(int p, uint32_t now) {
   d.battCritV = BATT_CRIT_V; d.battLowV = BATT_LOW_OFF_V; d.unitF = TEMP_UNIT_F;
   d.dotN = visibleCount(); d.dotCur = visibleIndex(page);
   fillStyleData(d, p);
+  fillReportData(d, p);
   int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : p == PAGE_ARC ? rui::PG_ARC
-         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : rui::PG_VITALS;
+         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_CODES ? rui::PG_CODES : rui::PG_VITALS;
   uint32_t t0 = micros();
   uint16_t *fb = fullCanvas->getFramebuffer();
   rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen
@@ -1066,6 +1275,7 @@ void uiTick() {
   if (!fresh(tsRpm, FAST_FRESH_MS)) rpm = 0;
   Mood m = computeMood();
   bool moodChanged = (int)m != lastMood;
+  tripTick(now);                                       // trips are tracked even while the screen is dark
 #if SCREEN_OFF_AFTER_MS > 0
   {   // engine off for a while: backlight off (the car's USB port stays powered). Car data or a touch lights it again.
     static bool everSeen = false; if (lastValidMs) everSeen = true;
@@ -1097,7 +1307,7 @@ void uiTick() {
 
   if (page == PAGE_FACE) {
     faceFrame(m, moodChanged, forceDraw || drawnPage != PAGE_FACE, now);
-  } else if (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_GEAR)) {
+  } else if (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_CODES)) {
     roundDialFrame(page, now);
   } else if (page == PAGE_BRIGHTNESS) {
     roundBrightnessFrame(forceDraw || drawnPage != PAGE_BRIGHTNESS);
@@ -1115,7 +1325,7 @@ static void uiTask(void *) {
   for (;;) {
     uint32_t t0 = millis();
     uiTick();
-    uint32_t period = !screenLit ? 250 : (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_GEAR)) ? (1000 / DIAL_FPS) : 30;
+    uint32_t period = !screenLit ? 250 : (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_CODES)) ? (1000 / DIAL_FPS) : 30;
     uint32_t used = millis() - t0;
     vTaskDelay(pdMS_TO_TICKS(used >= period ? 1 : period - used));
   }
@@ -1222,6 +1432,7 @@ bool connectAdapter() {
   Serial.printf("init: filter=%s count=%s\n", useFilter ? "on" : "off", useCount ? "on" : "off");
   lastValidMs = 0;
   linked = true;
+  codeReq = 1; lastMilCount = -1;                       // read the fault codes right after connecting
   clearStatus();
   return true;
 }
@@ -1248,6 +1459,7 @@ void setup() {
   character.startIntro(millis(), bootQuickRestart);
 #endif
   sdInit();
+  loadTrips();
   NimBLEDevice::init("");
   Serial.printf("Tachi starting [%s, built %s %s], demo mode %s\n", FW_TAG, __DATE__, __TIME__, demo ? "ON" : "OFF");
   xTaskCreatePinnedToCore(uiTask, "ui", 10240, nullptr, 2, nullptr, 1);   // display + button + animation
@@ -1301,5 +1513,7 @@ void loop() {
     if (page == PAGE_FACE) reqPerSecFace = reqPerSec;   // polling rate while the animation is running
     lastCount = pollCount;
   }
+  codeTick();                                               // fault codes: UI requests and the periodic check-engine check
+  persistTick();                                            // save finished trips and the running trip
   sdLogTick();
 }
