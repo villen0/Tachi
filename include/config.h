@@ -83,6 +83,8 @@
 // Timing
 #define SLOW_EVERY         4      // one background poll (coolant / oil / extra gauges) every N speed+RPM polls
 #define STALE_AFTER_MS     5000   // no valid data this long -> sleepy
+#define SCREEN_OFF_AFTER_MS 120000 // no car data this long (engine off) -> backlight off; 0 = never turn it off. Data or a touch wakes it
+#define SCREEN_WAKE_MS      30000  // a touch keeps the screen on this long when there is still no car data
 #define FACE_SETTLE_MS     10000  // after the welcome the face stays default this long (no mood change, no idle reaction)
 #define BOOT_SLEEP_GRACE_MS 25000 // after power-up the face stays awake this long while waiting for the first data
 #define RECONNECT_WAIT_MS  3000

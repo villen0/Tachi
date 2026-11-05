@@ -14,6 +14,7 @@
 #include "round_ui.h"   // round dial pages: sport cluster, analog tach / speedo, vitals rings
 #include "obd_parse.h"
 #include "car_events.h"
+#include "screen_sleep.h"
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -694,14 +695,19 @@ static volatile bool btnDown = false, btnLongFired = false;
 static volatile uint32_t btnDownMs = 0, btnLastEdgeMs = 0;
 static volatile uint8_t btnShortPresses = 0, btnPrevPresses = 0;   // taps / right swipes (previous page)
 
+static volatile uint32_t lastTouchMs = 0;       // last finger-down or BOOT press (wakes a sleeping screen)
+static volatile bool screenLit = true;          // false while the backlight is off because the car has been silent
+static volatile bool swallowTouch = false;      // the touch that woke the screen must not also act as a tap, swipe or long press
+
 void IRAM_ATTR onButtonEdge() {
   uint32_t ms = millis();
   if (ms - btnLastEdgeMs < 30) return;                 // contact bounce
   if (digitalRead(PIN_BUTTON) == LOW) {
-    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; btnLastEdgeMs = ms; }
+    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; btnLastEdgeMs = ms; lastTouchMs = ms; swallowTouch = !screenLit; }
   } else if (btnDown) {
     btnDown = false; btnLastEdgeMs = ms;
-    if (!btnLongFired && btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;
+    bool woke = swallowTouch; swallowTouch = false;
+    if (!woke && !btnLongFired && btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;
   }
 }
 
@@ -721,13 +727,15 @@ static void pollTouch() {
   if (got) lastReport = ms;
   bool release = (got && !dn) || (btnDown && !got && ms - lastReport > 250);   // no report for a while also counts as lifted
   if (got && dn) {
-    if (!btnDown) { btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (page == PAGE_BRIGHTNESS && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); preset = (page == PAGE_BRIGHTNESS && rui::presetAt(x, y) >= 0); }
+    lastTouchMs = ms;
+    if (!btnDown) { swallowTouch = !screenLit; btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (page == PAGE_BRIGHTNESS && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); preset = (page == PAGE_BRIGHTNESS && rui::presetAt(x, y) >= 0); }
     lx = x; ly = y;
     if (preset) { btnLongFired = true; int pv = rui::presetAt(sx, sy); if (pv >= 0 && pv != backlightPct) setBacklight(pv); }
     else if (slider) { btnLongFired = true; int pct = rui::pctFromX(x); if (pct != backlightPct) setBacklight(pct); }   // live: the screen dims or brightens under the finger
     else if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
   } else if (release && btnDown) {
     btnDown = false;
+    if (swallowTouch) { swallowTouch = false; return; }      // this touch only woke the screen
     if (preset) { preset = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }
     if (slider) { slider = false; saveBacklight(); Serial.printf("brightness %d %%\n", backlightPct); return; }   // keep the level across restarts
     int dx = lx - sx, dy = ly - sy;
@@ -742,7 +750,7 @@ static void pollTouch() {
 
 void handleButton() {
   pollTouch();
-  if (btnDown && !btnLongFired && millis() - btnDownMs >= LONG_PRESS_MS) {
+  if (btnDown && !btnLongFired && !swallowTouch && millis() - btnDownMs >= LONG_PRESS_MS) {
     btnLongFired = true;
     demo = !demo;
     Serial.printf("demo mode %s\n", demo ? "ON" : "OFF");
@@ -1058,6 +1066,23 @@ void uiTick() {
   if (!fresh(tsRpm, FAST_FRESH_MS)) rpm = 0;
   Mood m = computeMood();
   bool moodChanged = (int)m != lastMood;
+#if SCREEN_OFF_AFTER_MS > 0
+  {   // engine off for a while: backlight off (the car's USB port stays powered). Car data or a touch lights it again.
+    static bool everSeen = false; if (lastValidMs) everSeen = true;
+    static const screensleep::ScreenSleep sleeper([] {
+      screensleep::Config c;
+      c.staleMs = STALE_AFTER_MS; c.offAfterMs = SCREEN_OFF_AFTER_MS; c.wakeMs = SCREEN_WAKE_MS; c.bootGraceMs = BOOT_SLEEP_GRACE_MS;
+      return c;
+    }());
+    bool lit = sleeper.update(now, lastValidMs, everSeen, lastTouchMs, demo);
+    if (lit != screenLit) {
+      screenLit = lit;
+      if (lit) { backlightRestore(); forceDraw = true; drawnPage = -1; } else backlightOff();
+      Serial.printf("screen %s\n", lit ? "on" : "off");
+    }
+    if (!screenLit) { lastMood = (int)m; return; }                  // nothing is drawn while the screen is dark
+  }
+#endif
 
   // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
   static bool statusShown = false; static uint32_t shownStatusVer = 0;
@@ -1090,7 +1115,7 @@ static void uiTask(void *) {
   for (;;) {
     uint32_t t0 = millis();
     uiTick();
-    uint32_t period = (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_GEAR)) ? (1000 / DIAL_FPS) : 30;
+    uint32_t period = !screenLit ? 250 : (page == PAGE_FACE) ? (1000 / UI_FPS) : (page == PAGE_CLUSTER || (page >= PAGE_DIAL_TACH && page <= PAGE_GEAR)) ? (1000 / DIAL_FPS) : 30;
     uint32_t used = millis() - t0;
     vTaskDelay(pdMS_TO_TICKS(used >= period ? 1 : period - used));
   }

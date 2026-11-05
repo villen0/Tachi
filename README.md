@@ -110,3 +110,5 @@ Not included yet: sound, motion sensing, Wi-Fi.
 - If the adapter lacks a prompt `>` after some replies, commands will time out.
 - Ideas: a rev-match helper on the Gear page, sound (an external player on the UART header), IMU reactions, the Google Maps turn card.
 - Power only needs 5 V from USB. The board's operating temperature range is unchecked: avoid leaving it on a hot dash.
+
+**Screen sleep:** the car's USB port stays powered after the engine is off. After `SCREEN_OFF_AFTER_MS` (2 minutes) without car data the backlight goes fully dark and nothing is drawn; fresh car data lights it at once, and a touch or the BOOT button lights it for `SCREEN_WAKE_MS` (30 s). The touch that wakes the screen does not also change the page. The logic is `src/screen_sleep.h` (tested by `tools/tests/screen_sleep_test.cpp`). The board itself and Bluetooth keep running, so for zero draw use a switched USB cable or an ignition-switched fuse tap.

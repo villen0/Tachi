@@ -169,6 +169,10 @@ static void setBacklight(int pct) {
   int duty = (int)(1023.0f * powf(backlightPct / 100.0f, 1.8f) + 0.5f);    // gamma, so the low end has finer steps
   ledcWrite(PIN_LCD_BL, duty < 4 ? 4 : duty);
 }
+// Sleep: a true zero (setBacklight keeps a floor so the screen is never lost while it is being used). The saved level is untouched.
+static void backlightOff() { ledcWrite(PIN_LCD_BL, 0); }
+static void backlightRestore() { setBacklight(backlightPct); }
+
 
 // Whole bring-up of the round board: I2C, expander, panel reset, ST7701 init, RGB panel, backlight.
 static bool roundDisplayInit() {
