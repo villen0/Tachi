@@ -59,6 +59,8 @@ int main() {
   CHECK(dtc::describe("P1234") == nullptr);
   CHECK(dtc::describe("B0123") == nullptr);
   for (const dtc::Text &t : dtc::TEXTS) { CHECK(strlen(t.code) == 5); CHECK(strlen(t.text) <= 28); }       // all fit the screen
+  // every character of every description exists in the small screen font (letters are drawn in capitals), so nothing is silently dropped
+  { const char *ok = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-%/+>?, "; for (const dtc::Text &t : dtc::TEXTS) for (const char *q = t.text; *q; q++) { char u = (*q >= 'a' && *q <= 'z') ? (char)(*q - 32) : *q; CHECK(strchr(ok, u) != nullptr); } }
   // all table codes are unique
   for (const dtc::Text &a : dtc::TEXTS) { int same = 0; for (const dtc::Text &b : dtc::TEXTS) if (!strcmp(a.code, b.code)) same++; CHECK(same == 1); }
   printf("%d checks, %d failed\n", checks, fails);

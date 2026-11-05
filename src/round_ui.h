@@ -19,7 +19,7 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_CODES, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -130,11 +130,33 @@ inline void text(uint16_t *b, const Font &f, const char *s, int x, int y, uint16
 inline void textC(uint16_t *b, const Font &f, const char *s, int cx, int y, uint16_t col) { text(b, f, s, cx - textW(f, s) / 2, y, col); }
 
 // ---- data the pages show ------------------------------------------------------------------------------------------
-enum Icon : uint8_t { IC_NONE = 0, IC_THERM, IC_AIR, IC_BATT, IC_FUEL, IC_LOAD, IC_BOOST, IC_THROTTLE };
+enum Icon : uint8_t { IC_NONE = 0, IC_THERM, IC_AIR, IC_BATT, IC_FUEL, IC_LOAD, IC_BOOST, IC_THROTTLE, IC_ENGINE };
 struct Readout {                 // one value on the multi-value pages (custom, quad, dual)
   bool have = false; uint8_t icon = IC_NONE; char label[14] = ""; char text[12] = "--"; char unit[8] = ""; uint16_t col = 0xFFFF; float frac = 0;
 };
+// Drive report page: the caller formats everything (units, rounding), this code only lays it out.
+struct TripTile { char label[12] = ""; char value[14] = "--"; uint16_t col = 0xFFFF; };
+struct TripView {
+  bool have = false, live = false;       // have: there is a trip to show; live: it is still being driven
+  int rating = 0; char grade = '-';
+  char title[16] = "DRIVE REPORT";
+  TripTile t[6];                         // top speed, max rpm, max coolant, peak boost, volts, new codes
+  char foot1[40] = "", foot2[40] = "";
+  int sel = 0, nSaved = 0;               // chips: 0 = this trip, 1..nSaved = earlier trips
+};
+// Fault codes page.
+struct CodeRow { char code[6] = ""; char desc[30] = ""; char tag[8] = ""; uint16_t col = 0xFFFF; };
+struct CodesView {
+  bool mil = false, answered = false;    // check-engine light on; the car has answered a code request
+  int total = 0, nRows = 0;              // codes found (nRows of them have a row, at most 4)
+  CodeRow row[4];
+  char status[40] = ""; uint16_t statusCol = 0xFFFF;
+  float clearProg = 0;                   // 0..1 while the CLEAR button is being held
+};
 struct Data {
+  TripView trip; CodesView codes;
+  int ver = 0;                           // must change whenever any STATIC content changes (trip title/labels/chips/live, code rows/tags/mil/answered/total) so the page is rebuilt;
+                                         // live numbers (tile values, footers, status, clear progress) are redrawn every frame without it
   // multi-value pages (filled by the caller): the arc gauge, up to four readouts, the page heading and the estimated gear
   bool haveArc = false; float arcVal = 0, arcMin = -1, arcMax = 2, arcMajor = 0.5f, arcMinor = 0.1f, arcRed = 1.6f; int arcDec = 1;
   char arcText[12] = "--", arcUnit[8] = "", arcLabel[14] = "", title[14] = "";
@@ -155,7 +177,7 @@ struct Data {
 constexpr int MAX_RINGS = 4, MAX_SEG = 90, MAP_CAP = 36000;
 struct Ring { float cx, cy, r0, r1; int nseg; float segDeg, gapDeg; uint16_t lit[MAX_SEG], dim[MAX_SEG]; int cur, prev; bool valid; };
 
-struct Slot { char s[12]; uint16_t col; int16_t x0, x1; };   // x0..x1: where the text was drawn
+struct Slot { char s[44]; uint16_t col; int16_t x0, x1; };   // x0..x1: where the text was drawn
 struct SBox { int16_t x0, y0, x1, y1; };
 struct State {
   bool ok = false; uint16_t *bg = nullptr; uint32_t *map = nullptr; int nmap = 0;
@@ -168,6 +190,7 @@ struct State {
   int16_t nmin[H], nmax[H]; int nr0 = 0, nr1 = -1;   // per row: where the needle was drawn last frame
   SBox sbox[MAX_RINGS][MAX_SEG];            // bounding box of every ring segment
   int16_t barPx[2] = {-1, -1}; uint16_t barCol[2] = {0, 0};   // dual page: fill width and colour last drawn
+  int ver = -1;                                                // content version last built (Data::ver)
   int8_t brChip = -2;                                          // brightness page: which preset chip was drawn lit (-1 none, -2 not drawn yet)
 };
 inline State &st() { static State s; return s; }
@@ -268,6 +291,30 @@ inline void setRingColors(Ring &R, uint16_t (*f)(float frac, const void *), cons
   for (int i = 0; i < R.nseg; i++) { R.lit[i] = f((i + 0.5f) / R.nseg, ctx); R.dim[i] = dimmed(R.lit[i]); }
 }
 
+// ---- drive report / fault codes layout constants and touch zones -----------------------------------------------------
+constexpr int TR_CHIP_Y = 388, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
+// The six tiles: three equal ones on top, below them a narrow boost tile, a wide volts tile (a "13.1-14.2" range) and a narrow codes tile.
+inline void tripTile(int i, int *cx, int *y, int *w) {
+  static const int xs[6] = {CX - 128, CX, CX + 128, 87, 246, 399}, ws[6] = {120, 120, 120, 112, 190, 100};
+  *cx = xs[i]; *w = ws[i]; *y = i < 3 ? 190 : 266;
+}
+inline int tripChipW(int k) { return k == 0 ? 58 : 36; }                    // chip 0 is "NOW", then 1..5
+inline int tripChipX(int k) { int total = 58 + 5 * 36 + 5 * TR_CHIP_GAP, x = CX - total / 2; for (int i = 0; i < k; i++) x += tripChipW(i) + TR_CHIP_GAP; return x; }
+// which chip (0 = this trip, 1..5 = earlier trips) is under the finger, or -1
+inline int tripChipAt(int x, int y) {
+  if (y < TR_CHIP_Y - 8 || y > TR_CHIP_Y + TR_CHIP_H + 8) return -1;
+  for (int k = 0; k < 6; k++) { int x0 = tripChipX(k); if (x >= x0 - 4 && x <= x0 + tripChipW(k) + 4) return k; }
+  return -1;
+}
+constexpr int CD_BTN_Y = 354, CD_BTN_H = 40, CD_BTN_W = 150;
+inline int cdBtnX(int k) { return k == 0 ? CX - 160 : CX + 10; }              // 0 = READ AGAIN, 1 = CLEAR (hold)
+inline int codesButtonAt(int x, int y) {
+  if (y < CD_BTN_Y - 8 || y > CD_BTN_Y + CD_BTN_H + 8) return -1;
+  for (int k = 0; k < 2; k++) if (x >= cdBtnX(k) - 6 && x <= cdBtnX(k) + CD_BTN_W + 6) return k;
+  return -1;
+}
+inline void chip(uint16_t *b, int x, int y, int w, int h, bool on, uint16_t col, const char *label);   // defined with the brightness page
+
 // ---- small icons for the multi-value pages (drawn with the primitives above, about 24 px) --------------------------
 inline void iconDraw(uint16_t *b, int type, float x, float y, uint16_t c) {
   switch (type) {
@@ -295,6 +342,11 @@ inline void iconDraw(uint16_t *b, int type, float x, float y, uint16_t c) {
       discAA(b, x, y, 2.4f, c); break;
     case IC_THROTTLE:
       taper(b, x - 5, y + 10, x + 5, y - 9, 4.2f, 3.2f, c); taper(b, x - 9, y + 11, x + 3, y + 11, 1.2f, 1.2f, c); break;
+    case IC_ENGINE:
+      taper(b, x - 8, y - 3, x + 8, y - 3, 1.3f, 1.3f, c); taper(b, x - 8, y + 9, x + 8, y + 9, 1.3f, 1.3f, c);
+      taper(b, x - 8, y - 3, x - 8, y + 9, 1.3f, 1.3f, c); taper(b, x + 8, y - 3, x + 8, y + 9, 1.3f, 1.3f, c);
+      taper(b, x - 4, y - 8, x + 4, y - 8, 1.3f, 1.3f, c); taper(b, x - 4, y - 8, x - 4, y - 3, 1.3f, 1.3f, c); taper(b, x + 4, y - 8, x + 4, y - 3, 1.3f, 1.3f, c);
+      taper(b, x - 8, y + 3, x - 12, y + 3, 1.3f, 1.3f, c); taper(b, x + 8, y + 3, x + 12, y + 3, 1.3f, 1.3f, c); break;
     default: break;
   }
 }
@@ -348,6 +400,37 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       const int bx0 = CX - 120, by = y0 + 88;
       taper(b, bx0 + 5, by + 5, bx0 + 235, by + 5, 5, 5, PANEL); discAA(b, bx0 + 5, by + 5, 5, PANEL); discAA(b, bx0 + 235, by + 5, 5, PANEL);
     }
+  } else if (pg == PG_TRIP) {
+    const TripView &T = d.trip;
+    textC(b, F_LBL, T.title, CX, 70, CYAN);
+    textC(b, F_LBL, "RATING", CX + 70, 94, DIM);
+    textC(b, F_LBL, "/100", CX + 70, 166, DIM);
+    for (int i = 0; i < 6; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); pill(b, cx, y, w, 68, T.t[i].label); }
+    for (int k = 0; k <= 5; k++) {
+      char l[8]; if (k == 0) snprintf(l, sizeof(l), T.live ? "NOW" : "LAST"); else snprintf(l, sizeof(l), "%d", k);
+      bool avail = k == 0 ? true : k <= T.nSaved;
+      chip(b, tripChipX(k), TR_CHIP_Y, tripChipW(k), TR_CHIP_H, k == T.sel, avail ? CYAN : FAINT, l);
+    }
+  } else if (pg == PG_CODES) {
+    const CodesView &C = d.codes;
+    textC(b, F_LBL, "FAULT CODES", CX, 70, CYAN);
+    iconDraw(b, IC_ENGINE, CX - 108, 112, C.mil ? ORANGE : DIM);
+    text(b, F_TTL, "CHECK ENGINE", CX - 82, 98, WHITE);
+    text(b, F_TTL, C.mil ? "ON" : "OFF", CX - 82 + textW(F_TTL, "CHECK ENGINE") + 14, 98, C.mil ? ORANGE : MINT);
+    char hl[36];
+    if (!C.answered) snprintf(hl, sizeof(hl), "NOT READ YET"); else if (C.total == 0) snprintf(hl, sizeof(hl), "NO CODES STORED"); else snprintf(hl, sizeof(hl), "%d CODE%s FOUND", C.total, C.total == 1 ? "" : "S");
+    text(b, F_SML, hl, CX - 82, 122, C.total > 0 ? YELLOW : DIM);
+    for (int i = 0; i < C.nRows && i < 4; i++) {
+      const int y0 = 150 + 50 * i;
+      text(b, F_TTL, C.row[i].code, CX - 150, y0, C.row[i].col);
+      if (C.row[i].tag[0]) text(b, F_SML, C.row[i].tag, CX + 150 - textW(F_SML, C.row[i].tag), y0 + 3, C.row[i].col);
+      text(b, F_SML, C.row[i].desc[0] ? C.row[i].desc : "SEE SERVICE MANUAL", CX - 150, y0 + 24, DIM);
+      taper(b, CX - 150, y0 + 42, CX + 150, y0 + 42, 0.6f, 0.6f, FAINT);
+    }
+    if (C.nRows == 0) textC(b, F_TTL, C.answered ? "ALL CLEAR" : "TAP READ AGAIN", CX, 230, C.answered ? MINT : DIM);
+    chip(b, cdBtnX(0), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, CYAN, "READ AGAIN");
+    chip(b, cdBtnX(1), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, RED, "CLEAR");
+    taper(b, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 8, cdBtnX(1) + CD_BTN_W - 6, CD_BTN_Y + CD_BTN_H + 8, 3, 3, PANEL);
   } else {   // PG_GEAR: the ladder 1..6, the current gear drawn large, the speed below
     textC(b, F_LBL, "GEAR", CX, 92, DIM);
     for (int g = 0; g < 6; g++) { snprintf(t, sizeof(t), "%d", g + 1); textC(b, F_MED, t, CX + (int)((g - 2.5f) * 48), 120, FAINT); }
@@ -471,6 +554,19 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
       num(S, fb, i, F_NUM, d.rd[i].have ? d.rd[i].text : none, CX, y0 + 32, 0, d.rd[i].have ? d.rd[i].col : DIM);
       barFill(S, fb, i, CX - 120, y0 + 88, 240, 10, d.rd[i].have ? d.rd[i].frac : 0, d.rd[i].col);
     }
+  } else if (pg == PG_TRIP) {
+    const TripView &T = d.trip;
+    char g[2] = {T.have ? T.grade : '-', 0}; char r[8]; if (T.have) snprintf(r, sizeof(r), "%d", T.rating); else snprintf(r, sizeof(r), "--");
+    uint16_t gc = !T.have ? DIM : (T.rating >= 80 ? MINT : (T.rating >= 60 ? YELLOW : RED));
+    num(S, fb, 0, F_HUGE, g, CX - 70, 96, 0, gc);
+    num(S, fb, 1, F_BIG, r, CX + 70, 116, 0, gc);
+    for (int i = 0; i < 6; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); const Font &f = i == 4 ? F_MED : F_NUM; num(S, fb, 2 + i, f, T.have ? T.t[i].value : "--", cx, y + 30 + (F_NUM.h - f.h) / 2, 0, T.have ? T.t[i].col : DIM); }
+    num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 350, 0, DIM);
+    num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 368, 0, DIM);
+  } else if (pg == PG_CODES) {
+    const CodesView &C = d.codes;
+    num(S, fb, 0, F_SML, C.status, CX, 418, 0, C.statusCol);
+    barFill(S, fb, 0, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 5, CD_BTN_W - 12, 6, C.clearProg, RED);
   } else {   // PG_GEAR
     char g[2] = {d.gear, 0}; const bool known = d.gear >= '1' && d.gear <= '6';
     num(S, fb, 0, F_HUGE, g, CX, 178, 0, known ? WHITE : DIM);
@@ -485,10 +581,10 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
   State &S = st(); if (!S.ok) return;
   float k = S.lastT ? 1.0f - expf(-(float)(now - S.lastT) / 90.0f) : 1.0f; S.lastT = now;
   S.rpm += (d.rpm - S.rpm) * k; S.mph += (d.mph - S.mph) * k;
-  if (full || pg != S.page || d.dotN != S.dotN || d.dotCur != S.dotCur || d.unitF != S.unitF || d.redline != S.redline) {
+  if (full || pg != S.page || d.dotN != S.dotN || d.dotCur != S.dotCur || d.unitF != S.unitF || d.redline != S.redline || d.ver != S.ver) {
     buildPage(S, pg, d);
     memcpy(fb, S.bg, (size_t)W * H * 2);
-    S.page = pg; S.dotN = d.dotN; S.dotCur = d.dotCur; S.unitF = d.unitF; S.redline = d.redline;
+    S.page = pg; S.dotN = d.dotN; S.dotCur = d.dotCur; S.unitF = d.unitF; S.redline = d.redline; S.ver = d.ver;
     for (Slot &s : S.slot) { s.s[0] = '\x01'; s.s[1] = 0; s.col = 0; s.x0 = 0; s.x1 = -1; }
     S.needle = {0, 0, -1, -1}; S.needleAng = 1e9f; S.forceRings = true; S.nr0 = 0; S.nr1 = -1; S.barPx[0] = S.barPx[1] = -1;
     mark(S, 0, 0, W - 1, H - 1);

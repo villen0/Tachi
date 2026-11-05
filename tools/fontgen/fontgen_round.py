@@ -5,7 +5,7 @@ import sys
 from fontgen import fit_size, render
 
 CLASSES = [  # name, chars, cap height px, stroke, gap px
-    ("HUGE", "0123456789N-", 68, 0, 3),
+    ("HUGE", "0123456789N-ABCDF", 68, 0, 3),
     ("BIG", "0123456789.-", 44, 0, 2),
     ("NUM", "0123456789.-%/", 26, 0, 2),
     ("MED", "0123456789.-%/", 21, 0, 2),
