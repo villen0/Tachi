@@ -118,7 +118,8 @@ static bool boostVisible() { return gSupported[G_MAP] && (gOk[G_MAP] || gFails[G
 static bool pageVisible(int p) {
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !dialFailed;
   if (p >= PAGE_DIAL_TACH && p <= PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
-  if (p == PAGE_ARC || p == PAGE_CUSTOM) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
+  if (p == PAGE_CUSTOM) return SHOW_PAGE_CUSTOM && SHOW_PAGE_STYLES && !dialFailed && boostVisible();
+  if (p == PAGE_ARC) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p >= PAGE_QUAD && p <= PAGE_GEAR) return SHOW_PAGE_STYLES && !dialFailed;
   if (p == PAGE_TRIP) return SHOW_PAGE_TRIP && !dialFailed;
   if (p == PAGE_CODES) return SHOW_PAGE_CODES && !dialFailed;
