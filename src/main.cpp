@@ -83,8 +83,17 @@ static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP 
 
 // The user's settings (units, warning levels, theme): loaded in setup(), changed on the Settings pages, saved by the main loop (cfgSaveReq).
 static settings::Settings cfg;
-static void applyLook() {                            // the theme's accent colours the plain Tachi faces too
+// Face page background: a gradient from the top colour to the bottom colour (0..255). Classic keeps the original navy / indigo; the other
+// looks use a soft, muted version of the theme colour (the accent washed toward grey and kept dark, so the eyes stay the brightest thing).
+static float faceBgTop[3] = {5, 10, 26}, faceBgBot[3] = {20, 12, 46};
+static void applyLook() {                            // the theme's accent colours the plain Tachi faces and their background too
   rui::applyTheme(cfg.theme, cfg.mode);
+  if (cfg.theme == 0 && cfg.mode == 0) { const float t[3] = {5, 10, 26}, b[3] = {20, 12, 46}; for (int i = 0; i < 3; i++) { faceBgTop[i] = t[i]; faceBgBot[i] = b[i]; } }
+  else {
+    const float a[3] = {(float)rui::LOOK.accent.r, (float)rui::LOOK.accent.g, (float)rui::LOOK.accent.b};
+    const float grey = (a[0] + a[1] + a[2]) / 3.0f;
+    for (int i = 0; i < 3; i++) { float soft = a[i] * 0.75f + grey * 0.25f; faceBgTop[i] = 4 + soft * 0.13f; faceBgBot[i] = 6 + soft * 0.30f; }
+  }
   mochi::setAccent(rui::LOOK.accent.r, rui::LOOK.accent.g, rui::LOOK.accent.b, cfg.theme == 0 && cfg.mode == 0);
 }
 static volatile uint32_t cfgGen = 1;                 // bumped on every change so the trip tracker and the event detector pick up new levels
@@ -730,7 +739,7 @@ static void paintFaceBg(int x0, int y0, int w, int h) {
   if (x0 + w > LCD_W) w = LCD_W - x0; if (y0 + h > LCD_H) h = LCD_H - y0;
   for (int y = y0; y < y0 + h; y++) {
     float f = (float)y / (LCD_H - 1);
-    int r12 = (int)((5 + 15 * f) * 16), g12 = (int)((10 + 2 * f) * 16), b12 = (int)((26 + 20 * f) * 16);   // deep navy at the top, indigo at the bottom (x16)
+    int r12 = (int)((faceBgTop[0] + (faceBgBot[0] - faceBgTop[0]) * f) * 16), g12 = (int)((faceBgTop[1] + (faceBgBot[1] - faceBgTop[1]) * f) * 16), b12 = (int)((faceBgTop[2] + (faceBgBot[2] - faceBgTop[2]) * f) * 16);   // the theme gradient (x16)
     uint16_t *row = fb + y * LCD_W, pat[4];
     for (int k = 0; k < 4; k++) {                                   // the dither repeats every 4 pixels: work out 4 colours per row, then copy
       int d = bay[y & 3][k];
