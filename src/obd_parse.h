@@ -80,6 +80,9 @@ inline int   tempC(int a) { return a - 40; }                       // 0105, 010F
 inline float percent(int a) { return a * 100.0f / 255.0f; }        // 0104, 0111, 012F
 inline float moduleVolts(int a, int b) { return (a * 256 + b) / 1000.0f; }   // 0142
 inline int   rpmOf(int a, int b) { return (a * 256 + b) / 4; }     // 010C
+inline int   torquePct(int a) { return a - 125; }                    // 0162: actual engine torque, percent of the reference torque (negative while engine braking)
+inline int   torqueRefNm(int a, int b) { return a * 256 + b; }       // 0163: reference torque in Nm
+inline float torqueNm(int pct, int refNm) { return pct * refNm / 100.0f; }
 inline int   mphOf(int a) { return (int)(a * 0.621f + 0.5f); }     // 010D (km/h -> mph)
 
 }  // namespace obd

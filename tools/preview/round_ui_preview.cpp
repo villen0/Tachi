@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
     strcpy(d.arcLabel, "BOOST"); strcpy(d.arcUnit, "PSI"); strcpy(d.title, pg == rui::PG_QUAD ? "ENGINE" : "TEMPS");
     d.arcMin = -20; d.arcMax = 30; d.arcMajor = 10; d.arcMinor = 2; d.arcRed = 24; d.arcDec = 0;
     float boost = c.rpm > 6000 ? 26.0f : (c.rpm > 0 ? 9.5f : -11.0f); d.haveArc = true; d.arcVal = boost; snprintf(d.arcText, sizeof(d.arcText), "%.1f", boost);
-    const char *lab[4] = {"COOLANT", "INTAKE", "BATTERY", "LOAD"}, *unit[4] = {"F", "F", "V", "%"}, *txt[4] = {"195", "88", "13.6", "42"}; float fr[4] = {0.62f, 0.3f, 0.7f, 0.42f};
+    const char *lab[4] = {"TORQUE", "INTAKE", "FUEL", "LOAD"}, *unit[4] = {"LB-FT", "F", "%", "%"}, *txt[4] = {"195", "88", "13.6", "42"}; float fr[4] = {0.62f, 0.3f, 0.7f, 0.42f};
     for (int k = 0; k < 4; k++) { strcpy(d.rd[k].label, lab[k]); strcpy(d.rd[k].unit, unit[k]); strcpy(d.rd[k].text, txt[k]); d.rd[k].icon = k == 0 ? rui::IC_THERM : k == 1 ? rui::IC_AIR : k == 2 ? rui::IC_BATT : rui::IC_LOAD; d.rd[k].have = true; d.rd[k].frac = fr[k]; d.rd[k].col = k == 1 ? rui::ORANGE : rui::WHITE; }
     if (pg == rui::PG_DUAL) { strcpy(d.rd[1].label, "OIL TEMP"); d.rd[1].icon = rui::IC_BOOST; }
     d.gear = c.rpm > 6000 ? '5' : (c.rpm > 0 ? '3' : 'N');

@@ -51,7 +51,7 @@
 #define CODE_CLEAR_HOLD_MS 3000    // how long CLEAR has to be held
 #define CODE_CHECK_MS      30000   // how often the check-engine status (0101) is checked while connected
 #define BOOST_UNIT_PSI     1   // boost in psi (1) or bar (0)
-// What the multi-value pages show. Pick from: RD_COOL RD_INTAKE RD_BATT RD_FUEL RD_LOAD RD_THROTTLE RD_AMBIENT RD_BOOST
+// What the multi-value pages show. Pick from: RD_COOL RD_INTAKE RD_BATT RD_FUEL RD_LOAD RD_THROTTLE RD_AMBIENT RD_BOOST RD_TORQUE
 #define RD_COOL 0
 #define RD_INTAKE 1
 #define RD_BATT 2
@@ -60,8 +60,9 @@
 #define RD_THROTTLE 5
 #define RD_AMBIENT 6
 #define RD_BOOST 7
+#define RD_TORQUE 8   // engine torque (needs the car to answer PID 62, ideally 63 too for Nm / lb-ft; otherwise shows percent of the reference torque)
 #define CUSTOM_ROWS {RD_COOL, RD_INTAKE, RD_BATT}            // the three readouts under the boost number
-#define QUAD_CELLS  {RD_COOL, RD_INTAKE, RD_BATT, RD_LOAD}   // the four values of the quad page
+#define QUAD_CELLS  {RD_TORQUE, RD_INTAKE, RD_FUEL, RD_LOAD}   // the four values of the quad page
 #define DUAL_ROWS   {RD_COOL, RD_INTAKE}                     // the two values with bars
 #define DIAL_FPS          30   // target frame rate of the dial pages
 #define SWIPE_NEXT_ON_RIGHT 0  // 1 = swipe right goes to the next page, 0 = swipe left goes to the next page (like a phone)

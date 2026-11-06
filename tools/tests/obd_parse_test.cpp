@@ -62,6 +62,12 @@ int main() {
   CHECK(obd::dataBytes("410F3C", 0x0F, 1, b) && obd::tempC(b[0]) == 20);
   CHECK(obd::dataBytes("414652", 0x46, 1, b) && obd::tempC(b[0]) == 42);
   CHECK(obd::dataBytes("4111FF", 0x11, 1, b) && fabsf(obd::percent(b[0]) - 100.0f) < 0.01f);
+  // --- torque (0162 percent of reference, 0163 reference Nm) ---
+  CHECK(obd::dataBytes("41627D", 0x62, 1, b) && obd::torquePct(b[0]) == 0);          // 0x7D = 125 -> 0 %
+  CHECK(obd::dataBytes("4162C8", 0x62, 1, b) && obd::torquePct(b[0]) == 75);
+  CHECK(obd::dataBytes("41626E", 0x62, 1, b) && obd::torquePct(b[0]) == -15);        // engine braking
+  CHECK(obd::dataBytes("41630118", 0x63, 2, b) && obd::torqueRefNm(b[0], b[1]) == 280);
+  CHECK(fabsf(obd::torqueNm(50, 280) - 140.0f) < 0.01f && fabsf(obd::torqueNm(-10, 280) + 28.0f) < 0.01f);
   printf("%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;
 }

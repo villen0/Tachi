@@ -114,9 +114,9 @@ volatile int page = PAGE_FACE;       // a tap or swipe changes the page (see pag
 
 // ---------- Extra car-data gauges (battery, air temps, fuel, throttle, load, boost) ----------
 // Which of them the car answers is read at connect time (supported-PID bitmaps); the dial pages show what is available.
-enum Gauge { G_BATT, G_INTAKE, G_AMBIENT, G_FUEL, G_THROTTLE, G_LOAD, G_MAP, G_BARO, G_COUNT };
-static const uint8_t GAUGE_PID[G_COUNT] = {0 /* adapter voltage, ATRV */, 0x0F, 0x46, 0x2F, 0x11, 0x04, 0x0B /* MAP: boost */, 0x33 /* barometric */};
-static float gVal[G_COUNT];                       // battery V, temps in deg C, others in percent
+enum Gauge { G_BATT, G_INTAKE, G_AMBIENT, G_FUEL, G_THROTTLE, G_LOAD, G_MAP, G_BARO, G_TORQUE, G_TORQREF, G_COUNT };
+static const uint8_t GAUGE_PID[G_COUNT] = {0 /* adapter voltage, ATRV */, 0x0F, 0x46, 0x2F, 0x11, 0x04, 0x0B /* MAP: boost */, 0x33 /* barometric */, 0x62 /* actual torque, % of reference */, 0x63 /* reference torque, Nm */};
+static float gVal[G_COUNT];                       // battery V, temps in deg C, torque in % of reference (can be negative) and the reference in Nm, MAP / BARO in kPa, others in percent
 static uint32_t gTs[G_COUNT], gLastTry[G_COUNT];
 static uint8_t gFails[G_COUNT];
 static bool gSupported[G_COUNT], gOk[G_COUNT];    // gOk: answered at least once
@@ -370,8 +370,10 @@ static void pollGauge(int g) {
   } else {
     char cmd[8]; snprintf(cmd, sizeof(cmd), "01%02X", GAUGE_PID[g]);
     String r = obdQuery(cmd);
-    if (obd::dataBytes(r.c_str(), GAUGE_PID[g], 1, b)) {
-      gVal[g] = (g == G_INTAKE || g == G_AMBIENT) ? (float)obd::tempC(b[0]) : (g == G_MAP || g == G_BARO) ? (float)b[0] : obd::percent(b[0]);   // MAP, BARO: kPa
+    if (g == G_TORQREF) {
+      if (obd::dataBytes(r.c_str(), GAUGE_PID[g], 2, b)) { gVal[g] = (float)obd::torqueRefNm(b[0], b[1]); ok = true; }
+    } else if (obd::dataBytes(r.c_str(), GAUGE_PID[g], 1, b)) {
+      gVal[g] = (g == G_INTAKE || g == G_AMBIENT) ? (float)obd::tempC(b[0]) : (g == G_MAP || g == G_BARO) ? (float)b[0] : g == G_TORQUE ? (float)obd::torquePct(b[0]) : obd::percent(b[0]);   // MAP, BARO: kPa
       ok = true;
     }
   }
@@ -413,6 +415,7 @@ static bool itemDue(int it, bool focus) {
 static int focusItem() {
   int p = page;
   if ((p == PAGE_ARC || p == PAGE_CUSTOM) && boostVisible()) return 2 + G_MAP;   // the boost pages need MAP often
+  if (p == PAGE_QUAD && gSupported[G_TORQUE]) return 2 + G_TORQUE;               // the quad page shows torque, which changes fast
   return -1;
 }
 // Background rotation: coolant every second tick (the mood depends on it), the rest take turns.
@@ -443,7 +446,7 @@ static void discoverPids(String r0) {
     if (obd::parseBitmap(r.c_str(), base, &m)) sup.set(base, m); else break;
   }
   for (int g = 0; g < G_COUNT; g++) gSupported[g] = (GAUGE_PID[g] == 0) ? true : sup.supported(GAUGE_PID[g]);   // battery: ATRV is tried
-  static const uint8_t listed[] = {0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x11, 0x2F, 0x33, 0x42, 0x46, 0x5C};
+  static const uint8_t listed[] = {0x04, 0x05, 0x0B, 0x0C, 0x0D, 0x0F, 0x11, 0x2F, 0x33, 0x42, 0x46, 0x5C, 0x62, 0x63};
   snprintf(supText[0], sizeof(supText[0]), "sup:%d", sup.count());
   supText[1][0] = 0;
   int n0 = 0;
@@ -591,6 +594,7 @@ void demoStep() {
   gVal[G_FUEL] = 100 - fmodf(t, 200.0f) * 0.4f;
   gVal[G_THROTTLE] = thr;
   gVal[G_LOAD] = 20 + thr * 0.6f;
+  gVal[G_TORQUE] = -8 + thr * 0.85f; gVal[G_TORQREF] = 280;     // demo: engine braking at idle up to 77 % of 280 Nm
   gVal[G_BARO] = 101.3f; gVal[G_MAP] = 101.3f + (-69.0f + 160.0f * thr / 100.0f);   // -10 psi at idle up to +15 psi at full throttle
   if (fmodf(t, 75.0f) <= 65.0f) tsRpm = tsMph = tsCool = tsOil = lastValidMs = millis();   // else: 10 s "engine off" gap
 }
@@ -663,8 +667,8 @@ void sdInit() {
   }
   logFile = SD_MMC.open(name, FILE_WRITE);
   if (!logFile) { Serial.println("SD: cannot create log file"); return; }
-  logFile.println((!cfg.tempC) ? "ms,rpm,mph,coolant_f,oil_f,batt_v,intake_f,ambient_f,fuel_pct,throttle_pct,load_pct"
-                              : "ms,rpm,mph,coolant_c,oil_c,batt_v,intake_c,ambient_c,fuel_pct,throttle_pct,load_pct");
+  logFile.println((!cfg.tempC) ? "ms,rpm,mph,coolant_f,oil_f,batt_v,intake_f,ambient_f,fuel_pct,throttle_pct,load_pct,map_kpa,baro_kpa,torque_pct,torque_ref_nm"
+                              : "ms,rpm,mph,coolant_c,oil_c,batt_v,intake_c,ambient_c,fuel_pct,throttle_pct,load_pct,map_kpa,baro_kpa,torque_pct,torque_ref_nm");
   logFile.flush();
   sdOk = true;
   Serial.printf("SD: logging to %s\n", name);
@@ -1178,6 +1182,16 @@ static void fillReadout(rui::Readout &r, int id) {
       int g = id == RD_LOAD ? G_LOAD : G_THROTTLE;
       r.have = have(g); r.icon = id == RD_LOAD ? rui::IC_LOAD : rui::IC_THROTTLE; strcpy(r.label, id == RD_LOAD ? "LOAD" : "THROTTLE"); strcpy(r.unit, "%");
       snprintf(r.text, sizeof(r.text), "%d", (int)lroundf(gVal[g])); r.frac = gVal[g] / 100.0f; break;
+    }
+    case RD_TORQUE: {
+      r.have = have(G_TORQUE); r.icon = rui::IC_ENGINE; strcpy(r.label, "TORQUE");
+      float pct = gVal[G_TORQUE]; r.frac = (pct + 20) / 120.0f;
+      if (have(G_TORQREF) && gVal[G_TORQREF] > 0) {                                   // the car gives the reference torque: show real torque
+        float nm = obd::torqueNm((int)lroundf(pct), (int)lroundf(gVal[G_TORQREF]));
+        if (cfg.speedKmh) { strcpy(r.unit, "NM"); snprintf(r.text, sizeof(r.text), "%d", (int)lroundf(nm)); }
+        else { strcpy(r.unit, "LB-FT"); snprintf(r.text, sizeof(r.text), "%d", (int)lroundf(nm * 0.737562f)); }
+      } else { strcpy(r.unit, "%"); snprintf(r.text, sizeof(r.text), "%d", (int)lroundf(pct)); }
+      break;
     }
     case RD_BOOST: {
       float kpa = 0; r.have = boostValue(&kpa); r.icon = rui::IC_BOOST; strcpy(r.label, "BOOST");

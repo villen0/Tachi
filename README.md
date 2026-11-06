@@ -31,7 +31,7 @@ tap for the next page, touch and hold about 1.5 s for demo mode. The BOOT button
 5. **Vitals**: four ring gauges: coolant, fuel, battery, load.
 6. **Arc** and 7. **Custom** (boost): a 270 degree boost sweep (manifold pressure minus barometric, psi or bar from Settings), Custom adds three icon readouts.
    These two appear only if the car answers manifold pressure (PID 010B).
-8. **Quad**: four values at once. 9. **Dual**: two values, each with a bar. What the Custom / Quad / Dual pages show is set by `CUSTOM_ROWS`, `QUAD_CELLS`, `DUAL_ROWS`.
+8. **Quad**: four values at once (torque, intake air, fuel, load by default; torque needs the car to answer PID 62, and 63 for Nm / lb-ft). 9. **Dual**: two values, each with a bar. What the Custom / Quad / Dual pages show is set by `CUSTOM_ROWS`, `QUAD_CELLS`, `DUAL_ROWS`.
 10. **Gear**: the estimated gear (1-6, N when stopped, - when unsure), a 1-6 ladder and the speed. OBD has no gear value, so it is worked out from RPM and speed with the ratios in
     `src/gear.h` (a guess for the Mazda 3: tune from a drive). The P R N D S M selector is not available through standard OBD.
 11. **Brightness**: a glowing sun, a slider and four preset chips (25 / 50 / 75 / 100 %). The level is saved across restarts.
