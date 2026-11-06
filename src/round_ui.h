@@ -421,14 +421,14 @@ inline void buildStyle(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg; char t[16];
   if (pg == PG_ARC || pg == PG_CUSTOM) {
     const bool big = pg == PG_ARC;
-    buildRing(S, 0, CX, CY, 200, 226, 128, -0.6f); S.nring = 1;   // a solid arc: 128 touching segments (a negative gap overlaps them, so no seams show)
+    buildRing(S, 0, CX, CY, 219, 226, 128, -0.6f); S.nring = 1;   // a thin solid arc: 128 touching segments (a negative gap overlaps them, so no seams show)
     float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
     float minor = d.arcMinor > 0.0001f ? d.arcMinor : 1; int per = (int)(d.arcMajor / minor + 0.5f); if (per < 1) per = 1;
     int n = (int)(span / minor + 0.5f);
     for (int i = 0; i <= n; i++) {
       float v = d.arcMin + i * minor; bool major = (i % per) == 0;
-      tick(b, v - d.arcMin, span, major ? 174.0f : 181.0f, 190.0f, major ? 1.6f : 0.8f, major ? WHITE : FAINT);
-      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 128.0f : 132.0f, t, DIM); }
+      tick(b, v - d.arcMin, span, major ? 194.0f : 200.0f, 209.0f, major ? 1.6f : 0.8f, major ? WHITE : FAINT);
+      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 152.0f : 154.0f, t, DIM); }
     }
     if (d.arcLabel[0]) textC(b, F_LBL, d.arcLabel, CX, big ? 330 : 348, CYAN);
     if (d.arcUnit[0]) textC(b, F_LBL, d.arcUnit, CX, big ? 250 : 182, DIM);

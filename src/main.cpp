@@ -1167,6 +1167,9 @@ static void fillReadout(rui::Readout &r, int id) {
       r.have = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30; r.icon = rui::IC_THERM; strcpy(r.label, "COOLANT"); strcpy(r.unit, tu);
       snprintf(r.text, sizeof(r.text), "%d", tempOut(coolantC)); r.frac = (coolantC - 40) / 90.0f;
       r.col = coolantC >= cfg.coolHotC ? UI_RED : (coolantC >= cfg.coolWarnC ? UI_YELLOW : UI_WHITE); break;
+    case RD_OIL:
+      r.have = oilValid && fresh(tsOil, OIL_FRESH_MS * 3); r.icon = rui::IC_THERM; strcpy(r.label, "OIL"); strcpy(r.unit, tu);
+      snprintf(r.text, sizeof(r.text), "%d", tempOut(oilC)); r.frac = (oilC - 40) / 90.0f; break;
     case RD_INTAKE: case RD_AMBIENT: {
       int g = id == RD_INTAKE ? G_INTAKE : G_AMBIENT;
       r.have = have(g); r.icon = rui::IC_AIR; strcpy(r.label, id == RD_INTAKE ? "INTAKE" : "OUTSIDE"); strcpy(r.unit, tu);
