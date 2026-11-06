@@ -488,12 +488,12 @@ inline void buildStyle(State &S, int pg, const Data &d) {
   } else if (pg == PG_CODES) {
     const CodesView &C = d.codes;
     textC(b, F_LBL, "FAULT CODES", CX, 74, CYAN);
-    iconDraw(b, IC_ENGINE, CX - 104, 108, C.mil ? ORANGE : DIM);
-    text(b, F_LBL, "CHECK ENGINE", CX - 80, 96, WHITE);
-    text(b, F_LBL, C.mil ? "ON" : "OFF", CX - 80 + textW(F_LBL, "CHECK ENGINE") + 12, 96, C.mil ? ORANGE : MINT);
+    iconDraw(b, IC_ENGINE, CX - 104, 104, C.mil ? ORANGE : DIM);
+    text(b, F_LBL, "CHECK ENGINE", CX - 80, 92, WHITE);
+    text(b, F_LBL, C.mil ? "ON" : "OFF", CX - 80 + textW(F_LBL, "CHECK ENGINE") + 12, 92, C.mil ? ORANGE : MINT);
     char hl[36];
     if (!C.answered) snprintf(hl, sizeof(hl), "NOT READ YET"); else if (C.total == 0) snprintf(hl, sizeof(hl), "NO CODES STORED"); else snprintf(hl, sizeof(hl), "%d CODE%s FOUND", C.total, C.total == 1 ? "" : "S");
-    text(b, F_SML, hl, CX - 80, 116, C.total > 0 ? YELLOW : DIM);
+    text(b, F_SML, hl, CX - 80, 118, C.total > 0 ? YELLOW : DIM);
     for (int i = 0; i < C.nRows && i < 4; i++) {
       const int y0 = 138 + 50 * i;
       text(b, F_TTL, C.row[i].code, CX - 140, y0, C.row[i].col);
@@ -661,7 +661,7 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     const TripView &T = d.trip;
     for (int i = 0; i < 6; i++) {
       const char *v = T.have ? T.t[i].value : "--";
-      num(S, fb, i, F_MED, v, TR_ROW_X0 + TR_ROW_W - 14 - textW(F_MED, v) / 2, tripRowY(i) + (TR_ROW_H - F_MED.h) / 2, 0, T.have ? T.t[i].col : DIM);   // right aligned
+      num(S, fb, i, F_LBL, v, TR_ROW_X0 + TR_ROW_W - 14 - textW(F_LBL, v) / 2, tripRowY(i) + (TR_ROW_H - F_LBL.h) / 2, 0, T.have ? T.t[i].col : DIM);   // right aligned
     }
     // (no footer lines: time, distance and brakes are no longer shown, and an empty report just shows "--")
   } else if (pg == PG_HISTORY) {
