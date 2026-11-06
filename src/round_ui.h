@@ -430,8 +430,8 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       tick(b, v - d.arcMin, span, major ? 170.0f : 178.0f, 188.0f, major ? 1.6f : 0.8f, major ? WHITE : FAINT);
       if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 142.0f : 144.0f, t, DIM); }
     }
-    if (d.arcLabel[0]) textC(b, F_LBL, d.arcLabel, CX, big ? 338 : 348, CYAN);
-    if (d.arcUnit[0]) textC(b, F_LBL, d.arcUnit, CX, big ? 262 : 182, DIM);
+    if (d.arcLabel[0]) textC(b, F_LBL, d.arcLabel, CX, big ? 330 : 348, CYAN);
+    if (d.arcUnit[0]) textC(b, F_LBL, d.arcUnit, CX, big ? 250 : 182, DIM);
     if (!big) {                                      // three icon readouts under the number
       for (int i = 0; i < 3; i++) {
         const int y = 214 + 40 * i;
@@ -647,7 +647,7 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
     ringLevel(S, 0, d.haveArc ? (d.arcVal - d.arcMin) / span : 0);
     const bool big = pg == PG_ARC;
-    num(S, fb, 0, F_BIG, d.haveArc ? d.arcText : none, CX, big ? 206 : 126, 0, d.haveArc ? WHITE : DIM);
+    num(S, fb, 0, F_NUM, d.haveArc ? d.arcText : none, CX, big ? 214 : 126, 0, d.haveArc ? WHITE : DIM);
     if (!big) for (int i = 0; i < 3; i++) num(S, fb, 1 + i, F_MED, d.rd[i].have ? d.rd[i].text : none, CX + 4, 214 + 40 * i, 0, d.rd[i].have ? d.rd[i].col : DIM);
   } else if (pg == PG_QUAD) {
     static const int cxs[4] = {CX - 96, CX + 96, CX - 96, CX + 96}, cys[4] = {CY - 80, CY - 80, CY + 84, CY + 84};
@@ -809,8 +809,8 @@ inline void brightnessPage(uint16_t *fb, int pct, int dotN, int dotCur, bool ful
 
   // percentage
   char t[8]; snprintf(t, sizeof(t), "%d", pct);
-  textC(fb, F_BIG, t, CX - 8, 218, WHITE);
-  text(fb, F_MED, "%", CX - 8 + textW(F_BIG, t) / 2 + 8, 218 + F_BIG.h - F_MED.h, DIM);
+  textC(fb, F_NUM, t, CX - 8, 218, WHITE);
+  text(fb, F_LBL, "%", CX - 8 + textW(F_NUM, t) / 2 + 8, 218 + F_NUM.h - F_LBL.h, DIM);
 
   // slider: glass track, a glow under the fill, gradient fill (colour belongs to the position), knob with a halo
   const float TH = 8;
