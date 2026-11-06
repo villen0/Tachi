@@ -329,14 +329,11 @@ inline void setRingColors(Ring &R, uint16_t (*f)(float frac, const void *), cons
 }
 
 // ---- drive report / fault codes layout constants and touch zones -----------------------------------------------------
-constexpr int TR_CHIP_Y = 322, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
-// Six pills in two rows with the Sport page's pill size (58 px high, label at y+10, value at y+30, values in F_MED):
-// top speed, max rpm, max coolant; peak boost, volts (wide, for a "13.1-14.2" range) and new codes.
-constexpr int TR_PILL_H = 58;
-inline void tripTile(int i, int *cx, int *y, int *w) {
-  static const int xs[6] = {CX - 120, CX, CX + 120, 98, 254, 396}, ws[6] = {112, 112, 112, 112, 184, 84}, ys[6] = {116, 116, 116, 184, 184, 184};
-  *cx = xs[i]; *w = ws[i]; *y = ys[i];
-}
+constexpr int TR_CHIP_Y = 370, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
+// A list, like the Settings and Trip history pages: six rows (label left, value right), then two footer lines and the TRIPS button.
+// Order: top speed, max rpm, max coolant, peak boost, volts (a "13.1-14.2" range), new codes.
+constexpr int TR_ROW_X0 = 90, TR_ROW_W = 300, TR_ROW_Y0 = 94, TR_ROW_H = 34, TR_ROW_GAP = 4;
+inline int tripRowY(int i) { return TR_ROW_Y0 + (TR_ROW_H + TR_ROW_GAP) * i; }
 // The Drive report page has one button, "TRIPS", that opens the trip history page.
 constexpr int TR_BTN_W = 96, TR_BTN_X = CX - TR_BTN_W / 2;
 inline int tripChipAt(int x, int y) { return (y >= TR_CHIP_Y - 8 && y <= TR_CHIP_Y + TR_CHIP_H + 8 && x >= TR_BTN_X - 6 && x <= TR_BTN_X + TR_BTN_W + 6) ? 0 : -1; }
@@ -471,7 +468,11 @@ inline void buildStyle(State &S, int pg, const Data &d) {
   } else if (pg == PG_TRIP) {
     const TripView &T = d.trip;
     textC(b, F_LBL, T.title, CX, 74, CYAN);
-    for (int i = 0; i < 6; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); pill(b, cx, y, w, TR_PILL_H, T.t[i].label); }
+    for (int i = 0; i < 6; i++) {
+      const int y = tripRowY(i);
+      pill(b, CX, y, TR_ROW_W, TR_ROW_H, "");
+      text(b, F_LBL, T.t[i].label, TR_ROW_X0 + 14, y + (TR_ROW_H - F_LBL.h) / 2, DIM);
+    }
     chip(b, TR_BTN_X, TR_CHIP_Y, TR_BTN_W, TR_CHIP_H, false, CYAN, "TRIPS");
   } else if (pg == PG_HISTORY) {
     const HistoryView &Hv = d.hist;
@@ -659,11 +660,11 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
   } else if (pg == PG_TRIP) {
     const TripView &T = d.trip;
     for (int i = 0; i < 6; i++) {
-      int cx, y, w; tripTile(i, &cx, &y, &w);
-      num(S, fb, i, F_MED, T.have ? T.t[i].value : "--", cx, y + 30, 0, T.have ? T.t[i].col : DIM);
+      const char *v = T.have ? T.t[i].value : "--";
+      num(S, fb, i, F_MED, v, TR_ROW_X0 + TR_ROW_W - 14 - textW(F_MED, v) / 2, tripRowY(i) + (TR_ROW_H - F_MED.h) / 2, 0, T.have ? T.t[i].col : DIM);   // right aligned
     }
-    num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 262, 0, DIM);
-    num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 280, 0, DIM);
+    num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 330, 0, DIM);
+    num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 348, 0, DIM);
   } else if (pg == PG_HISTORY) {
     // static page: everything is in the background layer
   } else if (pg == PG_CODES) {
