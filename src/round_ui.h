@@ -427,8 +427,8 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     int n = (int)(span / minor + 0.5f);
     for (int i = 0; i <= n; i++) {
       float v = d.arcMin + i * minor; bool major = (i % per) == 0;
-      tick(b, v - d.arcMin, span, major ? 170.0f : 178.0f, 188.0f, major ? 1.6f : 0.8f, major ? WHITE : FAINT);
-      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 142.0f : 144.0f, t, DIM); }
+      tick(b, v - d.arcMin, span, major ? 174.0f : 181.0f, 190.0f, major ? 1.6f : 0.8f, major ? WHITE : FAINT);
+      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 128.0f : 132.0f, t, DIM); }
     }
     if (d.arcLabel[0]) textC(b, F_LBL, d.arcLabel, CX, big ? 330 : 348, CYAN);
     if (d.arcUnit[0]) textC(b, F_LBL, d.arcUnit, CX, big ? 250 : 182, DIM);
