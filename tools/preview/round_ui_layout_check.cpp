@@ -142,7 +142,7 @@ int main() {
 
   // ---- the other pages, for information only (not part of the clean-up scope) ----
   puts("\nother pages (information only):");
-  Page others[] = {{rui::PG_SPORT, "sport"}, {rui::PG_TACH, "tach"}, {rui::PG_SPEEDO, "speedo"}, {rui::PG_VITALS, "vitals"}, {rui::PG_ARC, "arc"}, {rui::PG_CUSTOM, "custom"}, {rui::PG_QUAD, "quad"}, {rui::PG_DUAL, "dual"}, {rui::PG_GEAR, "gear"}};
+  Page others[] = {{rui::PG_SPORT, "sport"}, {rui::PG_TACH, "tach"}, {rui::PG_SPEEDO, "speedo"}, {rui::PG_VITALS, "vitals"}, {rui::PG_ARC, "arc"}, {rui::PG_CUSTOM, "custom"}, {rui::PG_QUAD, "quad"}, {rui::PG_DUAL, "dual"}, {rui::PG_BATTERY, "battery", true}, {rui::PG_GEAR, "gear"}};
   for (auto &o : others) {
     rui::Data d; d.dotN = 13; d.dotCur = 5; d.rpm = 6500; d.mph = 120; d.haveCool = d.haveFuel = d.haveBatt = d.haveLoad = true; d.coolShown = 260; d.fuelPct = 100; d.battV = 14.8f; d.loadPct = 100;
     d.haveArc = true; d.arcVal = -14.7f; strcpy(d.arcText, "-14.7"); strcpy(d.arcUnit, "PSI"); strcpy(d.arcLabel, "BOOST"); d.arcMin = -20; d.arcMax = 30; d.arcMajor = 10; d.arcMinor = 2; d.arcRed = 24; d.arcDec = 0; strcpy(d.title, "ENGINE");

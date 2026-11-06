@@ -23,7 +23,7 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_BATTERY, PG_GEAR, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -469,6 +469,19 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       const int bx0 = CX - 120, by = y0 + 88;
       taper(b, bx0 + 5, by + 5, bx0 + 235, by + 5, 5, 5, PANEL); discAA(b, bx0 + 5, by + 5, 5, PANEL); discAA(b, bx0 + 235, by + 5, 5, PANEL);
     }
+  } else if (pg == PG_BATTERY) {   // one big ring: 10.5 .. 15.5 V, the voltage in the middle, a state line under it
+    buildRing(S, 0, CX, CY, 214, 226, 90, 0.7f); S.nring = 1;
+    for (float v = 0; v <= 5.001f; v += 0.25f) {
+      bool major = fmodf(v + 0.5f, 1.0f) < 0.01f, mid = !major && fmodf(v, 0.5f) < 0.01f;
+      tick(b, v, 5.0f, major ? 190.0f : (mid ? 196.0f : 200.0f), 207, major ? 1.8f : (mid ? 1.2f : 0.8f), major ? WHITE : (mid ? DIM : FAINT));
+    }
+    for (int n = 11; n <= 15; n++) { char t2[8]; snprintf(t2, sizeof(t2), "%d", n); numeral(b, n - 10.5f, 5.0f, 148.0f, t2, WHITE); }
+    textC(b, F_LBL, "BATTERY", CX, 138, CYAN);
+    textC(b, F_LBL, "VOLTS", CX, 256, DIM);
+    struct V { const Data *d; } v = {&d};
+    setRingColors(S.ring[0], [](float f, const void *p) {
+      const Data *d = ((const V *)p)->d; float v = 10.5f + f * 5.0f;
+      if (v < d->battCritV) return RED; if (v < d->battLowV) return YELLOW; return lerpRGB(LOOK.k[1], LOOK.k[0], (v - d->battLowV) / 3.0f); }, &v);
   } else if (pg == PG_TRIP) {
     const TripView &T = d.trip;
     textC(b, F_LBL, T.title, CX, 74, CYAN);
@@ -657,6 +670,18 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
       num(S, fb, i, F_NUM, d.rd[i].have ? d.rd[i].text : none, CX, y0 + 32, 0, d.rd[i].have ? d.rd[i].col : DIM);
       barFill(S, fb, i, CX - 120, y0 + 88, 240, 10, d.rd[i].have ? d.rd[i].frac : 0, d.rd[i].col);
     }
+  } else if (pg == PG_BATTERY) {
+    ringLevel(S, 0, d.haveBatt ? (d.battV - 10.5f) / 5.0f : 0);
+    char t2[12]; if (d.haveBatt) snprintf(t2, sizeof(t2), "%.1f", d.battV); else snprintf(t2, sizeof(t2), "--");
+    const bool running = d.rpm > 400; const float lowV = running ? d.battLowV + 1.2f : d.battLowV;   // the charging system raises the normal level
+    const char *st; uint16_t sc;
+    if (!d.haveBatt) { st = "NO DATA"; sc = DIM; }
+    else if (d.battV < d.battCritV) { st = "CRITICAL"; sc = RED; }
+    else if (d.battV < lowV) { st = "LOW"; sc = YELLOW; }
+    else { st = running ? "CHARGING" : "GOOD"; sc = MINT; }
+    uint16_t vc = !d.haveBatt ? DIM : (d.battV < d.battCritV ? RED : (d.battV < lowV ? YELLOW : WHITE));
+    num(S, fb, 0, F_BIG, t2, CX, 190, 0, vc);
+    num(S, fb, 1, F_LBL, st, CX, 300, 0, sc);
   } else if (pg == PG_TRIP) {
     const TripView &T = d.trip;
     char g[2] = {T.have ? T.grade : '-', 0}; char r[8]; if (T.have) snprintf(r, sizeof(r), "%d", T.rating); else snprintf(r, sizeof(r), "--");

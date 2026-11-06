@@ -108,7 +108,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_GEAR, PAGE_TRIP, PAGE_HISTORY, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_BATTERY, PAGE_GEAR, PAGE_TRIP, PAGE_HISTORY, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
 static_assert(PAGE_SETTINGS == PAGE_COUNT - 1, "Settings must stay the last page: add new pages before it");
 volatile int page = PAGE_FACE;       // a tap or swipe changes the page (see pageVisible)
 
@@ -130,7 +130,9 @@ static bool dialFailed = false;                  // the dial pages' buffers coul
 static bool boostVisible() { return gSupported[G_MAP] && (gOk[G_MAP] || gFails[G_MAP] < 5); }   // the car answers MAP (intake manifold pressure)
 static bool pageVisible(int p) {
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !dialFailed;
-  if (p == PAGE_DIAL_TACH || p == PAGE_DIAL_SPEEDO || p == PAGE_DIAL_VITALS) return SHOW_PAGE_DIALS && !dialFailed;
+  if (p == PAGE_DIAL_TACH || p == PAGE_DIAL_SPEEDO) return SHOW_PAGE_DIALS && !dialFailed;
+  if (p == PAGE_DIAL_VITALS) return SHOW_PAGE_VITALS && SHOW_PAGE_DIALS && !dialFailed;
+  if (p == PAGE_BATTERY) return SHOW_PAGE_BATTERY && !dialFailed;
   if (p == PAGE_CUSTOM) return SHOW_PAGE_CUSTOM && SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p == PAGE_ARC) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p == PAGE_GEAR) return SHOW_PAGE_GEAR && SHOW_PAGE_STYLES && !dialFailed;
@@ -1375,7 +1377,7 @@ static void roundDialFrame(int p, uint32_t now) {
   if (p == PAGE_SETTINGS) { if (optCount(settingsSub) > 0) fillOptionsData(d, settingsSub); else fillSettingsData(d); }
   d.ver = (int)(((uint32_t)d.ver * 8u + (cfg.speedKmh ? 1u : 0u) + (cfg.tempC ? 2u : 0u) + (cfg.pressBar ? 4u : 0u)) & 0x3FFFFFFF);   // unit labels are part of the static content
   int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : p == PAGE_ARC ? rui::PG_ARC
-         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
+         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_BATTERY ? rui::PG_BATTERY : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
   uint32_t t0 = micros();
   uint16_t *fb = fullCanvas->getFramebuffer();
   rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen

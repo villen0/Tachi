@@ -38,7 +38,9 @@
 
 // Pages (swipe left / right, or tap, to change page). Set 0 to hide.
 #define SHOW_PAGE_CLUSTER  0   // sport cluster: RPM ring, big speed, coolant / fuel / battery chips
-#define SHOW_PAGE_DIALS    1   // analog tachometer, analog speedometer and the vitals rings
+#define SHOW_PAGE_DIALS    1   // analog tachometer and analog speedometer
+#define SHOW_PAGE_VITALS   0   // the four vitals rings (hidden, set 1 to bring it back)
+#define SHOW_PAGE_BATTERY  1   // battery page: one big voltage ring with a state line (comes right after TEMPS)
 #define SHOW_PAGE_CUSTOM   0   // custom boost page: the arc with three readouts (needs SHOW_PAGE_STYLES; hidden, the Arc page keeps the boost gauge)
 #define SHOW_PAGE_GEAR     0   // estimated gear page (needs SHOW_PAGE_STYLES; hidden for now, set 1 to bring it back)
 #define SHOW_PAGE_STYLES   1   // arc (boost), custom, quad, dual and gear pages (the two boost pages appear only if the car answers MAP)
