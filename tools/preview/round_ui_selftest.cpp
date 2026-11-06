@@ -22,7 +22,7 @@ int main() {
       for (int k = 0; k < 4; k++) { d.rd[k].have = (i % 53) != k; snprintf(d.rd[k].text, sizeof(d.rd[k].text), "%d", 60 + (i * (k + 3)) % 140); d.rd[k].frac = ((i * (k + 3)) % 140) / 140.0f; d.rd[k].col = (i % 40) < 20 ? rui::CYAN : rui::ORANGE; }
       d.gear = "N123456-"[(i / 7) % 8];
       // drive report: live values every frame, the chip selection and the number of saved trips change now and then (ver rebuilds the page)
-      { rui::TripView &T = d.trip; T.have = (i % 90) != 7; T.live = (i / 100) % 2 == 0; T.rating = 40 + (i * 7) % 60; T.grade = "ABCDF"[(i / 13) % 5]; T.sel = (i / 50) % 4; T.nSaved = 1 + (i / 70) % 5;
+      { rui::TripView &T = d.trip; T.have = (i % 90) != 7; T.live = (i / 100) % 2 == 0; T.sel = (i / 50) % 4; T.nSaved = 1 + (i / 70) % 5;
         strcpy(T.title, T.live ? "LIVE TRIP" : "DRIVE REPORT");
         const char *tl[6] = {"TOP MPH", "MAX RPM", "MAX F", "PEAK PSI", "VOLTS", "CODES"};
         for (int k = 0; k < 6; k++) { strcpy(T.t[k].label, tl[k]); snprintf(T.t[k].value, sizeof(T.t[k].value), k == 4 ? "%d.%d-%d.%d" : "%d", 10 + (i * (k + 3)) % 90, i % 10, 14, (i * 3) % 10); T.t[k].col = (i % 40) < 20 ? rui::WHITE : rui::ORANGE; }
@@ -36,7 +36,7 @@ int main() {
       { rui::SettingsView &V = d.settings; V.n = 2 + (i / 90) % 4; for (int k = 0; k < V.n; k++) { snprintf(V.row[k].label, sizeof(V.row[k].label), "ROW %d", k); snprintf(V.row[k].value, sizeof(V.row[k].value), "%d %%", (i / 45 + k) % 100); V.row[k].icon = (uint8_t)(rui::IC_SUN + (k & 1)); } d.ver += V.n * 100000 + (i / 45) * 7; }
       { rui::OptionsView &O = d.opts; O.n = 1 + (i / 80) % 5; O.swatch = (i / 160) % 2; for (int k = 0; k < O.n; k++) { snprintf(O.row[k].label, sizeof(O.row[k].label), "OPT %d", k); snprintf(O.row[k].value, sizeof(O.row[k].value), "%d", (i / 33 + k) % 90); O.row[k].kind = (uint8_t)(k & 1); } d.ver += O.n * 1000000 + (i / 33) * 13; }
       rui::applyTheme((i / 110) % theme::THEMES, (i / 170) % theme::MODES); d.theme = rui::themeGen; d.kmh = (i / 130) % 2;   // theme / unit changes rebuild the page
-      { rui::HistoryView &Hv = d.hist; Hv.n = (i / 70) % 7; for (int k = 0; k < Hv.n; k++) { snprintf(Hv.row[k].tag, sizeof(Hv.row[k].tag), "#%d", 5 + k); snprintf(Hv.row[k].mid, sizeof(Hv.row[k].mid), "%d MIN %d.%d MI", 5 + (i / 70) + k, k, i / 70); snprintf(Hv.row[k].right, sizeof(Hv.row[k].right), "A %d", 60 + k); Hv.row[k].col = k & 1 ? rui::MINT : rui::YELLOW; } d.ver += Hv.n * 20000000 + (i / 70) * 31; }
+      { rui::HistoryView &Hv = d.hist; Hv.n = (i / 70) % 7; for (int k = 0; k < Hv.n; k++) { snprintf(Hv.row[k].tag, sizeof(Hv.row[k].tag), "#%d", 5 + k); snprintf(Hv.row[k].mid, sizeof(Hv.row[k].mid), "%d MIN %d.%d MI", 5 + (i / 70) + k, k, i / 70); Hv.row[k].col = k & 1 ? rui::MINT : rui::YELLOW; } d.ver += Hv.n * 20000000 + (i / 70) * 31; }
       float ph = i * 0.07f;
       d.rpm = 800 + 3000 * (0.5f + 0.5f * sinf(ph)) + (i % 97 == 0 ? 3200 : 0); d.mph = 45 * (0.5f + 0.5f * sinf(ph * 0.6f));
       d.coolC = 80 + (i / 8) % 40; d.coolShown = (int)(d.coolC * 1.8f + 32); d.fuelPct = 100 - (i / 5) % 100; d.battV = 11.0f + (i % 50) * 0.08f; d.loadPct = (i * 3) % 100;

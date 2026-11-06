@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
     if (pg == rui::PG_DUAL) { d.rdN = 1; strcpy(d.rd[1].label, "OIL TEMP"); d.rd[1].icon = rui::IC_BOOST; }
     d.gear = c.rpm > 6000 ? '5' : (c.rpm > 0 ? '3' : 'N');
     { d.settings.n = 2; strcpy(d.settings.row[0].label, "BRIGHTNESS"); strcpy(d.settings.row[0].value, "85 %"); d.settings.row[0].icon = rui::IC_SUN; strcpy(d.settings.row[1].label, "DEBUG"); strcpy(d.settings.row[1].value, "cluster2"); d.settings.row[1].icon = rui::IC_BUG; }
-    { rui::TripView &T = d.trip; T.have = c.rpm > 0; T.live = false; T.rating = c.rpm > 6000 ? 58 : 91; T.grade = c.rpm > 6000 ? 'F' : 'A'; T.sel = 1; T.nSaved = 3;
+    { rui::TripView &T = d.trip; T.have = c.rpm > 0; T.live = false; T.sel = 1; T.nSaved = 3;
       const char *tl[6] = {"TOP MPH", "MAX RPM", "MAX F", "PEAK PSI", "VOLTS", "CODES"}; const char *tv[6] = {"74", "4850", "203", "-2.4", "13.1-14.2", c.rpm > 6000 ? "2" : "0"};
       for (int k = 0; k < 6; k++) { strcpy(T.t[k].label, tl[k]); strcpy(T.t[k].value, tv[k]); T.t[k].col = (k == 5 && c.rpm > 6000) ? rui::RED : rui::WHITE; }
       strcpy(T.foot1, "42 MIN  18.4 MI"); strcpy(T.foot2, c.rpm > 6000 ? "5 HARD BRAKES  3 LAUNCHES" : "0 HARD BRAKES  0 LAUNCHES"); }
@@ -48,8 +48,8 @@ int main(int argc, char **argv) {
     { rui::OptionsView &O = d.opts; O = rui::OptionsView(); strcpy(O.title, "WARNINGS"); O.n = 5; O.swatch = false;
       const char *ol[5] = {"COOL WARM", "COOL HOT", "BATT LOW", "FUEL LOW", "REDLINE"}, *ov[5] = {"212 F", "226 F", "12.0 V", "15 %", "6500"};
       for (int k = 0; k < 5; k++) { strcpy(O.row[k].label, ol[k]); strcpy(O.row[k].value, ov[k]); O.row[k].kind = 1; } }
-    { rui::HistoryView &Hv = d.hist; Hv = rui::HistoryView(); Hv.n = c.rpm > 0 ? 6 : 0; const char *tg[6] = {"LIVE", "#12", "#11", "#10", "#9", "#8"}, *md[6] = {"12 MIN 4.2 MI", "42 MIN 18.4 MI", "1H05M 31.0 MI", "9 MIN 2.1 MI", "27 MIN 11.6 MI", "55 MIN 24.8 MI"}, *rt[6] = {"B 84", "A 91", "C 72", "F 48", "A 95", "D 63"};
-      for (int k = 0; k < Hv.n; k++) { strcpy(Hv.row[k].tag, tg[k]); strcpy(Hv.row[k].mid, md[k]); strcpy(Hv.row[k].right, rt[k]); Hv.row[k].col = k == 3 ? rui::RED : (k == 2 || k == 5 ? rui::YELLOW : rui::MINT); } }
+    { rui::HistoryView &Hv = d.hist; Hv = rui::HistoryView(); Hv.n = c.rpm > 0 ? 6 : 0; const char *tg[6] = {"LIVE", "#12", "#11", "#10", "#9", "#8"}, *md[6] = {"12 MIN 4.2 MI", "42 MIN 18.4 MI", "1H05M 31.0 MI", "9 MIN 2.1 MI", "27 MIN 11.6 MI", "55 MIN 24.8 MI"}, *rt[6] = {"", "", "", "", "", ""};
+      for (int k = 0; k < Hv.n; k++) { strcpy(Hv.row[k].tag, tg[k]); strcpy(Hv.row[k].mid, md[k]); strcpy(Hv.row[k].right, rt[k]); Hv.row[k].col = rui::WHITE; } }
     rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100);
     d.rpm = c.rpm; rui::frame(fb.data(), pg, d, 2000);
     save(fb, dir + "/" + names[pg] + "_" + c.tag + ".ppm");

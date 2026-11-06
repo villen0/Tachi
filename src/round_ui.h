@@ -162,7 +162,6 @@ struct Readout {                 // one value on the multi-value pages (custom, 
 struct TripTile { char label[12] = ""; char value[14] = "--"; uint16_t col = 0xFFFF; };
 struct TripView {
   bool have = false, live = false;       // have: there is a trip to show; live: it is still being driven
-  int rating = 0; char grade = '-';
   char title[16] = "DRIVE REPORT";
   TripTile t[6];                         // top speed, max rpm, max coolant, peak boost, volts, new codes
   char foot1[40] = "", foot2[40] = "";
@@ -330,12 +329,12 @@ inline void setRingColors(Ring &R, uint16_t (*f)(float frac, const void *), cons
 }
 
 // ---- drive report / fault codes layout constants and touch zones -----------------------------------------------------
-constexpr int TR_CHIP_Y = 356, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
-// Eight pills in three rows with the Sport page's pill size (58 px high, label at y+10, value at y+30, values in F_MED):
-// GRADE and RATING; top speed, max rpm, max coolant; peak boost, volts (wide, for a "13.1-14.2" range) and new codes.
+constexpr int TR_CHIP_Y = 322, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
+// Six pills in two rows with the Sport page's pill size (58 px high, label at y+10, value at y+30, values in F_MED):
+// top speed, max rpm, max coolant; peak boost, volts (wide, for a "13.1-14.2" range) and new codes.
 constexpr int TR_PILL_H = 58;
 inline void tripTile(int i, int *cx, int *y, int *w) {
-  static const int xs[8] = {CX - 70, CX + 70, CX - 120, CX, CX + 120, 98, 254, 396}, ws[8] = {130, 130, 112, 112, 112, 112, 184, 84}, ys[8] = {100, 100, 168, 168, 168, 236, 236, 236};
+  static const int xs[6] = {CX - 120, CX, CX + 120, 98, 254, 396}, ws[6] = {112, 112, 112, 112, 184, 84}, ys[6] = {116, 116, 116, 184, 184, 184};
   *cx = xs[i]; *w = ws[i]; *y = ys[i];
 }
 // The Drive report page has one button, "TRIPS", that opens the trip history page.
@@ -472,7 +471,7 @@ inline void buildStyle(State &S, int pg, const Data &d) {
   } else if (pg == PG_TRIP) {
     const TripView &T = d.trip;
     textC(b, F_LBL, T.title, CX, 74, CYAN);
-    for (int i = 0; i < 8; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); pill(b, cx, y, w, TR_PILL_H, i == 0 ? "GRADE" : i == 1 ? "RATING" : T.t[i - 2].label); }
+    for (int i = 0; i < 6; i++) { int cx, y, w; tripTile(i, &cx, &y, &w); pill(b, cx, y, w, TR_PILL_H, T.t[i].label); }
     chip(b, TR_BTN_X, TR_CHIP_Y, TR_BTN_W, TR_CHIP_H, false, CYAN, "TRIPS");
   } else if (pg == PG_HISTORY) {
     const HistoryView &Hv = d.hist;
@@ -659,16 +658,12 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     }
   } else if (pg == PG_TRIP) {
     const TripView &T = d.trip;
-    char g[2] = {T.have ? T.grade : '-', 0}; char r[8]; if (T.have) snprintf(r, sizeof(r), "%d", T.rating); else snprintf(r, sizeof(r), "--");
-    uint16_t gc = !T.have ? DIM : (T.rating >= 80 ? MINT : (T.rating >= 60 ? YELLOW : RED));
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 6; i++) {
       int cx, y, w; tripTile(i, &cx, &y, &w);
-      const char *v = i == 0 ? g : i == 1 ? r : (T.have ? T.t[i - 2].value : "--");
-      uint16_t c = i < 2 ? gc : (T.have ? T.t[i - 2].col : DIM);
-      num(S, fb, i, F_MED, v, cx, y + 30, 0, c);
+      num(S, fb, i, F_MED, T.have ? T.t[i].value : "--", cx, y + 30, 0, T.have ? T.t[i].col : DIM);
     }
-    num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 306, 0, DIM);
-    num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 324, 0, DIM);
+    num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 262, 0, DIM);
+    num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 280, 0, DIM);
   } else if (pg == PG_HISTORY) {
     // static page: everything is in the background layer
   } else if (pg == PG_CODES) {

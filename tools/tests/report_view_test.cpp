@@ -11,7 +11,7 @@ int main() {
   trip::Record r; r.seq = 7; r.durationS = 2520; r.idleS = 200; r.distCentiMi = 1840; r.topMph = 74; r.avgMph = 26; r.maxRpm = 4850;
   r.maxCoolC = 95; r.maxIntakeC = 40; r.peakBoostDeciPsi = -24; r.minBattDeciV = 131; r.maxBattDeciV = 142; r.hardBrakes = 1; r.hardLaunches = 3; r.rating = 91;
   { rui::TripView v; report::tripView(v, &r, false, 0, 3, us);
-    CHECK(v.have && v.grade == 'A' && v.rating == 91 && v.sel == 0 && v.nSaved == 3 && !v.live);
+    CHECK(v.have && v.sel == 0 && v.nSaved == 3 && !v.live);
     STREQ(v.title, "DRIVE REPORT"); STREQ(v.t[0].label, "TOP MPH"); STREQ(v.t[0].value, "74"); STREQ(v.t[1].value, "4850");
     STREQ(v.t[2].label, "MAX F"); STREQ(v.t[2].value, "203"); STREQ(v.t[3].label, "PEAK PSI"); STREQ(v.t[3].value, "-2.4");
     STREQ(v.t[4].value, "13.1-14.2"); STREQ(v.t[5].value, "0"); STREQ(v.foot1, "42 MIN  18.4 MI"); STREQ(v.foot2, "1 HARD BRAKE  3 LAUNCHES");
@@ -25,7 +25,7 @@ int main() {
   { rui::TripView v; report::tripView(v, &r, false, 2, 3, us); STREQ(v.title, "TRIP 7"); }
   { trip::Record q = r; q.durationS = 5400; q.flags = 3; q.newCodeCount = 2; q.minBattDeciV = 112; q.secHighRpm = 90; q.rating = 55;
     rui::TripView v; report::tripView(v, &q, false, 0, 1, us);
-    STREQ(v.foot1, "1H 30M  18.4 MI"); CHECK(v.grade == 'F'); CHECK(v.t[2].col == rui::RED && v.t[5].col == rui::RED && v.t[4].col == rui::RED && v.t[1].col == rui::ORANGE); STREQ(v.t[5].value, "2"); }
+    STREQ(v.foot1, "1H 30M  18.4 MI"); CHECK(v.t[2].col == rui::RED && v.t[5].col == rui::RED && v.t[4].col == rui::RED && v.t[1].col == rui::ORANGE); STREQ(v.t[5].value, "2"); }
   // unknown values show "--"
   { trip::Record q; q.durationS = 600; q.distCentiMi = 500; rui::TripView v; report::tripView(v, &q, false, 0, 0, us);
     STREQ(v.t[2].value, "--"); STREQ(v.t[3].value, "--"); STREQ(v.t[4].value, "--"); STREQ(v.foot1, "10 MIN  5.0 MI"); }

@@ -60,7 +60,7 @@ int main() {
   TripCase tcs[] = {{"trip-worst", true, false, 2, 5}, {"trip-live", true, true, 0, 5}, {"trip-empty", false, false, 0, 0}};
   for (auto &tc : tcs) {
     rui::Data d; d.dotN = 13; d.dotCur = 10; rui::TripView &T = d.trip;
-    T.have = tc.have; T.live = tc.live; T.sel = tc.sel; T.nSaved = tc.saved; T.rating = 100; T.grade = 'D';
+    T.have = tc.have; T.live = tc.live; T.sel = tc.sel; T.nSaved = tc.saved;
     snprintf(T.title, sizeof(T.title), tc.live ? "LIVE TRIP" : "TRIP 65535");
     const char *lab[6] = {"TOP KMH", "MAX RPM", "MAX F", "PEAK PSI", "VOLTS", "CODES"}, *val[6] = {"155", "8000", "260", "-14.7", "10.5-15.5", "99"};
     for (int i = 0; i < 6; i++) { snprintf(T.t[i].label, sizeof(T.t[i].label), "%s", lab[i]); snprintf(T.t[i].value, sizeof(T.t[i].value), "%s", val[i]); }
@@ -95,7 +95,7 @@ int main() {
   {
     for (int n : {0, 6}) {
       rui::Data d; d.dotN = 13; d.dotCur = 10; d.hist.n = n;
-      for (int k = 0; k < n; k++) { snprintf(d.hist.row[k].tag, sizeof(d.hist.row[k].tag), k ? "#%d" : "LIVE", 988 + k); snprintf(d.hist.row[k].mid, sizeof(d.hist.row[k].mid), "%dH%02dM 123.4 MI", 10 + k, 5 + k); strcpy(d.hist.row[k].right, "A 99"); }
+      for (int k = 0; k < n; k++) { snprintf(d.hist.row[k].tag, sizeof(d.hist.row[k].tag), k ? "#%d" : "LIVE", 988 + k); snprintf(d.hist.row[k].mid, sizeof(d.hist.row[k].mid), "%dH%02dM 123.4 MI", 10 + k, 5 + k); d.hist.row[k].right[0] = 0; }
       rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
       rui::frame(fb.data(), rui::PG_HISTORY, d, 1000, true);
       char nm[24]; snprintf(nm, sizeof(nm), "history-%d", n);
