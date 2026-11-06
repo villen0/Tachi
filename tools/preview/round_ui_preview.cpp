@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   if (!rui::begin()) { puts("alloc failed"); return 1; }
   std::vector<uint16_t> fb(rui::W * rui::H, 0);
-  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "battery", "gear", "trip", "history", "codes", "settings", "options"};
+  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "trip", "history", "codes", "settings", "options"};
   struct Case { float rpm, mph; const char *tag; } cases[] = {{3763, 63, "mid"}, {6900, 112, "red"}, {0, 0, "idle"}};
   for (int pg = 0; pg < rui::PG_COUNT; pg++) for (auto &c : cases) {
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;           // restart each picture from scratch

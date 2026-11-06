@@ -1226,6 +1226,7 @@ static void fillStyleData(rui::Data &d, int p) {
   if (p == PAGE_CUSTOM) { static const int rows[3] = CUSTOM_ROWS; for (int i = 0; i < 3; i++) fillReadout(d.rd[i], rows[i]); }
   if (p == PAGE_QUAD) { static const int cells[4] = QUAD_CELLS; strcpy(d.title, "ENGINE"); for (int i = 0; i < 4; i++) fillReadout(d.rd[i], cells[i]); }
   if (p == PAGE_DUAL) { static const int rows[] = DUAL_ROWS; d.rdN = (int)(sizeof(rows) / sizeof(rows[0])); if (d.rdN > 2) d.rdN = 2; strcpy(d.title, "TEMPS"); for (int i = 0; i < d.rdN; i++) fillReadout(d.rd[i], rows[i]); }
+  if (p == PAGE_BATTERY) { d.rdN = 1; strcpy(d.title, "BATTERY"); fillReadout(d.rd[0], RD_BATT); }   // same layout as TEMPS: one value with a bar
   if (p == PAGE_GEAR) d.gear = gearShown();
 }
 
@@ -1377,7 +1378,7 @@ static void roundDialFrame(int p, uint32_t now) {
   if (p == PAGE_SETTINGS) { if (optCount(settingsSub) > 0) fillOptionsData(d, settingsSub); else fillSettingsData(d); }
   d.ver = (int)(((uint32_t)d.ver * 8u + (cfg.speedKmh ? 1u : 0u) + (cfg.tempC ? 2u : 0u) + (cfg.pressBar ? 4u : 0u)) & 0x3FFFFFFF);   // unit labels are part of the static content
   int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : p == PAGE_ARC ? rui::PG_ARC
-         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_BATTERY ? rui::PG_BATTERY : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
+         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_BATTERY ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
   uint32_t t0 = micros();
   uint16_t *fb = fullCanvas->getFramebuffer();
   rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen
