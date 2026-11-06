@@ -194,6 +194,7 @@ struct Data {
   bool haveArc = false; float arcVal = 0, arcMin = -1, arcMax = 2, arcMajor = 0.5f, arcMinor = 0.1f, arcRed = 1.6f; int arcDec = 1;
   char arcText[12] = "--", arcUnit[8] = "", arcLabel[14] = "", title[14] = "";
   Readout rd[4];
+  int rdN = 2;                   // rows on the dual page: 1 (centred) or 2
   char gear = 'N';               // 'N' stopped, '1'..'6', '-' unknown
   float rpm = 0, mph = 0;
   bool haveCool = false, haveFuel = false, haveBatt = false, haveLoad = false;
@@ -460,8 +461,8 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     }
   } else if (pg == PG_DUAL) {
     if (d.title[0]) textC(b, F_LBL, d.title, CX, 74, CYAN);
-    for (int i = 0; i < 2; i++) {
-      const int y0 = i ? 262 : 120;
+    for (int i = 0; i < d.rdN && i < 2; i++) {
+      const int y0 = d.rdN == 1 ? 190 : (i ? 262 : 120);       // one row: centred
       iconDraw(b, d.rd[i].icon, CX - 84, y0 + 7, CYAN);
       char lab[24]; snprintf(lab, sizeof(lab), "%s %s", d.rd[i].label, d.rd[i].unit);
       text(b, F_LBL, lab, CX - 62, y0, DIM);
@@ -651,8 +652,8 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     static const int cxs[4] = {CX - 96, CX + 96, CX - 96, CX + 96}, cys[4] = {CY - 80, CY - 80, CY + 84, CY + 84};
     for (int i = 0; i < 4; i++) num(S, fb, i, F_NUM, d.rd[i].have ? d.rd[i].text : none, cxs[i], cys[i] - 18, 0, d.rd[i].have ? d.rd[i].col : DIM);
   } else if (pg == PG_DUAL) {
-    for (int i = 0; i < 2; i++) {
-      const int y0 = i ? 262 : 120;
+    for (int i = 0; i < d.rdN && i < 2; i++) {
+      const int y0 = d.rdN == 1 ? 190 : (i ? 262 : 120);
       num(S, fb, i, F_NUM, d.rd[i].have ? d.rd[i].text : none, CX, y0 + 32, 0, d.rd[i].have ? d.rd[i].col : DIM);
       barFill(S, fb, i, CX - 120, y0 + 88, 240, 10, d.rd[i].have ? d.rd[i].frac : 0, d.rd[i].col);
     }

@@ -1223,7 +1223,7 @@ static void fillStyleData(rui::Data &d, int p) {
   }
   if (p == PAGE_CUSTOM) { static const int rows[3] = CUSTOM_ROWS; for (int i = 0; i < 3; i++) fillReadout(d.rd[i], rows[i]); }
   if (p == PAGE_QUAD) { static const int cells[4] = QUAD_CELLS; strcpy(d.title, "ENGINE"); for (int i = 0; i < 4; i++) fillReadout(d.rd[i], cells[i]); }
-  if (p == PAGE_DUAL) { static const int rows[2] = DUAL_ROWS; strcpy(d.title, "TEMPS"); for (int i = 0; i < 2; i++) fillReadout(d.rd[i], rows[i]); }
+  if (p == PAGE_DUAL) { static const int rows[] = DUAL_ROWS; d.rdN = (int)(sizeof(rows) / sizeof(rows[0])); if (d.rdN > 2) d.rdN = 2; strcpy(d.title, "TEMPS"); for (int i = 0; i < d.rdN; i++) fillReadout(d.rd[i], rows[i]); }
   if (p == PAGE_GEAR) d.gear = gearShown();
 }
 

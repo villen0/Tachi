@@ -63,7 +63,7 @@
 #define RD_TORQUE 8   // engine torque (needs the car to answer PID 62, ideally 63 too for Nm / lb-ft; otherwise shows percent of the reference torque)
 #define CUSTOM_ROWS {RD_COOL, RD_INTAKE, RD_BATT}            // the three readouts under the boost number
 #define QUAD_CELLS  {RD_TORQUE, RD_INTAKE, RD_FUEL, RD_LOAD}   // the four values of the quad page
-#define DUAL_ROWS   {RD_COOL, RD_INTAKE}                     // the two values with bars
+#define DUAL_ROWS   {RD_COOL}                                // the one or two values with bars (one is centred)
 #define DIAL_FPS          30   // target frame rate of the dial pages
 #define SWIPE_NEXT_ON_RIGHT 0  // 1 = swipe right goes to the next page, 0 = swipe left goes to the next page (like a phone)
 // One-off test at first connect: listens ~45 s for the Mazda gear selector CAN message (ID 0x01F) and reports on the Debug page and Serial. Set 0 when done.
