@@ -329,7 +329,7 @@ inline void setRingColors(Ring &R, uint16_t (*f)(float frac, const void *), cons
 }
 
 // ---- drive report / fault codes layout constants and touch zones -----------------------------------------------------
-constexpr int TR_CHIP_Y = 370, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
+constexpr int TR_CHIP_Y = 346, TR_CHIP_H = 26, TR_CHIP_GAP = 6;
 // A list, like the Settings and Trip history pages: six rows (label left, value right), then two footer lines and the TRIPS button.
 // Order: top speed, max rpm, max coolant, peak boost, volts (a "13.1-14.2" range), new codes.
 constexpr int TR_ROW_X0 = 90, TR_ROW_W = 300, TR_ROW_Y0 = 94, TR_ROW_H = 34, TR_ROW_GAP = 4;
@@ -663,8 +663,7 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
       const char *v = T.have ? T.t[i].value : "--";
       num(S, fb, i, F_MED, v, TR_ROW_X0 + TR_ROW_W - 14 - textW(F_MED, v) / 2, tripRowY(i) + (TR_ROW_H - F_MED.h) / 2, 0, T.have ? T.t[i].col : DIM);   // right aligned
     }
-    num(S, fb, 8, F_LBL, T.have ? T.foot1 : "NO TRIP RECORDED YET", CX, 330, 0, DIM);
-    num(S, fb, 9, F_LBL, T.have ? T.foot2 : "", CX, 348, 0, DIM);
+    // (no footer lines: time, distance and brakes are no longer shown, and an empty report just shows "--")
   } else if (pg == PG_HISTORY) {
     // static page: everything is in the background layer
   } else if (pg == PG_CODES) {
