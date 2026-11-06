@@ -208,7 +208,7 @@ struct Data {
 
 // ---- ring segments: a precomputed pixel list per ring --------------------------------------------------------------
 // entry bits: 0-17 pixel index, 18-24 segment, 25-26 ring, 27-31 coverage (0..31)
-constexpr int MAX_RINGS = 4, MAX_SEG = 90, MAP_CAP = 36000;
+constexpr int MAX_RINGS = 4, MAX_SEG = 128, MAP_CAP = 36000;
 struct Ring { float cx, cy, r0, r1; int nseg; float segDeg, gapDeg; uint16_t lit[MAX_SEG], dim[MAX_SEG]; int cur, prev; bool valid; };
 
 struct Slot { char s[44]; uint16_t col; int16_t x0, x1; };   // x0..x1: where the text was drawn
@@ -421,14 +421,14 @@ inline void buildStyle(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg; char t[16];
   if (pg == PG_ARC || pg == PG_CUSTOM) {
     const bool big = pg == PG_ARC;
-    buildRing(S, 0, CX, CY, 214, 226, 90, 0.8f); S.nring = 1;
+    buildRing(S, 0, CX, CY, 200, 226, 128, -0.6f); S.nring = 1;   // a solid arc: 128 touching segments (a negative gap overlaps them, so no seams show)
     float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
     float minor = d.arcMinor > 0.0001f ? d.arcMinor : 1; int per = (int)(d.arcMajor / minor + 0.5f); if (per < 1) per = 1;
     int n = (int)(span / minor + 0.5f);
     for (int i = 0; i <= n; i++) {
       float v = d.arcMin + i * minor; bool major = (i % per) == 0;
-      tick(b, v - d.arcMin, span, major ? 190.0f : 197.0f, 207.0f, major ? 1.6f : 0.8f, major ? WHITE : FAINT);
-      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 150.0f : 152.0f, t, DIM); }
+      tick(b, v - d.arcMin, span, major ? 170.0f : 178.0f, 188.0f, major ? 1.6f : 0.8f, major ? WHITE : FAINT);
+      if (major) { snprintf(t, sizeof(t), "%.*f", d.arcDec, v); numeral(b, v - d.arcMin, span, big ? 142.0f : 144.0f, t, DIM); }
     }
     if (d.arcLabel[0]) textC(b, F_LBL, d.arcLabel, CX, big ? 338 : 348, CYAN);
     if (d.arcUnit[0]) textC(b, F_LBL, d.arcUnit, CX, big ? 262 : 182, DIM);
@@ -446,6 +446,7 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       if (a->zero > 0 && f < a->zero) return lerpRGB(LOOK.cold, LOOK.k[0], f / a->zero);
       float lo = a->zero > 0 ? a->zero : 0, u = (f - lo) / (a->red - lo > 0.01f ? a->red - lo : 0.01f);
       return u < 0.5f ? lerpRGB(LOOK.k[0], LOOK.k[1], u / 0.5f) : lerpRGB(LOOK.k[1], LOOK.k[2], (u - 0.5f) / 0.5f); }, &a);
+    for (int i = 0; i < S.ring[0].nseg; i++) S.ring[0].dim[i] = mix(BG, PANEL_EDGE, 90);   // one calm, even track behind the lit arc
   } else if (pg == PG_QUAD) {
     if (d.title[0]) textC(b, F_LBL, d.title, CX, 64, CYAN);
     taper(b, CX, 118, CX, 384, 0.7f, 0.7f, FAINT); taper(b, 84, CY + 2, 396, CY + 2, 0.7f, 0.7f, FAINT);
