@@ -32,7 +32,9 @@
 #define LONG_PRESS_MS      1500
 
 // Character (Mochi-style animated eyes on the Face page, see docs/mochi-plan.md)
-#define MOCHI_INTRO  1        // play the welcome animation at power-on
+#define MOCHI_INTRO  0        // play the old Tachi face welcome at power-on (off: the Face page is hidden, see SHOW_PAGE_FACE)
+#define SHOW_PAGE_FACE 0      // the animated face page (the old Tachi faces); 1 brings it back
+#define BRAND_WELCOME 1       // the Revsense welcome screen at power-on (not after a quick restart, e.g. while the engine cranks); a tap skips it
 #define INTRO_FORCE  0        // welcome type: 0 = auto (full on fresh power-up, short after a restart), 1 = always full, 2 = always short
 #define UI_FPS       30       // target frame rate of the Face page
 

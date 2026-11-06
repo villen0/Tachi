@@ -17,7 +17,7 @@ struct Settings {
   uint32_t magic = 0x54534554;            // "TSET"
   uint16_t version = 1, size = 0;
   uint8_t speedKmh = 0, tempC = 0, pressBar = 0;   // 0 = mph / deg F / psi, 1 = km/h / deg C / bar
-  uint8_t theme = 0, mode = 0;                     // look (see theme.h) and accent colour (0 = the theme's own)
+  uint8_t theme = 4, mode = 0;                     // look (see theme.h; 4 = REVSENSE, the default) and accent colour (0 = the theme's own)
   int16_t coolWarnC = 100, coolHotC = 108;         // coolant turns yellow / red
   uint8_t battLowDeciV = 120;                      // battery yellow below this with the engine off (running: 1.2 V higher); red 0.5 V below it
   uint8_t fuelLowPct = 15;                         // fuel yellow below this, red below half of it
@@ -26,7 +26,7 @@ struct Settings {
 };
 #pragma pack(pop)
 
-constexpr int THEMES = 4, MODES = 7;               // modes: the theme's own colour + 6 accent colours
+constexpr int THEMES = 5, MODES = 7;               // modes: the theme's own colour + 6 accent colours
 
 inline bool valid(const Settings &s) {
   Settings d;

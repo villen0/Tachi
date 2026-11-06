@@ -26,7 +26,7 @@ static void drawTestPicture() {
   rgbDisp->drawFastVLine(cx, 0, LCD_H, 0x39E7);
   rgbDisp->setTextColor(WHITE);
   rgbDisp->setTextSize(4);
-  rgbDisp->setCursor(cx - 60, cy - 50); rgbDisp->print("TACHI");
+  rgbDisp->setCursor(cx - 60, cy - 50); rgbDisp->print("REVSENSE");
   rgbDisp->setTextSize(2);
   rgbDisp->setCursor(cx - 100, cy + 10); rgbDisp->print("round 2.8C bring-up");
   rgbDisp->setCursor(cx - 90, cy + 40); rgbDisp->print("touch the screen");
@@ -35,7 +35,7 @@ static void drawTestPicture() {
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("\nTachi round 2.8C bring-up: " __DATE__ " " __TIME__);
+  Serial.println("\nRevsense round 2.8C bring-up: " __DATE__ " " __TIME__);
   i2cBegin();
   for (uint8_t a = 1; a < 127; a++) {
     Wire.beginTransmission(a);

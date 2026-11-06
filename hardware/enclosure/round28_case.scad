@@ -1,4 +1,4 @@
-// Tachi enclosure for the Waveshare ESP32-S3-Touch-LCD-2.8C (round 480x480 touch display).
+// Revsense enclosure for the Waveshare ESP32-S3-Touch-LCD-2.8C (round 480x480 touch display).
 // Two parts joined by four M3 screws through side lugs, with a lap joint: a FRONT bezel (display window) and a BACK shell
 // (cavity for the circuit board, cut-outs for USB-C ports, buttons and the TF slot).
 //

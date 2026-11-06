@@ -1,4 +1,4 @@
-// Tachi: ESP32-S3 OBD-II dash pet for the Waveshare ESP32-S3-Touch-LCD-2.8C (round 480x480 touch display).
+// Revsense (repo and storage name: Tachi): ESP32-S3 OBD-II dash pet for the Waveshare ESP32-S3-Touch-LCD-2.8C (round 480x480 touch display).
 // See README.md.
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -20,6 +20,7 @@
 #include "report_view.h"
 #include "settings.h"
 #include "theme.h"
+#include "brand.h"           // the Revsense welcome screen
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -129,6 +130,7 @@ static void resetGauges() {
 static bool dialFailed = false;                  // the dial pages' buffers could not be allocated
 static bool boostVisible() { return gSupported[G_MAP] && (gOk[G_MAP] || gFails[G_MAP] < 5); }   // the car answers MAP (intake manifold pressure)
 static bool pageVisible(int p) {
+  if (p == PAGE_FACE) return SHOW_PAGE_FACE && true;
   if (p == PAGE_CLUSTER) return SHOW_PAGE_CLUSTER && !dialFailed;
   if (p == PAGE_DIAL_TACH || p == PAGE_DIAL_SPEEDO) return SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_DIAL_VITALS) return SHOW_PAGE_VITALS && SHOW_PAGE_DIALS && !dialFailed;
@@ -1447,6 +1449,27 @@ void uiTick() {
   }
 #endif
 
+#if BRAND_WELCOME
+  {   // the Revsense welcome: plays once at power-on (not after a quick restart), over everything else; a touch skips it
+    static bool done = bootQuickRestart, started = false; static uint32_t t0 = 0;
+    if (!done) {
+      if (!rui::begin()) done = true;                                             // no buffers: no welcome
+      else {
+        uint16_t *wfb = fullCanvas->getFramebuffer();
+        if (!started) { started = true; t0 = now; for (int i = 0; i < LCD_W * LCD_H; i++) wfb[i] = rui::BG; rui::mark(rui::st(), 0, 0, rui::W - 1, rui::H - 1); }
+        bool skip = btnDown && now - t0 > 400;
+        if (skip) swallowTouch = true;                                           // this touch only skips the welcome, it is not also a tap
+        if (skip || !brand::frame(wfb, now - t0)) { done = true; forceDraw = true; drawnPage = -1; }
+        else {
+          rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); rgbDisp->draw16bitRGBBitmap(x, y, wfb + y * LCD_W + x, w, 1); });
+          lastMood = (int)m;
+          return;
+        }
+      }
+    }
+  }
+#endif
+
   // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
   static bool statusShown = false; static uint32_t shownStatusVer = 0;
   bool introOn = MOCHI_INTRO && character.introActive() && page == PAGE_FACE;
@@ -1631,7 +1654,7 @@ void setup() {
   loadSettings();
   loadTrips();
   NimBLEDevice::init("");
-  Serial.printf("Tachi starting [%s, built %s %s], demo mode %s\n", FW_TAG, __DATE__, __TIME__, demo ? "ON" : "OFF");
+  Serial.printf("Revsense starting [%s, built %s %s], demo mode %s\n", FW_TAG, __DATE__, __TIME__, demo ? "ON" : "OFF");
   xTaskCreatePinnedToCore(uiTask, "ui", 10240, nullptr, 2, nullptr, 1);   // display + button + animation
 }
 
