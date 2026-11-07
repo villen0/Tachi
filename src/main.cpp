@@ -972,10 +972,14 @@ static void pollTouch() {
 
 void handleButton() {
   pollTouch();
-  static uint32_t lastDemoToggle = 0;
-  if (btnDown && !btnLongFired && !swallowTouch && millis() - btnDownMs >= LONG_PRESS_MS && (lastDemoToggle == 0 || millis() - lastDemoToggle > 4000)) {   // 4 s lockout: a finger still on the glass (or a touch report lost during a slow redraw) must not flip demo back
+  // After a toggle the finger must come up and stay up for 0.6 s before another hold counts. (A finger still on the glass, or touch reports
+  // lost during a slow redraw that look like a lift and a new press, must not flip demo back.)
+  static uint32_t upSince = 0; static bool needRelease = false;
+  if (btnDown) upSince = 0; else if (!upSince) upSince = millis();
+  if (needRelease && upSince && millis() - upSince > 600) needRelease = false;
+  if (btnDown && !btnLongFired && !swallowTouch && !needRelease && millis() - btnDownMs >= LONG_PRESS_MS) {
     btnLongFired = true;
-    lastDemoToggle = millis();
+    needRelease = true;
     demo = !demo;
     Serial.printf("demo mode %s\n", demo ? "ON" : "OFF");
     lastValidMs = 0;
@@ -1461,7 +1465,7 @@ void uiTick() {
       else {
         uint16_t *wfb = fullCanvas->getFramebuffer();
         if (!started) { started = true; t0 = now; for (int i = 0; i < LCD_W * LCD_H; i++) wfb[i] = rui::BG; rui::mark(rui::st(), 0, 0, rui::W - 1, rui::H - 1); }
-        bool skip = btnDown && now - t0 > 400 && !(demo && now - t0 < 2000);       // (in demo the finger that switched it on may still be down: ignore it for 2 s)
+        bool skip = btnDown && btnDownMs > t0 + 300;                               // only a touch that began during the welcome skips it (not the finger that switched demo on)
         if (skip) swallowTouch = true;                                           // this touch only skips the welcome, it is not also a tap
         if (skip || !brand::frame(wfb, now - t0)) { done = true; forceDraw = true; drawnPage = -1; }
         else {
