@@ -935,7 +935,7 @@ static void pollTouch() {
   } else if (release && btnDown) {
     btnDown = false;
     if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = false; codeClearProg = 0; return; }      // this touch only woke the screen
-    if (statusActive && !statusHidden && !demo) { statusHidden = true; forceDraw = true; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = false; return; }   // a touch on the status screen skips it
+    if (statusActive && !statusHidden && !demo && !btnLongFired) { statusHidden = true; forceDraw = true; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = false; return; }   // a touch on the status screen skips it
     if (setRow >= 0 || optRow >= 0 || backBtn) {                                                           // Settings: open a row, change an option, or go back to the hub
       int sr = setRow, orow = optRow, opart = optPart; bool bk = backBtn; setRow = optRow = -1; backBtn = false;
       bool moved = abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX;       // a finger that travelled is a swipe, not a press: handled below
