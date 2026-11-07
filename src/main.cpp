@@ -972,8 +972,10 @@ static void pollTouch() {
 
 void handleButton() {
   pollTouch();
-  if (btnDown && !btnLongFired && !swallowTouch && millis() - btnDownMs >= LONG_PRESS_MS) {
+  static uint32_t lastDemoToggle = 0;
+  if (btnDown && !btnLongFired && !swallowTouch && millis() - btnDownMs >= LONG_PRESS_MS && (lastDemoToggle == 0 || millis() - lastDemoToggle > 4000)) {   // 4 s lockout: a finger still on the glass (or a touch report lost during a slow redraw) must not flip demo back
     btnLongFired = true;
+    lastDemoToggle = millis();
     demo = !demo;
     Serial.printf("demo mode %s\n", demo ? "ON" : "OFF");
     lastValidMs = 0;
@@ -1450,14 +1452,16 @@ void uiTick() {
 #endif
 
 #if BRAND_WELCOME
-  {   // the Revsense welcome: plays once at power-on (not after a quick restart), over everything else; a touch skips it
-    static bool done = bootQuickRestart, started = false; static uint32_t t0 = 0;
+  {   // the Revsense welcome: plays at power-on (not after a quick restart) and again when demo mode is switched on; a touch skips it
+    static bool done = bootQuickRestart, started = false, lastDemo = false; static uint32_t t0 = 0;
+    if (demo && !lastDemo) { done = false; started = false; }                    // demo ON replays the welcome
+    lastDemo = demo;
     if (!done) {
       if (!rui::begin()) done = true;                                             // no buffers: no welcome
       else {
         uint16_t *wfb = fullCanvas->getFramebuffer();
         if (!started) { started = true; t0 = now; for (int i = 0; i < LCD_W * LCD_H; i++) wfb[i] = rui::BG; rui::mark(rui::st(), 0, 0, rui::W - 1, rui::H - 1); }
-        bool skip = btnDown && now - t0 > 400;
+        bool skip = btnDown && now - t0 > 400 && !(demo && now - t0 < 2000);       // (in demo the finger that switched it on may still be down: ignore it for 2 s)
         if (skip) swallowTouch = true;                                           // this touch only skips the welcome, it is not also a tap
         if (skip || !brand::frame(wfb, now - t0)) { done = true; forceDraw = true; drawnPage = -1; }
         else {
@@ -1469,6 +1473,7 @@ void uiTick() {
     }
   }
 #endif
+
 
   // Status text (scanning, connecting, link lost) takes over the screen, except during the welcome animation.
   static bool statusShown = false; static uint32_t shownStatusVer = 0;
