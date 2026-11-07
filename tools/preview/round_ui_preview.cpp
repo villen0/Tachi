@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   if (!rui::begin()) { puts("alloc failed"); return 1; }
   std::vector<uint16_t> fb(rui::W * rui::H, 0);
-  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "trip", "history", "codes", "settings", "options"};
+  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "gforce", "trip", "history", "codes", "settings", "options"};
   struct Case { float rpm, mph; const char *tag; } cases[] = {{3763, 63, "mid"}, {6900, 112, "red"}, {0, 0, "idle"}};
   for (int pg = 0; pg < rui::PG_COUNT; pg++) for (auto &c : cases) {
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;           // restart each picture from scratch
@@ -35,6 +35,8 @@ int main(int argc, char **argv) {
     const char *lab[4] = {"TORQUE", "INTAKE", "FUEL", "LOAD"}, *unit[4] = {"LB-FT", "F", "%", "%"}, *txt[4] = {"195", "88", "13.6", "42"}; float fr[4] = {0.62f, 0.3f, 0.7f, 0.42f};
     for (int k = 0; k < 4; k++) { strcpy(d.rd[k].label, lab[k]); strcpy(d.rd[k].unit, unit[k]); strcpy(d.rd[k].text, txt[k]); d.rd[k].icon = k == 0 ? rui::IC_THERM : k == 1 ? rui::IC_AIR : k == 2 ? rui::IC_BATT : rui::IC_LOAD; d.rd[k].have = true; d.rd[k].frac = fr[k]; d.rd[k].col = k == 1 ? rui::ORANGE : rui::WHITE; }
     if (pg == rui::PG_DUAL) { d.rdN = 1; strcpy(d.rd[1].label, "OIL TEMP"); d.rd[1].icon = rui::IC_BOOST; }
+    { rui::GForceView &G = d.g; G.have = true; float k = c.rpm > 6000 ? 1.0f : (c.rpm > 0 ? 0.55f : 0.0f); G.x = 0.62f * k; G.y = -0.38f * k; G.total = sqrtf(G.x * G.x + G.y * G.y); G.peak = 0.83f * k; G.peakX = 0.71f * k; G.peakY = -0.44f * k;
+      G.n = 12; for (int i = 0; i < 12; i++) { float f = (i + 1) / 12.0f; G.tx[i] = G.x * f * f; G.ty[i] = G.y * f * f - 0.1f * (1 - f) * k; } }
     d.gear = c.rpm > 6000 ? '5' : (c.rpm > 0 ? '3' : 'N');
     { d.settings.n = 2; strcpy(d.settings.row[0].label, "BRIGHTNESS"); strcpy(d.settings.row[0].value, "85 %"); d.settings.row[0].icon = rui::IC_SUN; strcpy(d.settings.row[1].label, "DEBUG"); strcpy(d.settings.row[1].value, "cluster2"); d.settings.row[1].icon = rui::IC_BUG; }
     { rui::TripView &T = d.trip; T.have = c.rpm > 0; T.live = false; T.sel = 1; T.nSaved = 3;

@@ -21,6 +21,7 @@
 #include "settings.h"
 #include "theme.h"
 #include "brand.h"           // the Revsense welcome screen
+#include "gforce.h"          // G-force meter (the board's motion sensor)
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -84,6 +85,9 @@ static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP 
 
 // The user's settings (units, warning levels, theme): loaded in setup(), changed on the Settings pages, saved by the main loop (cfgSaveReq).
 static settings::Settings cfg;
+static gforce::Meter gMeter;                         // G-force meter (UI task only); its learned axis directions are saved in flash
+static int gSavedLon = 0, gSavedLat = 0;
+static volatile bool gSignsSaveReq = false; static volatile int gSaveLon = 0, gSaveLat = 0;     // learned axis directions, saved by the main loop
 // Face page background: a gradient from the top colour to the bottom colour (0..255). Classic keeps the original navy / indigo; the other
 // looks use a soft, muted version of the theme colour (the accent washed toward grey and kept dark, so the eyes stay the brightest thing).
 static float faceBgTop[3] = {5, 10, 26}, faceBgBot[3] = {20, 12, 46};
@@ -109,7 +113,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_BATTERY, PAGE_GEAR, PAGE_TRIP, PAGE_HISTORY, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_BATTERY, PAGE_GEAR, PAGE_GFORCE, PAGE_TRIP, PAGE_HISTORY, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
 static_assert(PAGE_SETTINGS == PAGE_COUNT - 1, "Settings must stay the last page: add new pages before it");
 volatile int page = PAGE_FACE;       // a tap or swipe changes the page (see pageVisible)
 
@@ -127,6 +131,7 @@ static char supText[2][28] = {"sup: (not read yet)", ""};
 static void resetGauges() {
   for (int g = 0; g < G_COUNT; g++) { gVal[g] = 0; gTs[g] = gLastTry[g] = 0; gFails[g] = 0; gSupported[g] = gOk[g] = false; }
 }
+static volatile bool imuOk = false;               // the motion sensor answered at start-up (G-force page)
 static bool dialFailed = false;                  // the dial pages' buffers could not be allocated
 static bool boostVisible() { return gSupported[G_MAP] && (gOk[G_MAP] || gFails[G_MAP] < 5); }   // the car answers MAP (intake manifold pressure)
 static bool pageVisible(int p) {
@@ -135,6 +140,7 @@ static bool pageVisible(int p) {
   if (p == PAGE_DIAL_TACH || p == PAGE_DIAL_SPEEDO) return SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_DIAL_VITALS) return SHOW_PAGE_VITALS && SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_BATTERY) return SHOW_PAGE_BATTERY && !dialFailed;
+  if (p == PAGE_GFORCE) return SHOW_PAGE_GFORCE && !dialFailed && (imuOk || demo);   // needs the motion sensor (or demo mode)
   if (p == PAGE_CUSTOM) return SHOW_PAGE_CUSTOM && SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p == PAGE_ARC) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p == PAGE_GEAR) return SHOW_PAGE_GEAR && SHOW_PAGE_STYLES && !dialFailed;
@@ -503,11 +509,16 @@ static void loadSettings() {                         // setup(): the saved setti
   Preferences pr; if (!pr.begin("tachi", true)) return;
   settings::Settings c;
   if (pr.getBytes("cfg", &c, sizeof(c)) == sizeof(c) && settings::valid(c)) cfg = c;
+  uint8_t gs[2]; if (pr.getBytes("gsg", gs, 2) == 2 && gs[0] <= 1 && gs[1] <= 1) { gSavedLon = gs[0] ? 1 : -1; gSavedLat = gs[1] ? 1 : -1; gMeter.setSigns(gSavedLon, gSavedLat); }   // axis directions learned on an earlier drive
   pr.end();
   applyLook();
   tracker.setConfig(tripConfig());
 }
 static void persistTick() {                          // main loop
+  if (gSignsSaveReq) {
+    gSignsSaveReq = false; uint8_t gs[2] = {(uint8_t)(gSaveLon > 0), (uint8_t)(gSaveLat > 0)};
+    Preferences pr; if (pr.begin("tachi", false)) { pr.putBytes("gsg", gs, 2); pr.end(); Serial.println("saved G-force axis directions"); }
+  }
   if (cfgSaveReq) {
     cfgSaveReq = false;
     settings::Settings c = cfg;
@@ -872,6 +883,43 @@ void IRAM_ATTR onButtonEdge() {
   }
 }
 
+// ---------- G-force: the board's QMI8658 motion sensor (on the same I2C bus as the touch chip, so only the UI task reads it) ----------
+static uint8_t imuAddr = 0;
+static gforce::Vec gLastAcc{0, 1, 0};
+static uint32_t gSignsSavedAt = 0;
+static bool imuWrite(uint8_t reg, uint8_t v) { Wire.beginTransmission(imuAddr); Wire.write(reg); Wire.write(v); return Wire.endTransmission() == 0; }
+static bool imuRead(uint8_t reg, uint8_t *buf, size_t n) {
+  Wire.beginTransmission(imuAddr); Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom((int)imuAddr, (int)n) != (int)n) return false;
+  for (size_t i = 0; i < n; i++) buf[i] = Wire.read();
+  return true;
+}
+static void imuInit() {                              // setup(): finds the sensor (address 0x6B or 0x6A, WHO_AM_I 0x05), +-4 g and +-256 deg/s at 125 Hz
+  for (uint8_t a : {(uint8_t)0x6B, (uint8_t)0x6A}) {
+    imuAddr = a; uint8_t id = 0;
+    if (imuRead(0x00, &id, 1) && id == 0x05) { imuOk = true; break; }
+  }
+  if (!imuOk) { Serial.println("motion sensor not found: the G-force page is hidden"); return; }
+  imuWrite(0x08, 0x00); imuWrite(0x02, 0x40); imuWrite(0x03, 0x15); imuWrite(0x04, 0x45); imuWrite(0x08, 0x03);   // CTRL7: accelerometer + gyro on
+  delay(20);
+  Serial.printf("motion sensor at 0x%02X\n", imuAddr);
+}
+static void imuTick(uint32_t now) {                  // every UI tick, also while the screen is dark (the reference follows the car's tilt)
+  if (!imuOk || demo) return;
+  uint8_t b[12];
+  if (!imuRead(0x35, b, 12)) return;
+  auto i16 = [&](int k) { return (float)(int16_t)(b[k] | (b[k + 1] << 8)); };
+  gforce::Vec acc{i16(0) / 8192.0f, i16(2) / 8192.0f, i16(4) / 8192.0f}, gy{i16(6) / 128.0f, i16(8) / 128.0f, i16(10) / 128.0f};
+  gLastAcc = acc;
+  gMeter.feed(acc, gy, fresh(tsMph, FAST_FRESH_MS) ? (float)mph : -1.0f, now);
+  if (gMeter.learned() && now - gSignsSavedAt > 5000) {                      // remember the learned directions for the next start
+    gSignsSavedAt = now;
+    if (gMeter.signLon() != gSavedLon || gMeter.signLat() != gSavedLat) { gSavedLon = gSaveLon = gMeter.signLon(); gSavedLat = gSaveLat = gMeter.signLat(); gSignsSaveReq = true; }
+  }
+}
+static void gZeroNow() { gMeter.zero(gLastAcc); }    // the ZERO chip: this is "level", forget the peak
+
 // UI-side state of the two report pages
 // Settings page: the hub, or one of its sub-screens (UI task only). Leaving the page always returns to the hub.
 enum { SUB_HUB, SUB_BRIGHT, SUB_DEBUG, SUB_UNITS, SUB_WARN, SUB_THEME };
@@ -902,7 +950,7 @@ static void pollTouch() {
   static bool slider = false;               // the finger went down on the brightness slider: it drags the slider, nothing else
   static bool preset = false;               // ... or on one of the preset chips: it jumps to that level
   static int tripChip = -1, codeBtn = -1, histRow = -1;   // drive report chip / fault codes button the finger went down on (-1 none)
-  static int setRow = -1, optRow = -1, optPart = 0; static bool backBtn = false;   // Settings hub row / options row (and its - / + part) / BACK chip the finger went down on
+  static int setRow = -1, optRow = -1, optPart = 0; static bool backBtn = false, zeroBtn = false;   // Settings hub row / options row (and its - / + part) / BACK chip the finger went down on
   static uint32_t holdStart = 0; static bool clearFired = false;
   uint32_t ms = millis();
   if (ms - lastPoll < 15) return;
@@ -922,7 +970,8 @@ static void pollTouch() {
       optPart = optRow >= 0 ? rui::optionPart(optKind(settingsSub), x) : -1; if (optPart < 0) optRow = -1;   // a stepper's label and value are not buttons
       if (setRow >= SETTINGS_ROWS) setRow = -1;                                // the empty part of the hub is an ordinary tap area
       backBtn = (!swallowTouch && page == PAGE_SETTINGS && settingsSub != 0 && rui::backAt(x, y) > 0 && !slider && !preset);
-      if (tripChip >= 0 || codeBtn >= 0 || histRow >= 0 || setRow >= 0 || optRow >= 0 || backBtn) btnLongFired = true;   // a button press: not a page tap, a swipe or the demo long press
+      zeroBtn = (!swallowTouch && page == PAGE_GFORCE && rui::gforceZeroAt(x, y) > 0);
+      if (tripChip >= 0 || codeBtn >= 0 || histRow >= 0 || setRow >= 0 || optRow >= 0 || backBtn || zeroBtn) btnLongFired = true;   // a button press: not a page tap, a swipe or the demo long press
       holdStart = ms; clearFired = false; }
     lx = x; ly = y;
     if (codeBtn == 1 && !clearFired && !swallowTouch) {                       // CLEAR has to be held (and never from a touch that woke the screen)
@@ -934,8 +983,13 @@ static void pollTouch() {
     else if (!btnLongFired && (abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX)) btnLongFired = true;   // the finger is moving: not a tap, not a long press
   } else if (release && btnDown) {
     btnDown = false;
-    if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = false; codeClearProg = 0; return; }      // this touch only woke the screen
-    if (statusActive && !statusHidden && !demo && !btnLongFired) { statusHidden = true; forceDraw = true; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = false; return; }   // a touch on the status screen skips it
+    if (swallowTouch) { swallowTouch = false; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = zeroBtn = false; codeClearProg = 0; return; }      // this touch only woke the screen
+    if (statusActive && !statusHidden && !demo && !btnLongFired) { statusHidden = true; forceDraw = true; tripChip = codeBtn = histRow = setRow = optRow = -1; backBtn = zeroBtn = false; return; }   // a touch on the status screen skips it
+    if (zeroBtn) {                                                                                         // G-force page: the ZERO chip
+      zeroBtn = false;
+      bool movedZ = abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX;
+      if (!movedZ) { if (rui::gforceZeroAt(lx, ly) > 0) gZeroNow(); return; }
+    }
     if (setRow >= 0 || optRow >= 0 || backBtn) {                                                           // Settings: open a row, change an option, or go back to the hub
       int sr = setRow, orow = optRow, opart = optPart; bool bk = backBtn; setRow = optRow = -1; backBtn = false;
       bool moved = abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX;       // a finger that travelled is a swipe, not a press: handled below
@@ -1368,6 +1422,24 @@ static void fillOptionsData(rui::Data &d, int sub) {
   d.ver = (int)((uint32_t)(sub * 1000003u + cfg.speedKmh * 7u + cfg.tempC * 11u + cfg.pressBar * 13u + cfg.theme * 17u + cfg.mode * 19u + (uint32_t)cfg.coolWarnC * 23u + (uint32_t)cfg.coolHotC * 29u + cfg.battLowDeciV * 31u + cfg.fuelLowPct * 37u + cfg.redlineRpm * 41u) & 0x3FFFFFFF);
 }
 
+// G-force page data: the filtered position, the peak and the last second as a trail (demo mode: a made-up drive).
+static void fillGForce(rui::Data &d, uint32_t now) {
+  rui::GForceView &g = d.g;
+  if (demo) {
+    static float demoPeak = 0, demoPx = 0, demoPy = 0;
+    auto pos = [](float t, float *x, float *y) { *x = 0.85f * sinf(t * 0.9f); *y = 0.65f * sinf(t * 0.55f + 1.0f) * (0.6f + 0.4f * sinf(t * 0.2f)); };
+    float t = now / 1000.0f, x, y; pos(t, &x, &y);
+    g.have = true; g.x = x; g.y = y; g.total = sqrtf(x * x + y * y);
+    if (g.total > demoPeak) { demoPeak = g.total; demoPx = x; demoPy = y; }
+    g.peak = demoPeak; g.peakX = demoPx; g.peakY = demoPy;
+    g.n = 12; for (int i = 0; i < 12; i++) pos(t - (12 - i) * 0.08f, &g.tx[i], &g.ty[i]);
+  } else if (imuOk && gMeter.ready()) {
+    g.have = true; g.x = gMeter.lat(); g.y = gMeter.lon(); g.total = gMeter.total();
+    g.peak = gMeter.peakTotal(); g.peakX = gMeter.peakLatAt(); g.peakY = gMeter.peakLonAt();
+    g.n = gMeter.trailCount() > 12 ? 12 : gMeter.trailCount(); for (int i = 0; i < g.n; i++) gMeter.trailAt(i, &g.tx[i], &g.ty[i]);
+  }
+}
+
 static void roundDialFrame(int p, uint32_t now) {
   static bool started = false;
   if (!started) {
@@ -1386,10 +1458,11 @@ static void roundDialFrame(int p, uint32_t now) {
   d.dotN = visibleCount(); d.dotCur = visibleIndex(page);
   fillStyleData(d, p);
   fillReportData(d, p);
+  if (p == PAGE_GFORCE) fillGForce(d, now);
   if (p == PAGE_SETTINGS) { if (optCount(settingsSub) > 0) fillOptionsData(d, settingsSub); else fillSettingsData(d); }
   d.ver = (int)(((uint32_t)d.ver * 8u + (cfg.speedKmh ? 1u : 0u) + (cfg.tempC ? 2u : 0u) + (cfg.pressBar ? 4u : 0u)) & 0x3FFFFFFF);   // unit labels are part of the static content
   int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : p == PAGE_ARC ? rui::PG_ARC
-         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_BATTERY ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
+         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_QUAD : p == PAGE_DUAL ? rui::PG_DUAL : p == PAGE_BATTERY ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_GFORCE ? rui::PG_GFORCE : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
   uint32_t t0 = micros();
   uint16_t *fb = fullCanvas->getFramebuffer();
   rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen
@@ -1427,6 +1500,7 @@ void uiTick() {
   lastTick = t;
   if (t - gapWindowStart >= 5000) { maxTickGapMs = gapMax; gapMax = 0; gapWindowStart = t; }
   handleButton();
+  imuTick(millis());                                   // G-force: read the motion sensor every tick
   { static int lastPg = -1; if (page != lastPg) { if (lastPg == PAGE_SETTINGS) settingsSub = 0; if (page != PAGE_TRIP && page != PAGE_HISTORY) tripSel = 0; lastPg = page; } }   // leaving Settings always returns it to the hub
   if (!pageVisible(page)) { page = nextPage(page, 1); forceDraw = true; }   // the page on screen vanished (e.g. demo ended)
 
@@ -1654,6 +1728,7 @@ void setup() {
   gfx->fillScreen(BLACK);
   gfx->flush();
   touchInit();
+  imuInit();
   character.begin(esp_random());
   detectBoot();
 #if MOCHI_INTRO

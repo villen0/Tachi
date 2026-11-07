@@ -42,6 +42,7 @@
 #define SHOW_PAGE_CLUSTER  0   // sport cluster: RPM ring, big speed, coolant / fuel / battery chips
 #define SHOW_PAGE_DIALS    1   // analog tachometer and analog speedometer
 #define SHOW_PAGE_VITALS   0   // the four vitals rings (hidden, set 1 to bring it back)
+#define SHOW_PAGE_GFORCE   1   // G-force page: friction circle from the board's motion sensor (hidden if the sensor is not found; works in demo mode)
 #define SHOW_PAGE_BATTERY  1   // battery page: one value with a bar, same style as TEMPS (comes right after it)
 #define SHOW_PAGE_CUSTOM   0   // custom boost page: the arc with three readouts (needs SHOW_PAGE_STYLES; hidden, the Arc page keeps the boost gauge)
 #define SHOW_PAGE_GEAR     0   // estimated gear page (needs SHOW_PAGE_STYLES; hidden for now, set 1 to bring it back)

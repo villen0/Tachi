@@ -23,7 +23,7 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_GFORCE, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -185,7 +185,13 @@ struct SettingsView { int n = 0; SettingsRow row[5]; };
 // Options screen (units, warnings, theme): rows with a label and either a value you tap to change (kind 0) or a - value + stepper (kind 1).
 struct OptRow { char label[16] = ""; char value[16] = ""; uint8_t kind = 0; };
 struct OptionsView { char title[16] = ""; int n = 0; OptRow row[5]; bool swatch = false; };   // swatch: show the gradient of the chosen look under the rows
+// G-force page: positions in g (x: right is positive, y: accelerating is positive), the last second as a trail, and the peak.
+struct GForceView {
+  bool have = false; float x = 0, y = 0, total = 0, peak = 0, peakX = 0, peakY = 0;
+  int n = 0; float tx[12] = {0}, ty[12] = {0};      // trail, oldest first
+};
 struct Data {
+  GForceView g;
   TripView trip; HistoryView hist; CodesView codes; SettingsView settings; OptionsView opts;
   int ver = 0;                           // must change whenever any STATIC content changes (trip title/labels/chips/live, code rows/tags/mil/answered/total) so the page is rebuilt;
                                          // live numbers (tile values, footers, status, clear progress) are redrawn every frame without it
@@ -225,6 +231,7 @@ struct State {
   SBox sbox[MAX_RINGS][MAX_SEG];            // bounding box of every ring segment
   int16_t barPx[2] = {-1, -1}; uint16_t barCol[2] = {0, 0};   // dual page: fill width and colour last drawn
   int ver = -1;                                                // content version last built (Data::ver)
+  struct GRect { int16_t x0, y0, x1, y1; } grect[16]; int ngr = 0;   // g-force page: what was drawn last frame (put back from the background before the next one)
   int8_t brChip = -2;                                          // brightness page: which preset chip was drawn lit (-1 none, -2 not drawn yet)
 };
 inline State &st() { static State s; return s; }
@@ -359,6 +366,9 @@ inline int optionPart(int kind, int x) {
   if (x >= OPT_MINUS_X - 8 && x <= OPT_MINUS_X + OPT_BTN_W + 8) return 1;
   return -1;
 }
+// G-force page: the circle (1.0 g at its edge), the title and value on top, a ZERO chip below it
+constexpr int GF_CX = 240, GF_CY = 256, GF_R = 124, GF_BTN_W = 72, GF_BTN_H = 22, GF_BTN_Y = 415, GF_BTN_X = CX - GF_BTN_W / 2;
+inline int gforceZeroAt(int x, int y) { return (x >= GF_BTN_X - 10 && x <= GF_BTN_X + GF_BTN_W + 10 && y >= GF_BTN_Y - 8 && y <= GF_BTN_Y + GF_BTN_H + 8) ? 1 : -1; }
 constexpr int BACK_W = 84, BACK_H = 24, BACK_Y = 432, BACK_X = CX - BACK_W / 2;
 inline int backAt(int x, int y) { return (x >= BACK_X - 12 && x <= BACK_X + BACK_W + 12 && y >= BACK_Y - 12 && y <= BACK_Y + BACK_H + 14) ? 1 : -1; }
 constexpr int CD_BTN_Y = 366, CD_BTN_H = 42, CD_BTN_W = 110;                  // the preset chips' height on the brightness page
@@ -535,6 +545,15 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       for (int x = x0; x < x1; x++) { uint16_t c = rpmColor((float)(x - x0) / (x1 - x0) * 7000.0f, 6500); for (int y = y0; y < y0 + 14; y++) b[y * W + x] = c; }
     }
     chip(b, BACK_X, BACK_Y, BACK_W, BACK_H, false, CYAN, "BACK");
+  } else if (pg == PG_GFORCE) {
+    textC(b, F_LBL, "G-FORCE", CX, 38, CYAN);
+    ringAA(b, GF_CX, GF_CY, GF_R * 0.5f - 0.6f, GF_R * 0.5f + 0.6f, FAINT);
+    ringAA(b, GF_CX, GF_CY, GF_R - 0.8f, GF_R + 0.8f, PANEL_EDGE);
+    taper(b, GF_CX - GF_R - 6, GF_CY, GF_CX + GF_R + 6, GF_CY, 0.6f, 0.6f, FAINT); taper(b, GF_CX, GF_CY - GF_R - 6, GF_CX, GF_CY + GF_R + 6, 0.6f, 0.6f, FAINT);
+    textC(b, F_SML, "ACCEL", CX, GF_CY - GF_R - 20, DIM); textC(b, F_SML, "BRAKE", CX, GF_CY + GF_R + 14, DIM);
+    text(b, F_SML, "L", GF_CX - GF_R - 24, GF_CY - F_SML.h / 2, DIM); text(b, F_SML, "R", GF_CX + GF_R + 14, GF_CY - F_SML.h / 2, DIM);
+    textC(b, F_SML, "0.5", GF_CX + (int)(GF_R * 0.5f) + 12, GF_CY - F_SML.h - 3, FAINT);
+    chip(b, GF_BTN_X, GF_BTN_Y, GF_BTN_W, GF_BTN_H, false, CYAN, "ZERO");
   } else {   // PG_GEAR: the ladder 1..6, the current gear drawn large, the speed below
     textC(b, F_LBL, "GEAR", CX, 92, DIM);
     for (int g = 0; g < 6; g++) { snprintf(t, sizeof(t), "%d", g + 1); textC(b, F_MED, t, CX + (int)((g - 2.5f) * 48), 120, FAINT); }
@@ -673,6 +692,38 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
     barFill(S, fb, 0, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 5, CD_BTN_W - 12, 6, C.clearProg, RED);
   } else if (pg == PG_SETTINGS || pg == PG_OPTIONS) {
     // static pages: everything is in the background layer
+  } else if (pg == PG_GFORCE) {
+    const GForceView &G = d.g;
+    for (int i = 0; i < S.ngr; i++) { const State::GRect &r = S.grect[i]; restore(fb, S.bg, r.x0, r.y0, r.x1 - r.x0 + 1, r.y1 - r.y0 + 1); mark(S, r.x0, r.y0, r.x1, r.y1); }   // put back what was drawn last frame
+    S.ngr = 0;
+    auto addRect = [&](int x0, int y0, int x1, int y1) { if (S.ngr < 16) S.grect[S.ngr++] = {(int16_t)x0, (int16_t)y0, (int16_t)x1, (int16_t)y1}; mark(S, x0, y0, x1, y1); };
+    auto toPx = [&](float gx, float gy, float *px, float *py) {            // g -> pixels, the vector kept inside 1.1 g
+      float m = sqrtf(gx * gx + gy * gy), k = m > 1.1f ? 1.1f / m : 1.0f; *px = GF_CX + gx * k * GF_R; *py = GF_CY - gy * k * GF_R; };
+    if (G.have) {
+      float px, py, ox = 0, oy = 0; toPx(G.x, G.y, &px, &py);
+      for (int i = 0; i < G.n; i++) {                                       // the trail: thin and dark at the old end, thick and bright at the new end
+        float tx, ty; toPx(G.tx[i], G.ty[i], &tx, &ty);
+        if (i > 0) {
+          float a = (float)i / G.n; uint16_t c = mix(BG, CYAN, (int)(60 + 170 * a));
+          Box b = taper(fb, ox, oy, tx, ty, 0.8f + 2.2f * a, 0.8f + 2.2f * (a + 1.0f / G.n), c); addRect(b.x0, b.y0, b.x1, b.y1);
+        }
+        ox = tx; oy = ty;
+      }
+      if (G.peak > 0.05f) {                                                 // the peak marker
+        float qx, qy; toPx(G.peakX, G.peakY, &qx, &qy);
+        ringAA(fb, qx, qy, 4.5f, 6.5f, stopC(2)); addRect((int)qx - 8, (int)qy - 8, (int)qx + 8, (int)qy + 8);
+      }
+      const int GL = 22;                                                    // glow around the dot, then the dot
+      for (int y = (int)py - GL; y <= (int)py + GL; y++) for (int x = (int)px - GL; x <= (int)px + GL; x++) {
+        float dx = x + 0.5f - px, dy = y + 0.5f - py, dd = sqrtf(dx * dx + dy * dy); if (dd >= GL) continue;
+        float f = 1.0f - dd / GL; blendPx(fb, x, y, CYAN, (int)(f * f * 150));
+      }
+      discAA(fb, px, py, 8.5f, WHITE); addRect((int)px - GL - 1, (int)py - GL - 1, (int)px + GL + 1, (int)py + GL + 1);
+    }
+    char v[12]; if (G.have) snprintf(v, sizeof(v), "%.2f", G.total); else snprintf(v, sizeof(v), "--");
+    num(S, fb, 0, F_MED, v, CX - 20, 64, 0, G.have ? WHITE : DIM);
+    char pk[16]; if (G.have) snprintf(pk, sizeof(pk), "PEAK %.2f", G.peak); else pk[0] = 0;
+    num(S, fb, 1, F_SML, pk, CX + 78, 70, 0, DIM);
   } else {   // PG_GEAR
     char g[2] = {d.gear, 0}; const bool known = d.gear >= '1' && d.gear <= '6';
     num(S, fb, 0, F_HUGE, g, CX, 178, 0, known ? WHITE : DIM);
@@ -692,7 +743,7 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
     memcpy(fb, S.bg, (size_t)W * H * 2);
     S.page = pg; S.dotN = d.dotN; S.dotCur = d.dotCur; S.unitF = d.unitF; S.kmh = d.kmh; S.theme = d.theme; S.redline = d.redline; S.ver = d.ver;
     for (Slot &s : S.slot) { s.s[0] = '\x01'; s.s[1] = 0; s.col = 0; s.x0 = 0; s.x1 = -1; }
-    S.needle = {0, 0, -1, -1}; S.needleAng = 1e9f; S.forceRings = true; S.nr0 = 0; S.nr1 = -1; S.barPx[0] = S.barPx[1] = -1;
+    S.needle = {0, 0, -1, -1}; S.needleAng = 1e9f; S.forceRings = true; S.nr0 = 0; S.nr1 = -1; S.barPx[0] = S.barPx[1] = -1; S.ngr = 0;
     mark(S, 0, 0, W - 1, H - 1);
   }
   const float spd = S.mph * (d.kmh ? 1.609344f : 1.0f), spdMax = d.kmh ? 280.0f : 160.0f;

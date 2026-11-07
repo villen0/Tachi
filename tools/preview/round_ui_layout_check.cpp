@@ -142,6 +142,16 @@ int main() {
 
   // ---- the other pages, for information only (not part of the clean-up scope) ----
   puts("\nother pages (information only):");
+  // ---- G-force page: worst-case values (dot at the edge, longest value and peak text) and the ZERO chip's touch zone ----
+  {
+    rui::Data d; d.dotN = 13; d.dotCur = 9; rui::GForceView &G = d.g; G.have = true; G.x = 1.15f; G.y = -1.15f; G.total = 1.63f; G.peak = 1.63f; G.peakX = -1.0f; G.peakY = 1.0f; G.n = 12;
+    for (int i = 0; i < 12; i++) { G.tx[i] = 1.0f - 0.08f * i; G.ty[i] = -1.0f + 0.08f * i; }
+    rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+    rui::frame(fb.data(), rui::PG_GFORCE, d, 1000, true);
+    int bad = check("gforce", rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
+    printf("%-14s %3d records, %d problems\n", "gforce", (int)rui::layoutLog().size(), bad);
+    if (rui::gforceZeroAt(rui::GF_BTN_X + 4, rui::GF_BTN_Y + 4) != 1 || rui::gforceZeroAt(rui::CX, rui::GF_CY) == 1) { puts("  ZERO chip hit zone wrong"); totalBad++; }
+  }
   Page others[] = {{rui::PG_SPORT, "sport"}, {rui::PG_TACH, "tach"}, {rui::PG_SPEEDO, "speedo"}, {rui::PG_VITALS, "vitals"}, {rui::PG_ARC, "arc"}, {rui::PG_CUSTOM, "custom"}, {rui::PG_QUAD, "quad"}, {rui::PG_DUAL, "dual"}, {rui::PG_GEAR, "gear"}};
   for (auto &o : others) {
     rui::Data d; d.dotN = 13; d.dotCur = 5; d.rpm = 6500; d.mph = 120; d.haveCool = d.haveFuel = d.haveBatt = d.haveLoad = true; d.coolShown = 260; d.fuelPct = 100; d.battV = 14.8f; d.loadPct = 100;

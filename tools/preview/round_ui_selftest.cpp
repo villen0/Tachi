@@ -21,6 +21,8 @@ int main() {
       d.haveArc = (i % 61) != 5; d.arcVal = -1 + 3 * (0.5f + 0.5f * sinf(i * 0.05f)); snprintf(d.arcText, sizeof(d.arcText), "%.2f", d.arcVal);
       for (int k = 0; k < 4; k++) { d.rd[k].have = (i % 53) != k; snprintf(d.rd[k].text, sizeof(d.rd[k].text), "%d", 60 + (i * (k + 3)) % 140); d.rd[k].frac = ((i * (k + 3)) % 140) / 140.0f; d.rd[k].col = (i % 40) < 20 ? rui::CYAN : rui::ORANGE; }
       d.gear = "N123456-"[(i / 7) % 8];
+      { rui::GForceView &G = d.g; G.have = (i % 77) != 3; float a = i * 0.11f; G.x = 1.2f * sinf(a); G.y = 1.0f * cosf(a * 0.7f); G.total = sqrtf(G.x * G.x + G.y * G.y); G.peak = 0.5f + 0.4f * sinf(a * 0.1f); G.peakX = 0.5f * sinf(a * 0.1f); G.peakY = -0.4f;
+        G.n = (i / 5) % 13; for (int k = 0; k < G.n; k++) { G.tx[k] = 0.9f * sinf(a - (G.n - k) * 0.15f); G.ty[k] = 0.9f * cosf((a - (G.n - k) * 0.15f) * 0.7f); } }
       // drive report: live values every frame, the chip selection and the number of saved trips change now and then (ver rebuilds the page)
       { rui::TripView &T = d.trip; T.have = (i % 90) != 7; T.live = (i / 100) % 2 == 0; T.sel = (i / 50) % 4; T.nSaved = 1 + (i / 70) % 5;
         strcpy(T.title, T.live ? "LIVE TRIP" : "DRIVE REPORT");
