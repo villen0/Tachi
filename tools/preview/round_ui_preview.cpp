@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   if (!rui::begin()) { puts("alloc failed"); return 1; }
   std::vector<uint16_t> fb(rui::W * rui::H, 0);
-  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "gear", "gforce", "trip", "history", "codes", "settings", "options"};
+  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "tri", "gear", "gforce", "trip", "history", "codes", "settings", "options"};
   struct Case { float rpm, mph; const char *tag; } cases[] = {{3763, 63, "mid"}, {6900, 112, "red"}, {0, 0, "idle"}};
   for (int pg = 0; pg < rui::PG_COUNT; pg++) for (auto &c : cases) {
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;           // restart each picture from scratch
@@ -34,6 +34,10 @@ int main(int argc, char **argv) {
     float boost = c.rpm > 6000 ? 26.0f : (c.rpm > 0 ? 9.5f : -11.0f); d.haveArc = true; d.arcVal = boost; snprintf(d.arcText, sizeof(d.arcText), "%.1f", boost);
     const char *lab[4] = {"TORQUE", "INTAKE", "FUEL", "LOAD"}, *unit[4] = {"LB-FT", "F", "%", "%"}, *txt[4] = {"195", "88", "13.6", "42"}; float fr[4] = {0.62f, 0.3f, 0.7f, 0.42f};
     for (int k = 0; k < 4; k++) { strcpy(d.rd[k].label, lab[k]); strcpy(d.rd[k].unit, unit[k]); strcpy(d.rd[k].text, txt[k]); d.rd[k].icon = k == 0 ? rui::IC_THERM : k == 1 ? rui::IC_AIR : k == 2 ? rui::IC_BATT : rui::IC_LOAD; d.rd[k].have = true; d.rd[k].frac = fr[k]; d.rd[k].col = k == 1 ? rui::ORANGE : rui::WHITE; }
+    if (pg == rui::PG_TRI) {   // HEALTH: coolant (left), battery (right), fuel (bottom)
+      const char *tl[3] = {"COOLANT", "BATTERY", "FUEL"}, *tu[3] = {"F", "V", "%"}, *tt[3] = {c.rpm > 6000 ? "228" : "197", "14.0", c.rpm > 6000 ? "12" : "61"}; float tf[3] = {c.rpm > 6000 ? 0.9f : 0.6f, 0.7f, c.rpm > 6000 ? 0.12f : 0.61f};
+      strcpy(d.title, "HEALTH"); for (int k = 0; k < 3; k++) { strcpy(d.rd[k].label, tl[k]); strcpy(d.rd[k].unit, tu[k]); strcpy(d.rd[k].text, tt[k]); d.rd[k].frac = tf[k]; d.rd[k].col = (k == 0 && c.rpm > 6000) ? rui::RED : rui::WHITE; }
+    }
     if (pg == rui::PG_DUAL) { d.rdN = 1; strcpy(d.rd[1].label, "OIL TEMP"); d.rd[1].icon = rui::IC_BOOST; }
     { rui::GForceView &G = d.g; G.have = true; float k = c.rpm > 6000 ? 1.0f : (c.rpm > 0 ? 0.55f : 0.0f); G.x = 0.62f * k; G.y = -0.38f * k; G.total = sqrtf(G.x * G.x + G.y * G.y); G.peak = 0.83f * k; G.peakX = 0.71f * k; G.peakY = -0.44f * k;
       G.n = 12; for (int i = 0; i < 12; i++) { float f = (i + 1) / 12.0f; G.tx[i] = G.x * f * f; G.ty[i] = G.y * f * f - 0.1f * (1 - f) * k; } }

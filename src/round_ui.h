@@ -23,7 +23,7 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_GEAR, PG_GFORCE, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_TRI, PG_GEAR, PG_GFORCE, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -229,6 +229,7 @@ struct State {
   int16_t dmin[H], dmax[H];                 // per row: the span of pixels changed this frame (dmax < dmin: row is clean)
   int16_t nmin[H], nmax[H]; int nr0 = 0, nr1 = -1;   // per row: where the needle was drawn last frame
   SBox sbox[MAX_RINGS][MAX_SEG];            // bounding box of every ring segment
+  int8_t triQ[3] = {-1, -1, -1}; uint16_t triCol[3] = {0, 0, 0};   // triangle page: arc steps and colour last drawn
   int16_t barPx[2] = {-1, -1}; uint16_t barCol[2] = {0, 0};   // dual page: fill width and colour last drawn
   int ver = -1;                                                // content version last built (Data::ver)
   struct GRect { int16_t x0, y0, x1, y1; } grect[16]; int ngr = 0;   // g-force page: what was drawn last frame (put back from the background before the next one)
@@ -427,6 +428,14 @@ inline void iconDraw(uint16_t *b, int type, float x, float y, uint16_t c) {
 }
 
 // static layer of the multi-value pages: arc, custom, quad, dual, gear
+// Triangle page (three sectors split by a Y, three values, each with an arc along the rim): used by ENGINE and HEALTH
+constexpr int TRI_JX = CX, TRI_JY = 252, TRI_STEPS = 54, TRI_BAR_Y = 388;
+constexpr float TRI_STEP_DEG = 2.0f;
+inline float triA0(int i) { return i == 0 ? -114.0f : 6.0f; }   // sector 0 left, 1 right, 2 bottom: arc start (degrees clockwise from 12 o'clock, -180..180 like arcAA); the bottom sector has a bar instead of an arc
+inline void triCell(int i, int *cx, int *yl, int *yv, int *yu) {
+  if (i == 2) { *cx = CX; *yl = 296; *yv = 316; *yu = 350; }
+  else { *cx = i == 0 ? CX - 92 : CX + 92; *yl = 150; *yv = 172; *yu = 204; }
+}
 inline void buildStyle(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg; char t[16];
   if (pg == PG_ARC || pg == PG_CUSTOM) {
@@ -466,6 +475,18 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       textC(b, F_LBL, d.rd[i].label, cxs[i], cys[i] - 46, DIM);
       textC(b, F_LBL, d.rd[i].unit, cxs[i], cys[i] + 30, DIM);
     }
+  } else if (pg == PG_TRI) {
+    if (d.title[0]) textC(b, F_LBL, d.title, CX, 42, CYAN);
+    taper(b, TRI_JX, TRI_JY, TRI_JX, 64, 0.7f, 0.7f, FAINT);
+    taper(b, TRI_JX, TRI_JY, TRI_JX - 161, TRI_JY + 93, 0.7f, 0.7f, FAINT); taper(b, TRI_JX, TRI_JY, TRI_JX + 161, TRI_JY + 93, 0.7f, 0.7f, FAINT);
+    for (int i = 0; i < 3; i++) {
+      if (i < 2) arcAA(b, CX, CY, 214, 226, triA0(i), triA0(i) + TRI_STEPS * TRI_STEP_DEG, mix(BG, PANEL_EDGE, 90));
+      else { taper(b, CX - 57, TRI_BAR_Y + 3, CX + 57, TRI_BAR_Y + 3, 3, 3, PANEL); discAA(b, CX - 57, TRI_BAR_Y + 3, 3, PANEL); discAA(b, CX + 57, TRI_BAR_Y + 3, 3, PANEL); }
+      int cx, yl, yv, yu; triCell(i, &cx, &yl, &yv, &yu);
+      textC(b, F_LBL, d.rd[i].label, cx, yl, DIM);
+      textC(b, F_LBL, d.rd[i].unit, cx, yu, DIM);
+    }
+    for (int i = 0; i < 3; i++) { S.triQ[i] = -1; S.triCol[i] = 0; }
   } else if (pg == PG_DUAL) {
     if (d.title[0]) textC(b, F_LBL, d.title, CX, 74, CYAN);
     for (int i = 0; i < d.rdN && i < 2; i++) {
@@ -560,6 +581,7 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     textC(b, F_LBL, d.kmh ? "KMH" : "MPH", CX, 352, DIM);
   }
 }
+
 
 // ---- per page: static layer + ring setup ---------------------------------------------------------------------------
 inline void buildPage(State &S, int pg, const Data &d) {
@@ -671,6 +693,27 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
   } else if (pg == PG_QUAD) {
     static const int cxs[4] = {CX - 96, CX + 96, CX - 96, CX + 96}, cys[4] = {CY - 80, CY - 80, CY + 84, CY + 84};
     for (int i = 0; i < 4; i++) num(S, fb, i, F_NUM, d.rd[i].have ? d.rd[i].text : none, cxs[i], cys[i] - 18, 0, d.rd[i].have ? d.rd[i].col : DIM);
+  } else if (pg == PG_TRI) {
+    for (int i = 0; i < 3; i++) {
+      int cx, yl, yv, yu; triCell(i, &cx, &yl, &yv, &yu);
+      num(S, fb, i, F_NUM, d.rd[i].have ? d.rd[i].text : none, cx, yv, 0, d.rd[i].have ? d.rd[i].col : DIM);
+      uint16_t col = d.rd[i].have && d.rd[i].col != WHITE ? d.rd[i].col : stopC(0);
+      if (i == 2) { barFill(S, fb, 0, CX - 60, TRI_BAR_Y, 120, 6, d.rd[i].have ? d.rd[i].frac : 0, col); continue; }
+      int q = d.rd[i].have ? (int)(clamp01(d.rd[i].frac) * TRI_STEPS + 0.5f) : 0;
+      if (q == S.triQ[i] && col == S.triCol[i]) continue;
+      float a0 = triA0(i); int old = S.triQ[i];
+      // put the track back (the arc's own pixels only, the text stays), draw the lit part again, and send only the part that changed
+      const float f0 = a0 - 1.0f, f1 = a0 + TRI_STEPS * TRI_STEP_DEG + 1.0f;
+      const bool all = old < 0 || col != S.triCol[i];
+      const float c0 = all ? f0 : a0 + (old < q ? old : q) * TRI_STEP_DEG - 1.5f, c1 = all ? f1 : a0 + (old < q ? q : old) * TRI_STEP_DEG + 1.5f;
+      annulus(CX, CY, 213, 227, [&](int x, int y, float, float dx, float dy) {
+        float th = atan2f(dx, -dy) * 57.29578f;
+        if (th >= f0 && th <= f1) fb[y * W + x] = S.bg[y * W + x];
+      });
+      if (q > 0) arcAA(fb, CX, CY, 214, 226, a0, a0 + q * TRI_STEP_DEG, col);
+      annulus(CX, CY, 213, 227, [&](int x, int y, float, float dx, float dy) { float th = atan2f(dx, -dy) * 57.29578f; if (th >= c0 && th <= c1) mark(S, x, y, x, y); });
+      S.triQ[i] = (int8_t)q; S.triCol[i] = col;
+    }
   } else if (pg == PG_DUAL) {
     for (int i = 0; i < d.rdN && i < 2; i++) {
       const int y0 = d.rdN == 1 ? 190 : (i ? 262 : 120);

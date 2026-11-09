@@ -43,7 +43,7 @@
 #define SHOW_PAGE_DIALS    1   // analog tachometer and analog speedometer
 #define SHOW_PAGE_VITALS   0   // the four vitals rings (hidden, set 1 to bring it back)
 #define SHOW_PAGE_GFORCE   1   // G-force page: friction circle from the board's motion sensor (hidden if the sensor is not found; works in demo mode)
-#define SHOW_PAGE_BATTERY  1   // battery page: one value with a bar, same style as TEMPS (comes right after it)
+#define SHOW_PAGE_BATTERY  0   // battery page: one value with a bar, same style as TEMPS (comes right after it)
 #define SHOW_PAGE_CUSTOM   0   // custom boost page: the arc with three readouts (needs SHOW_PAGE_STYLES; hidden, the Arc page keeps the boost gauge)
 #define SHOW_PAGE_GEAR     0   // estimated gear page (needs SHOW_PAGE_STYLES; hidden for now, set 1 to bring it back)
 #define SHOW_PAGE_STYLES   1   // arc (boost), custom, quad, dual and gear pages (the two boost pages appear only if the car answers MAP)
@@ -68,8 +68,8 @@
 #define RD_TORQUE 8   // engine torque (needs the car to answer PID 62, ideally 63 too for Nm / lb-ft; otherwise shows percent of the reference torque)
 #define RD_OIL 9      // engine oil temperature (PID 015C; many cars do not answer it, then it shows --)
 #define CUSTOM_ROWS {RD_COOL, RD_INTAKE, RD_BATT}            // the three readouts under the boost number
-#define QUAD_CELLS  {RD_TORQUE, RD_INTAKE, RD_FUEL, RD_LOAD}   // the four values of the quad page
-#define DUAL_ROWS   {RD_COOL, RD_OIL}                        // the one or two values with bars (one is centred)
+#define QUAD_CELLS  {RD_TORQUE, RD_INTAKE, RD_LOAD}   // ENGINE page (triangle): left, right, bottom
+#define HEALTH_CELLS {RD_COOL, RD_BATT, RD_FUEL}             // HEALTH page (triangle): left, right, bottom
 #define DIAL_FPS          30   // target frame rate of the dial pages
 #define SWIPE_NEXT_ON_RIGHT 0  // 1 = swipe right goes to the next page, 0 = swipe left goes to the next page (like a phone)
 // One-off test at first connect: listens ~45 s for the Mazda gear selector CAN message (ID 0x01F) and reports on the Debug page and Serial. Set 0 when done.
