@@ -1,4 +1,4 @@
-# Revsense Nav (Android)
+# Revsense (Android)
 
 A small Android app that reads the **Google Maps navigation notification** and sends each turn to the Revsense board over Bluetooth.
 The board shows it on its Navigation page (arrow, distance, street). Nothing is sent to the internet; it only talks to the board.
@@ -6,9 +6,9 @@ The board shows it on its Navigation page (arrow, distance, street). Nothing is 
 ## Build and install (once)
 1. Install **Android Studio**, choose *Open* and pick this `android/` folder. Let it sync (it downloads Gradle 8.7 and the Android SDK 34 pieces).
 2. Plug in your phone (USB debugging on) or use *Run > Run 'app'* with a wireless-debugging device, and press Run.
-3. On the phone, open **Revsense Nav**:
+3. On the phone, open **Revsense**:
    - tap **1. Allow Bluetooth**;
-   - tap **2. Allow notification access** and switch **Revsense Nav** on (Android asks for confirmation; this is how the app can read the Maps notification).
+   - tap **2. Allow notification access** and switch **Revsense** on (Android asks for confirmation; this is how the app can read the Maps notification).
 4. Start a route in Google Maps. The board's **Navigation** page appears (swipe to it) and follows the route.
 
 The log on the app's screen shows every Maps notification (title | text | sub text) and every message sent to the board, which is the first thing to check
