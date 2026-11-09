@@ -90,7 +90,8 @@ static uint8_t gaugeStyle = 0;                       // tach / speedo style: 0 D
 static const char *const GAUGE_NAMES[3] = {"DIAL", "ARC", "TICKS"};
 // Navigation: the phone app writes turns to the board's own Bluetooth service (NimBLE host task); the UI task reads them (navMux).
 static nav::Turn navTurn; static uint32_t navMs = 0; static volatile bool phoneLinked = false; static portMUX_TYPE navMux = portMUX_INITIALIZER_UNLOCKED;
-static NimBLECharacteristic *liveChr = nullptr, *tripsChr = nullptr; static volatile bool phoneSub = false, phoneSubTrips = false, tripReq = false;   // LIVE characteristic and whether the phone subscribed to it
+static NimBLECharacteristic *liveChr = nullptr, *tripsChr = nullptr, *configChr = nullptr; static volatile bool phoneSub = false, phoneSubTrips = false, phoneSubCfg = false, tripReq = false, cfgReq = false;
+static nav::Change pendChg[8]; static int pendN = 0; static char cfgLine[96] = ""; static volatile bool cfgLineReady = false;   // settings changes from the phone (applied by the UI task) and the line to send back (navMux)   // LIVE characteristic and whether the phone subscribed to it
 static bool navFresh() { portENTER_CRITICAL(&navMux); bool a = navTurn.active; uint32_t t = navMs; portEXIT_CRITICAL(&navMux); return a && (uint32_t)(millis() - t) < NAV_STALE_MS; }
 static gforce::Meter gMeter;                         // G-force meter (UI task only); its learned axis directions are saved in flash
 // Face page background: a gradient from the top colour to the bottom colour (0..255). Classic keeps the original navy / indigo; the other
@@ -184,6 +185,7 @@ static uint32_t nextBlink = 0, blinkEnd = 0;
 
 Mood computeMood();
 void uiTick();
+static void phoneSettingsTick();
 
 // Last few adapter exchanges, shown on the Debug page so the raw replies can be read in the car.
 struct DbgEntry { char cmd[10]; char reply[40]; bool timeout; };
@@ -1518,6 +1520,7 @@ void uiTick() {
   lastTick = t;
   if (t - gapWindowStart >= 5000) { maxTickGapMs = gapMax; gapMax = 0; gapWindowStart = t; }
   handleButton();
+  phoneSettingsTick();
   imuTick(millis());                                   // G-force: read the motion sensor every tick
   { static int lastPg = -1; if (page != lastPg) { if (lastPg == PAGE_SETTINGS) settingsSub = 0; if (page != PAGE_TRIP && page != PAGE_HISTORY) tripSel = 0; lastPg = page; } }   // leaving Settings always returns it to the hub
   if (!pageVisible(page)) { page = nextPage(page, 1); forceDraw = true; }   // the page on screen vanished (e.g. demo ended)
@@ -1737,7 +1740,7 @@ bool connectAdapter() {
 class NavServerCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override { phoneLinked = true; Serial.println("phone connected"); }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
-    phoneLinked = false; phoneSub = false; phoneSubTrips = false; tripReq = false; portENTER_CRITICAL(&navMux); navTurn = nav::Turn(); portEXIT_CRITICAL(&navMux); Serial.println("phone left");
+    phoneLinked = false; phoneSub = false; phoneSubTrips = false; phoneSubCfg = false; tripReq = false; cfgReq = false; portENTER_CRITICAL(&navMux); navTurn = nav::Turn(); portEXIT_CRITICAL(&navMux); Serial.println("phone left");
   }
 };
 class LiveSubCb : public NimBLECharacteristicCallbacks {
@@ -1746,10 +1749,15 @@ class LiveSubCb : public NimBLECharacteristicCallbacks {
 class TripsSubCb : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t subValue) override { phoneSubTrips = (subValue & 1) != 0; }
 };
+class ConfigSubCb : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t subValue) override { phoneSubCfg = (subValue & 1) != 0; }
+};
 class NavWriteCb : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
     NimBLEAttValue v = c->getValue();
     if (nav::isTripQuery((const char *)v.data(), v.size())) { tripReq = true; return; }                     // the app wants the trip list
+    if (nav::isConfigQuery((const char *)v.data(), v.size())) { cfgReq = true; return; }                    // the app wants the settings
+    { nav::Change ch; if (nav::parseChange((const char *)v.data(), v.size(), ch)) { portENTER_CRITICAL(&navMux); if (pendN < 8) pendChg[pendN++] = ch; portEXIT_CRITICAL(&navMux); return; } }   // a setting changed (the UI task applies it)
     nav::Turn t; portENTER_CRITICAL(&navMux); t = navTurn; portEXIT_CRITICAL(&navMux);
     if (nav::parse((const char *)v.data(), v.size(), t)) { portENTER_CRITICAL(&navMux); navTurn = t; navMs = millis(); portEXIT_CRITICAL(&navMux); }
   }
@@ -1765,6 +1773,8 @@ static void navBleInit() {
   liveChr->setCallbacks(new LiveSubCb());
   tripsChr = svc->createCharacteristic(TRIPS_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   tripsChr->setCallbacks(new TripsSubCb());
+  configChr = svc->createCharacteristic(CONFIG_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  configChr->setCallbacks(new ConfigSubCb());
   svc->start();
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->addServiceUUID(NAV_SERVICE_UUID); adv->setName("Revsense"); adv->enableScanResponse(true); adv->start();
@@ -1804,6 +1814,29 @@ static void navBleTrips() {                          // main loop: answer a trip
   tripsChr->setValue((const uint8_t *)line, strlen(line)); tripsChr->notify();
   if (idx >= n) idx = -1; else idx++;
 }
+static void navBleConfig() {                         // main loop: send the settings line the UI task prepared
+  static uint32_t last = 0; uint32_t now = millis();
+  if (!configChr || !cfgLineReady || !phoneLinked || now - last < 40) return; last = now;
+  char line[96]; portENTER_CRITICAL(&navMux); strcpy(line, cfgLine); cfgLineReady = false; portEXIT_CRITICAL(&navMux);
+  configChr->setValue((const uint8_t *)line, strlen(line)); configChr->notify();
+}
+// UI task, every tick: apply the settings the phone changed, and prepare the settings line when the app asked or anything changed (also on the board itself).
+static void phoneSettingsTick() {
+  nav::Change q[8]; int n; portENTER_CRITICAL(&navMux); n = pendN; for (int i = 0; i < n; i++) q[i] = pendChg[i]; pendN = 0; portEXIT_CRITICAL(&navMux);
+  bool changed = false;
+  for (int i = 0; i < n; i++) {
+    int br = backlightPct;
+    if (nav::applyChange(cfg, gaugeStyle, br, q[i])) { if (br != backlightPct) { setBacklight(br); saveBacklight(); } changed = true; }
+  }
+  if (changed) { applyLook(); cfgGen = cfgGen + 1; cfgSaveReq = true; forceDraw = true; }
+  static uint32_t seenGen = 0; static int seenBl = -1; static uint8_t seenGauge = 255;
+  if (!phoneSubCfg) return;
+  if (cfgReq || changed || cfgGen != seenGen || backlightPct != seenBl || gaugeStyle != seenGauge) {
+    cfgReq = false; seenGen = cfgGen; seenBl = backlightPct; seenGauge = gaugeStyle;
+    char line[96]; nav::formatConfig(line, sizeof(line), cfg, gaugeStyle, backlightPct);
+    portENTER_CRITICAL(&navMux); strcpy(cfgLine, line); cfgLineReady = true; portEXIT_CRITICAL(&navMux);
+  }
+}
 static void navBleKeepAlive() {                      // main loop: make sure the phone can always find the board
   static uint32_t last = 0; uint32_t now = millis(); if (now - last < 5000) return; last = now;
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
@@ -1842,7 +1875,7 @@ void setup() {
 
 void loop() {
   static int cycle = 0;
-  navBleKeepAlive(); navBleLive(); navBleTrips();
+  navBleKeepAlive(); navBleLive(); navBleTrips(); navBleConfig();
 
   if (demo) {
     if (client && client->isConnected()) client->disconnect();

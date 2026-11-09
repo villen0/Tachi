@@ -23,6 +23,7 @@ object BleLink {
     val CHAR: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000002")
     val LIVE: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000003")
     val TRIPS: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000004")
+    val CONFIG: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000005")
     private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private lateinit var ctx: Context
@@ -81,12 +82,12 @@ object BleLink {
             ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             nav = ch; AppLog.setBle("connected to the board")
             val svc = g.getService(SERVICE)                                                    // subscribe to the live values and the trips (older firmware has none)
-            pendingSubs.clear(); listOfNotNull(svc?.getCharacteristic(LIVE), svc?.getCharacteristic(TRIPS)).forEach { pendingSubs.add(it) }
+            pendingSubs.clear(); listOfNotNull(svc?.getCharacteristic(LIVE), svc?.getCharacteristic(TRIPS), svc?.getCharacteristic(CONFIG)).forEach { pendingSubs.add(it) }
             subscribeNext(g)
         }
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { subscribeNext(g) }
         private fun subscribeNext(g: BluetoothGatt) {
-            val c = pendingSubs.removeFirstOrNull() ?: run { requestTrips(); return }
+            val c = pendingSubs.removeFirstOrNull() ?: run { requestTrips(); requestConfig(); return }
             val cccd = c.getDescriptor(CCCD) ?: run { subscribeNext(g); return }
             g.setCharacteristicNotification(c, true)
             if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
@@ -94,7 +95,7 @@ object BleLink {
         }
         private fun incoming(c: BluetoothGattCharacteristic, b: ByteArray?) {
             if (b == null) return
-            if (c.uuid == TRIPS) trips(String(b)) else live(b)
+            when (c.uuid) { TRIPS -> trips(String(b)); CONFIG -> ConfigParser.parse(String(b))?.let { AppState.config = it }; else -> live(b) }
         }
         private fun trips(line: String) {
             if (line.startsWith("E|")) { AppState.trips = tripBuf.toList(); AppState.tripsAt = SystemClock.elapsedRealtime(); tripBuf.clear(); return }
@@ -109,8 +110,31 @@ object BleLink {
     /** Asks the board for its trips; the answer arrives as notifications (see Trips.kt). */
     fun requestTrips() { tripBuf.clear(); send("Q|T") }
 
-    /** Sends one message line to the board. Returns false if there is no link right now. */
+    /** Asks the board for its settings; the answer arrives on the CONFIG characteristic. */
+    fun requestConfig() { send("S?") }
+
+    /** Changes one setting on the board, e.g. change("sp", 1); the board answers with its new settings. Keys: see src/nav.h in the firmware. */
+    fun change(key: String, value: Int) { send("S|$key|$value") }
+
+    // Messages go out one at a time with a short gap (Bluetooth drops back-to-back writes).
+    private val outQ = ArrayDeque<String>()
+    private var draining = false
+
+    /** Queues one message line for the board. Returns false if there is no link right now. */
     fun send(text: String): Boolean {
+        if (gatt == null || nav == null) return false
+        synchronized(outQ) { outQ.add(text); if (draining) return true; draining = true }
+        main.post { drain() }
+        return true
+    }
+
+    private fun drain() {
+        val t = synchronized(outQ) { outQ.removeFirstOrNull().also { if (it == null) draining = false } } ?: return
+        rawSend(t)
+        main.postDelayed({ drain() }, 60)
+    }
+
+    private fun rawSend(text: String): Boolean {
         val g = gatt ?: return false; val ch = nav ?: return false
         val bytes = text.toByteArray(Charsets.UTF_8)
         return if (Build.VERSION.SDK_INT >= 33) g.writeCharacteristic(ch, bytes, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) == BluetoothStatusCodes.SUCCESS

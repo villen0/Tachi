@@ -12,6 +12,7 @@
 #include <string.h>
 #include <math.h>
 #include "trip.h"
+#include "settings.h"
 
 namespace nav {
 
@@ -95,6 +96,40 @@ inline void formatTrip(char *out, size_t n, const trip::Record &r, bool live) {
   codes[o] = 0;
   snprintf(out, n, "R|%d|%u|%u|%u|%u|%u|%u|%d|%d|%u|%u|%s", live ? 1 : 0, (unsigned)r.seq, (unsigned)r.durationS, (unsigned)r.distCentiMi, (unsigned)r.topMph, (unsigned)r.avgMph,
            (unsigned)r.maxRpm, (int)r.maxCoolC, (int)r.peakBoostDeciPsi, (unsigned)r.minBattDeciV, (unsigned)r.maxBattDeciV, codes);
+}
+
+// ---- settings (the app asks with "S?" and changes one setting with "S|key|value"; the board answers on the CONFIG characteristic) ----
+//   C|speedKmh|tempC|pressBar|theme|mode|gauge|coolWarnC|coolHotC|battLowDeciV|fuelLowPct|redlineRpm|brightness      (the same settings as the board's Settings page)
+// Keys: sp tp pr = units (0 / 1), th = look (0..4), md = colour mode (0..6), ga = gauge style (0 dial, 1 arc, 2 ticks), br = brightness (5..100),
+//       wc wh wb wf wr = one step up (+1) or down (-1) of coolant warm / coolant hot / battery low / fuel low / redline (the board's own step sizes and limits).
+struct Change { char key[4] = ""; int v = 0; };
+inline bool isConfigQuery(const char *s, size_t n) { return n >= 2 && s[0] == 'S' && s[1] == '?'; }
+inline bool parseChange(const char *s, size_t n, Change &c) {
+  if (n < 5 || n > 24 || s[0] != 'S' || s[1] != '|') return false;
+  char buf[32]; memcpy(buf, s, n); buf[n] = 0;
+  char *k = buf + 2, *bar = strchr(k, '|'); if (!bar || bar == k || bar - k > 3) return false;
+  *bar = 0; char *end = nullptr; long v = strtol(bar + 1, &end, 10); if (end == bar + 1 || v < -100000 || v > 100000) return false;
+  strcpy(c.key, k); c.v = (int)v; return true;
+}
+// Applies one change; returns false for an unknown key or a value out of range (nothing changes then).
+inline bool applyChange(settings::Settings &cfg, uint8_t &gauge, int &brightness, const Change &c) {
+  const char *k = c.key; int v = c.v;
+  if (!strcmp(k, "sp")) cfg.speedKmh = v != 0; else if (!strcmp(k, "tp")) cfg.tempC = v != 0; else if (!strcmp(k, "pr")) cfg.pressBar = v != 0;
+  else if (!strcmp(k, "th")) { if (v < 0 || v >= settings::THEMES) return false; cfg.theme = (uint8_t)v; }
+  else if (!strcmp(k, "md")) { if (v < 0 || v >= settings::MODES) return false; cfg.mode = (uint8_t)v; }
+  else if (!strcmp(k, "ga")) { if (v < 0 || v > 2) return false; gauge = (uint8_t)v; }
+  else if (!strcmp(k, "br")) brightness = v < 5 ? 5 : (v > 100 ? 100 : v);
+  else if (!strcmp(k, "wc")) settings::warnAdjust(cfg, settings::W_COOL_WARN, v >= 0 ? 1 : -1);
+  else if (!strcmp(k, "wh")) settings::warnAdjust(cfg, settings::W_COOL_HOT, v >= 0 ? 1 : -1);
+  else if (!strcmp(k, "wb")) settings::warnAdjust(cfg, settings::W_BATT_LOW, v >= 0 ? 1 : -1);
+  else if (!strcmp(k, "wf")) settings::warnAdjust(cfg, settings::W_FUEL_LOW, v >= 0 ? 1 : -1);
+  else if (!strcmp(k, "wr")) settings::warnAdjust(cfg, settings::W_REDLINE, v >= 0 ? 1 : -1);
+  else return false;
+  return true;
+}
+inline void formatConfig(char *out, size_t n, const settings::Settings &c, uint8_t gauge, int brightness) {
+  snprintf(out, n, "C|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d", c.speedKmh, c.tempC, c.pressBar, c.theme, c.mode, (int)gauge, (int)c.coolWarnC, (int)c.coolHotC,
+           (int)c.battLowDeciV, (int)c.fuelLowPct, (int)c.redlineRpm, brightness);
 }
 
 }  // namespace nav

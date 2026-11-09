@@ -11,6 +11,7 @@ object AppState {
     var liveAt by mutableLongStateOf(0L)          // SystemClock.elapsedRealtime() of the last live line
     var trips by mutableStateOf<List<TripRec>>(emptyList())     // the last list the board sent, newest first (the running trip leads)
     var tripsAt by mutableLongStateOf(0L)
+    var config by mutableStateOf<BoardConfig?>(null)             // the board's settings as it last reported them
     var turn by mutableStateOf<Turn?>(null)
     var turnAt by mutableLongStateOf(0L)
     var bleConnected by mutableStateOf(false)

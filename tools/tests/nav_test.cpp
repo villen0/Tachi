@@ -40,6 +40,22 @@ int main() {
     trip::Record e; formatTrip(b, sizeof(b), e, false); CHECK(!strcmp(b, "R|0|0|0|0|0|0|0|-32768|-32768|0|0|"));
     r.newCodeCount = 4; strcpy(r.newCodes[2], "P0171"); strcpy(r.newCodes[3], "P0100"); formatTrip(b, sizeof(b), r, false); CHECK(strlen(b) < 100);
     CHECK(isTripQuery("Q|T", 3) && !isTripQuery("Q|", 2) && !isTripQuery("N|R|1|x", 7)); }
+  { settings::Settings c; uint8_t g = 0; int br = 85; Change ch; char b[128];
+    CHECK(isConfigQuery("S?", 2) && !isConfigQuery("S|sp|1", 6));
+    CHECK(parseChange("S|sp|1", 6, ch) && !strcmp(ch.key, "sp") && ch.v == 1);
+    CHECK(parseChange("S|wc|-1", 7, ch) && ch.v == -1); CHECK(!parseChange("S|toolong|1", 11, ch)); CHECK(!parseChange("S|sp|", 5, ch)); CHECK(!parseChange("S|sp|x", 6, ch)); CHECK(!parseChange("N|R|1|x", 7, ch));
+    parseChange("S|sp|1", 6, ch); CHECK(applyChange(c, g, br, ch) && c.speedKmh == 1);
+    parseChange("S|tp|1", 6, ch); applyChange(c, g, br, ch); CHECK(c.tempC == 1);
+    parseChange("S|pr|1", 6, ch); applyChange(c, g, br, ch); CHECK(c.pressBar == 1);
+    parseChange("S|th|3", 6, ch); CHECK(applyChange(c, g, br, ch) && c.theme == 3);
+    parseChange("S|th|9", 6, ch); CHECK(!applyChange(c, g, br, ch) && c.theme == 3);                       // out of range: nothing changes
+    parseChange("S|md|6", 6, ch); CHECK(applyChange(c, g, br, ch) && c.mode == 6); parseChange("S|md|7", 6, ch); CHECK(!applyChange(c, g, br, ch));
+    parseChange("S|ga|2", 6, ch); CHECK(applyChange(c, g, br, ch) && g == 2); parseChange("S|ga|3", 6, ch); CHECK(!applyChange(c, g, br, ch) && g == 2);
+    parseChange("S|br|1", 6, ch); applyChange(c, g, br, ch); CHECK(br == 5); parseChange("S|br|250", 8, ch); applyChange(c, g, br, ch); CHECK(br == 100);
+    int redline = c.redlineRpm; parseChange("S|wr|1", 6, ch); applyChange(c, g, br, ch); CHECK(c.redlineRpm == redline + 250); parseChange("S|wr|-1", 7, ch); applyChange(c, g, br, ch); CHECK(c.redlineRpm == redline);
+    c = settings::Settings(); int warm = c.coolWarnC; parseChange("S|wc|1", 6, ch); applyChange(c, g, br, ch); CHECK(c.coolWarnC == warm + 2 || c.coolWarnC > warm);       // deg C: the board's step
+    parseChange("S|zz|1", 6, ch); CHECK(!applyChange(c, g, br, ch));
+    c = settings::Settings(); g = 1; formatConfig(b, sizeof(b), c, g, 85); CHECK(!strcmp(b, "C|0|0|0|4|0|1|100|108|120|15|6500|85")); CHECK(settings::valid(c)); }
   printf("%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;
 }

@@ -66,7 +66,7 @@ fun AppRoot(askBluetooth: () -> Unit, askNotification: () -> Unit) {
             when (tab) {
                 0 -> HomeScreen(askBluetooth, askNotification) { showLog = true }
                 1 -> TripsScreen()
-                else -> Placeholder("Settings", "Units, warning levels, theme and gauge style of the board will be set here in a later update.")
+                else -> SettingsScreen()
             }
         }
     }
@@ -327,4 +327,125 @@ fun ReportRow(label: String, value: String, valueColor: Color = Rv.Text) {
             Text(value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = valueColor)
         }
     }
+}
+
+@Composable
+fun SettingsScreen() {
+    val c = AppState.config
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(20.dp))
+        Text("Settings", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text(if (AppState.bleConnected) "Saved on the board" else "Connect to the board to change its settings", fontSize = 13.sp, color = Rv.Dim)
+        Spacer(Modifier.height(14.dp))
+        if (c == null) {
+            Card(Modifier.fillMaxWidth()) {
+                Text("Not connected", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text("Once the board is connected, its units, warning levels, look and brightness show up here.", fontSize = 13.sp, color = Rv.Dim)
+            }
+        } else {
+            SectionLabel("UNITS")
+            SegRow("Speed", listOf("mph", "km/h"), if (c.speedKmh) 1 else 0) { BleLink.change("sp", it) }
+            SegRow("Temperature", listOf("°F", "°C"), if (c.tempC) 1 else 0) { BleLink.change("tp", it) }
+            SegRow("Pressure", listOf("psi", "bar"), if (c.pressBar) 1 else 0) { BleLink.change("pr", it) }
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("WARNINGS")
+            StepRow("Coolant warm", "${Fmt.temp(c.coolWarnC, c.tempC)} ${if (c.tempC) "°C" else "°F"}") { BleLink.change("wc", it) }
+            StepRow("Coolant hot", "${Fmt.temp(c.coolHotC, c.tempC)} ${if (c.tempC) "°C" else "°F"}") { BleLink.change("wh", it) }
+            StepRow("Battery low", "%.1f V".format(c.battLowDeciV / 10.0)) { BleLink.change("wb", it) }
+            StepRow("Fuel low", "${c.fuelLowPct} %") { BleLink.change("wf", it) }
+            StepRow("Redline", c.redlineRpm.toString()) { BleLink.change("wr", it) }
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("LOOK")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Names.looks.forEachIndexed { i, n ->
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(14.dp)).background(Color(Names.looksRgb[i]))
+                                .border(if (c.theme == i) 2.dp else 0.dp, Rv.Text, RoundedCornerShape(14.dp)).clickable { BleLink.change("th", i) }
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(n, fontSize = 9.sp, color = if (c.theme == i) Rv.Text else Rv.Dim, textAlign = TextAlign.Center, maxLines = 2)
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("COLOUR")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Names.modes.forEachIndexed { i, n ->
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            Modifier.size(34.dp).clip(CircleShape).background(Color(Names.modesRgb[i]))
+                                .border(if (c.mode == i) 2.dp else 0.dp, Rv.Text, CircleShape).clickable { BleLink.change("md", i) }
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(n, fontSize = 9.sp, color = if (c.mode == i) Rv.Text else Rv.Dim, maxLines = 1)
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("GAUGE STYLE")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Names.gauges.forEachIndexed { i, n ->
+                    Box(
+                        Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(12.dp)).background(if (c.gauge == i) Rv.Acc else Rv.Card)
+                            .border(1.dp, Rv.Edge, RoundedCornerShape(12.dp)).clickable { BleLink.change("ga", i) },
+                        contentAlignment = Alignment.Center
+                    ) { Text(n, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("BRIGHTNESS")
+            var br by remember(c.brightness) { mutableFloatStateOf(c.brightness.toFloat()) }
+            Card(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Slider(
+                        value = br, onValueChange = { br = it }, valueRange = 5f..100f, onValueChangeFinished = { BleLink.change("br", br.toInt()) },
+                        modifier = Modifier.weight(1f), colors = SliderDefaults.colors(thumbColor = Rv.Acc, activeTrackColor = Rv.Acc, inactiveTrackColor = Rv.Track)
+                    )
+                    Spacer(Modifier.width(10.dp)); Text("${br.toInt()} %", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+fun SectionLabel(t: String) { Text(t, fontSize = 11.sp, color = Rv.Dim, fontWeight = FontWeight.Bold); Spacer(Modifier.height(8.dp)) }
+
+@Composable
+fun SegRow(label: String, options: List<String>, selected: Int, onPick: (Int) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).background(Rv.Card).border(1.dp, Rv.Edge, RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        Row(Modifier.clip(RoundedCornerShape(10.dp)).background(Rv.Track)) {
+            options.forEachIndexed { i, o ->
+                Box(
+                    Modifier.width(62.dp).height(30.dp).padding(2.dp).clip(RoundedCornerShape(9.dp)).background(if (i == selected) Rv.Acc else Color.Transparent).clickable { onPick(i) },
+                    contentAlignment = Alignment.Center
+                ) { Text(o, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+            }
+        }
+    }
+}
+
+@Composable
+fun StepRow(label: String, value: String, onStep: (Int) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).background(Rv.Card).border(1.dp, Rv.Edge, RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        StepButton("–") { onStep(-1) }
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.width(78.dp))
+        StepButton("+") { onStep(1) }
+    }
+}
+
+@Composable
+fun StepButton(t: String, onClick: () -> Unit) {
+    Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Rv.Track).clickable { onClick() }, contentAlignment = Alignment.Center) { Text(t, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
 }
