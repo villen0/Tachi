@@ -98,9 +98,11 @@ fun HomeScreen(askBluetooth: () -> Unit, askNotification: () -> Unit, openLog: (
             Gauge("COOLANT", live?.coolC?.takeIf { it >= 0 }?.let { Fmt.temp(it, tc).toString() }, if (tc) "°C" else "°F", ((live?.coolC ?: 40) - 40) / 90f, if ((live?.coolC ?: 0) >= 100) Rv.Warn else Rv.Acc),
             Gauge("BATTERY", live?.battDeciV?.takeIf { it >= 0 }?.let { "%.1f".format(it / 10.0) }, "V", ((live?.battDeciV ?: 105) / 10f - 10.5f) / 5f, if ((live?.battDeciV ?: 140) in 0..119) Rv.Warn else Rv.Acc),
             Gauge("FUEL", live?.fuel?.takeIf { it >= 0 }?.toString(), "%", (live?.fuel ?: 0) / 100f, Rv.Acc),
-            Gauge("LOAD", live?.load?.takeIf { it >= 0 }?.toString(), "%", (live?.load ?: 0) / 100f, Rv.Acc)
+            Gauge("LOAD", live?.load?.takeIf { it >= 0 }?.toString(), "%", (live?.load ?: 0) / 100f, Rv.Acc),
+            Gauge("INTAKE", live?.intakeC?.takeIf { it != NONE }?.let { Fmt.temp(it, tc).toString() }, if (tc) "°C" else "°F", ((live?.intakeC ?: -20) + 20) / 100f, Rv.Acc),
+            torqueGauge(live, kmh)
         )
-        for (r in 0 until 3) {
+        for (r in 0 until 4) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GaugeCard(g[r * 2], Modifier.weight(1f)); GaugeCard(g[r * 2 + 1], Modifier.weight(1f))
             }
@@ -109,6 +111,17 @@ fun HomeScreen(askBluetooth: () -> Unit, askNotification: () -> Unit, openLog: (
         Spacer(Modifier.height(8.dp))
         SetupCard(askBluetooth, askNotification)
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** Torque as the board shows it: real torque (lb-ft, or Nm with km/h units) when the car gives its reference torque, else percent. */
+private fun torqueGauge(live: Live?, kmh: Boolean): Gauge {
+    val nm = live?.torqueNm?.takeIf { it != NONE }; val pct = live?.torquePct?.takeIf { it != NONE }
+    val frac = ((pct ?: -20) + 20) / 120f
+    return when {
+        nm != null -> Gauge("TORQUE", (if (kmh) nm else Math.round(nm * 0.737562).toInt()).toString(), if (kmh) "Nm" else "lb-ft", frac, Rv.Acc)
+        pct != null -> Gauge("TORQUE", pct.toString(), "%", frac, Rv.Acc)
+        else -> Gauge("TORQUE", null, "", 0f, Rv.Acc)
     }
 }
 

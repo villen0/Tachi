@@ -9,6 +9,11 @@ class LiveParserTest {
         assertEquals(2150, l.rpm); assertEquals(45, l.mph); assertEquals(92, l.coolC); assertEquals(140, l.battDeciV); assertEquals(61, l.fuel); assertEquals(42, l.load)
         assertTrue(l.kmh); assertTrue(l.tempC)
     }
+    @Test fun parsesIntakeAndTorque() {
+        val l = LiveParser.parse("L|2150|45|92|140|61|42|0|31|195|62")!!
+        assertEquals(31, l.intakeC); assertEquals(195, l.torqueNm); assertEquals(62, l.torquePct)
+        val old = LiveParser.parse("L|2150|45|92|140|61|42|0")!!; assertEquals(NONE, old.intakeC); assertEquals(NONE, old.torqueNm)   // older firmware
+    }
     @Test fun unknownValuesAreMinusOne() { val l = LiveParser.parse("L|-1|-1|-1|-1|-1|-1|0")!!; assertEquals(-1, l.rpm); assertFalse(l.kmh); assertFalse(l.tempC) }
     @Test fun garbageIsNull() { assertNull(LiveParser.parse("")); assertNull(LiveParser.parse("N|R|3|x")); assertNull(LiveParser.parse("L|1|2")); assertNull(LiveParser.parse("L|a|b|c|d|e|f|g")) }
     @Test fun distances() {

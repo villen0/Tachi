@@ -74,10 +74,13 @@ inline void formatDist(uint32_t m, bool metric, char *num, size_t nn, char *unit
 inline float closeness(uint32_t m) { float f = 1.0f - m / 500.0f; return f < 0 ? 0 : (f > 1 ? 1 : f); }
 
 // The live values the board streams to the app (notification on the LIVE characteristic, about twice a second):
-//   L|rpm|mph|coolC|battDeciV|fuelPct|loadPct|units       (-1 = no fresh value; units: bit0 km/h, bit1 deg C, bit2 bar)
+//   L|rpm|mph|coolC|battDeciV|fuelPct|loadPct|units|intakeC|torqueNm|torquePct
+// rpm..loadPct: -1 = no fresh value; intakeC, torqueNm, torquePct: NO_VALUE (-999) = none. units: bit0 km/h, bit1 deg C, bit2 bar.
 // Speed is always mph and temperature deg C here; the app converts with the units bits (the same choice the board's Settings page shows).
-inline void formatLive(char *out, size_t n, int rpm, int mph, int coolC, int battDeciV, int fuel, int load, int units) {
-  snprintf(out, n, "L|%d|%d|%d|%d|%d|%d|%d", rpm, mph, coolC, battDeciV, fuel, load, units);
+// torqueNm is the real torque when the car gives its reference torque, else NO_VALUE and the app shows the percent.
+constexpr int NO_VALUE = -999;
+inline void formatLive(char *out, size_t n, int rpm, int mph, int coolC, int battDeciV, int fuel, int load, int units, int intakeC, int torqueNm, int torquePct) {
+  snprintf(out, n, "L|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d", rpm, mph, coolC, battDeciV, fuel, load, units, intakeC, torqueNm, torquePct);
 }
 
 }  // namespace nav

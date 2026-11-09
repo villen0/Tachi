@@ -1766,9 +1766,14 @@ static void navBleLive() {                           // main loop: stream the li
   auto have = [&](int g) { return gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS); };
   bool coolOk = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30;
   int units = (cfg.speedKmh ? 1 : 0) | (cfg.tempC ? 2 : 0) | (cfg.pressBar ? 4 : 0);
-  char line[64];
+  int intake = have(G_INTAKE) ? (int)lroundf(gVal[G_INTAKE]) : nav::NO_VALUE, tqNm = nav::NO_VALUE, tqPct = nav::NO_VALUE;
+  if (have(G_TORQUE)) {
+    tqPct = (int)lroundf(gVal[G_TORQUE]);
+    if (have(G_TORQREF) && gVal[G_TORQREF] > 0) tqNm = (int)lroundf(obd::torqueNm(tqPct, (int)lroundf(gVal[G_TORQREF])));
+  }
+  char line[96];
   nav::formatLive(line, sizeof(line), fresh(tsRpm, FAST_FRESH_MS) ? rpm : -1, fresh(tsMph, FAST_FRESH_MS) ? mph : -1, coolOk ? coolantC : -1,
-                  have(G_BATT) ? (int)lroundf(gVal[G_BATT] * 10.0f) : -1, have(G_FUEL) ? (int)lroundf(gVal[G_FUEL]) : -1, have(G_LOAD) ? (int)lroundf(gVal[G_LOAD]) : -1, units);
+                  have(G_BATT) ? (int)lroundf(gVal[G_BATT] * 10.0f) : -1, have(G_FUEL) ? (int)lroundf(gVal[G_FUEL]) : -1, have(G_LOAD) ? (int)lroundf(gVal[G_LOAD]) : -1, units, intake, tqNm, tqPct);
   liveChr->setValue((const uint8_t *)line, strlen(line)); liveChr->notify();
 }
 static void navBleKeepAlive() {                      // main loop: make sure the phone can always find the board

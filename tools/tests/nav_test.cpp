@@ -32,7 +32,8 @@ int main() {
   formatDist(0, false, n, sizeof(n), u, sizeof(u)); CHECK(!strcmp(n, "0") && !strcmp(u, "FT"));
   formatDist(16093, false, n, sizeof(n), u, sizeof(u)); CHECK(!strcmp(n, "10") && !strcmp(u, "MI"));
   CHECK(closeness(0) == 1.0f && closeness(500) == 0.0f && closeness(9000) == 0.0f && fabsf(closeness(250) - 0.5f) < 1e-4f);
-  { char b[64]; formatLive(b, sizeof(b), 2150, 45, 92, 140, 61, 42, 3); CHECK(!strcmp(b, "L|2150|45|92|140|61|42|3")); formatLive(b, sizeof(b), -1, -1, -1, -1, -1, -1, 0); CHECK(!strcmp(b, "L|-1|-1|-1|-1|-1|-1|0")); }
+  { char b[96]; formatLive(b, sizeof(b), 2150, 45, 92, 140, 61, 42, 3, 31, 195, 62); CHECK(!strcmp(b, "L|2150|45|92|140|61|42|3|31|195|62"));
+    formatLive(b, sizeof(b), -1, -1, -1, -1, -1, -1, 0, NO_VALUE, NO_VALUE, NO_VALUE); CHECK(!strcmp(b, "L|-1|-1|-1|-1|-1|-1|0|-999|-999|-999")); }
   printf("%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;
 }

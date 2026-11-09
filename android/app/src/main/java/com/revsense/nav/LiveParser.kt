@@ -1,7 +1,9 @@
 package com.revsense.nav
 
-/** The live values the board streams: "L|rpm|mph|coolC|battDeciV|fuelPct|loadPct|units" (-1 = no fresh value; units bits: 1 km/h, 2 deg C, 4 bar). */
-data class Live(val rpm: Int, val mph: Int, val coolC: Int, val battDeciV: Int, val fuel: Int, val load: Int, val units: Int) {
+/** The live values the board streams: "L|rpm|mph|coolC|battDeciV|fuelPct|loadPct|units|intakeC|torqueNm|torquePct" (-1 = no fresh value; NONE = none for the last three; units bits: 1 km/h, 2 deg C, 4 bar). */
+const val NONE = -999
+data class Live(val rpm: Int, val mph: Int, val coolC: Int, val battDeciV: Int, val fuel: Int, val load: Int, val units: Int,
+                val intakeC: Int = NONE, val torqueNm: Int = NONE, val torquePct: Int = NONE) {
     val kmh: Boolean get() = units and 1 != 0
     val tempC: Boolean get() = units and 2 != 0
 }
@@ -11,7 +13,7 @@ object LiveParser {
         val p = s.trim().split('|')
         if (p.size < 8 || p[0] != "L") return null
         val n = p.drop(1).map { it.toIntOrNull() ?: return null }
-        return Live(n[0], n[1], n[2], n[3], n[4], n[5], n[6])
+        return Live(n[0], n[1], n[2], n[3], n[4], n[5], n[6], n.getOrElse(7) { NONE }, n.getOrElse(8) { NONE }, n.getOrElse(9) { NONE })   // older firmware sends only the first seven
     }
 }
 
