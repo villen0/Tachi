@@ -40,22 +40,30 @@ int main() {
     trip::Record e; formatTrip(b, sizeof(b), e, false); CHECK(!strcmp(b, "R|0|0|0|0|0|0|0|-32768|-32768|0|0|"));
     r.newCodeCount = 4; strcpy(r.newCodes[2], "P0171"); strcpy(r.newCodes[3], "P0100"); formatTrip(b, sizeof(b), r, false); CHECK(strlen(b) < 100);
     CHECK(isTripQuery("Q|T", 3) && !isTripQuery("Q|", 2) && !isTripQuery("N|R|1|x", 7)); }
-  { settings::Settings c; uint8_t g = 0; int br = 85; Change ch; char b[128];
+  { settings::Settings c; uint8_t g = 0; int br = 85; uint32_t cc = 0; Change ch; char b[128];
     CHECK(isConfigQuery("S?", 2) && !isConfigQuery("S|sp|1", 6));
     CHECK(parseChange("S|sp|1", 6, ch) && !strcmp(ch.key, "sp") && ch.v == 1);
     CHECK(parseChange("S|wc|-1", 7, ch) && ch.v == -1); CHECK(!parseChange("S|toolong|1", 11, ch)); CHECK(!parseChange("S|sp|", 5, ch)); CHECK(!parseChange("S|sp|x", 6, ch)); CHECK(!parseChange("N|R|1|x", 7, ch));
-    parseChange("S|sp|1", 6, ch); CHECK(applyChange(c, g, br, ch) && c.speedKmh == 1);
-    parseChange("S|tp|1", 6, ch); applyChange(c, g, br, ch); CHECK(c.tempC == 1);
-    parseChange("S|pr|1", 6, ch); applyChange(c, g, br, ch); CHECK(c.pressBar == 1);
-    parseChange("S|th|3", 6, ch); CHECK(applyChange(c, g, br, ch) && c.theme == 3);
-    parseChange("S|th|9", 6, ch); CHECK(!applyChange(c, g, br, ch) && c.theme == 3);                       // out of range: nothing changes
-    parseChange("S|md|6", 6, ch); CHECK(applyChange(c, g, br, ch) && c.mode == 6); parseChange("S|md|7", 6, ch); CHECK(!applyChange(c, g, br, ch));
-    parseChange("S|ga|2", 6, ch); CHECK(applyChange(c, g, br, ch) && g == 2); parseChange("S|ga|3", 6, ch); CHECK(!applyChange(c, g, br, ch) && g == 2);
-    parseChange("S|br|1", 6, ch); applyChange(c, g, br, ch); CHECK(br == 5); parseChange("S|br|250", 8, ch); applyChange(c, g, br, ch); CHECK(br == 100);
-    int redline = c.redlineRpm; parseChange("S|wr|1", 6, ch); applyChange(c, g, br, ch); CHECK(c.redlineRpm == redline + 250); parseChange("S|wr|-1", 7, ch); applyChange(c, g, br, ch); CHECK(c.redlineRpm == redline);
-    c = settings::Settings(); int warm = c.coolWarnC; parseChange("S|wc|1", 6, ch); applyChange(c, g, br, ch); CHECK(c.coolWarnC == warm + 2 || c.coolWarnC > warm);       // deg C: the board's step
-    parseChange("S|zz|1", 6, ch); CHECK(!applyChange(c, g, br, ch));
-    c = settings::Settings(); g = 1; formatConfig(b, sizeof(b), c, g, 85); CHECK(!strcmp(b, "C|0|0|0|4|0|1|100|108|120|15|6500|85")); CHECK(settings::valid(c)); }
+    parseChange("S|sp|1", 6, ch); CHECK(applyChange(c, g, br, cc, ch) && c.speedKmh == 1);
+    parseChange("S|tp|1", 6, ch); applyChange(c, g, br, cc, ch); CHECK(c.tempC == 1);
+    parseChange("S|pr|1", 6, ch); applyChange(c, g, br, cc, ch); CHECK(c.pressBar == 1);
+    parseChange("S|th|3", 6, ch); CHECK(applyChange(c, g, br, cc, ch) && c.theme == 3);
+    parseChange("S|th|9", 6, ch); CHECK(!applyChange(c, g, br, cc, ch) && c.theme == 3);                       // out of range: nothing changes
+    parseChange("S|md|7", 6, ch); CHECK(applyChange(c, g, br, cc, ch) && c.mode == 7); parseChange("S|md|8", 6, ch); CHECK(!applyChange(c, g, br, cc, ch) && c.mode == 7);
+    c.mode = 0; CHECK(parseChange("S|cc|15156778", 14, ch)); CHECK(applyChange(c, g, br, cc, ch) && cc == 15156778u && c.mode == 7); CHECK(settings::valid(c));   // 0xE7462A, custom mode
+    CHECK(parseChange("S|cc|16777215", 14, ch) && applyChange(c, g, br, cc, ch) && cc == 0xFFFFFFu); CHECK(!parseChange("S|cc|16777216", 14, ch));
+    parseChange("S|ga|2", 6, ch); CHECK(applyChange(c, g, br, cc, ch) && g == 2); parseChange("S|ga|3", 6, ch); CHECK(!applyChange(c, g, br, cc, ch) && g == 2);
+    parseChange("S|br|1", 6, ch); applyChange(c, g, br, cc, ch); CHECK(br == 5); parseChange("S|br|250", 8, ch); applyChange(c, g, br, cc, ch); CHECK(br == 100);
+    int redline = c.redlineRpm; parseChange("S|wr|1", 6, ch); applyChange(c, g, br, cc, ch); CHECK(c.redlineRpm == redline + 250); parseChange("S|wr|-1", 7, ch); applyChange(c, g, br, cc, ch); CHECK(c.redlineRpm == redline);
+    c = settings::Settings(); int warm = c.coolWarnC; parseChange("S|wc|1", 6, ch); applyChange(c, g, br, cc, ch); CHECK(c.coolWarnC == warm + 2 || c.coolWarnC > warm);       // deg C: the board's step
+    parseChange("S|zz|1", 6, ch); CHECK(!applyChange(c, g, br, cc, ch));
+    c = settings::Settings(); g = 1; formatConfig(b, sizeof(b), c, g, 85, 15156778u); CHECK(!strcmp(b, "C|0|0|0|4|0|1|100|108|120|15|6500|85|15156778")); CHECK(settings::valid(c)); }
+  { char b[160];
+    CHECK(isCodesQuery("F?", 2) && !isCodesQuery("S?", 2) && isCodesClear("F|X", 3) && !isCodesClear("F|", 2) && !isCodesClear("F?", 2));
+    formatCodesHeader(b, sizeof(b), true, true, 2, 2, "UPDATED: 2 CODES"); CHECK(!strcmp(b, "M|1|1|2|2|UPDATED: 2 CODES"));
+    formatCodesHeader(b, sizeof(b), false, false, -1, 0, "A|B"); CHECK(!strcmp(b, "M|0|0|-1|0|A B"));       // a bar in the text never breaks the line
+    formatCodeRow(b, sizeof(b), "P0301", 0, true, "Misfire cylinder 1"); CHECK(!strcmp(b, "D|P0301|0|1|Misfire cylinder 1"));
+    formatCodeRow(b, sizeof(b), "P0420", 1, false, nullptr); CHECK(!strcmp(b, "D|P0420|1|0|")); }
   printf("%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;
 }

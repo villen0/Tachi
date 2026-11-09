@@ -99,25 +99,26 @@ inline void formatTrip(char *out, size_t n, const trip::Record &r, bool live) {
 }
 
 // ---- settings (the app asks with "S?" and changes one setting with "S|key|value"; the board answers on the CONFIG characteristic) ----
-//   C|speedKmh|tempC|pressBar|theme|mode|gauge|coolWarnC|coolHotC|battLowDeciV|fuelLowPct|redlineRpm|brightness      (the same settings as the board's Settings page)
-// Keys: sp tp pr = units (0 / 1), th = look (0..4), md = colour mode (0..6), ga = gauge style (0 dial, 1 arc, 2 ticks), br = brightness (5..100),
+//   C|speedKmh|tempC|pressBar|theme|mode|gauge|coolWarnC|coolHotC|battLowDeciV|fuelLowPct|redlineRpm|brightness|customRgb      (the same settings as the board's Settings page)
+// Keys: sp tp pr = units (0 / 1), th = look (0..4), md = colour mode (0..7, 7 = custom), cc = custom colour as a number 0xRRGGBB (also switches to mode 7), ga = gauge style (0 dial, 1 arc, 2 ticks), br = brightness (5..100),
 //       wc wh wb wf wr = one step up (+1) or down (-1) of coolant warm / coolant hot / battery low / fuel low / redline (the board's own step sizes and limits).
 struct Change { char key[4] = ""; int v = 0; };
 inline bool isConfigQuery(const char *s, size_t n) { return n >= 2 && s[0] == 'S' && s[1] == '?'; }
 inline bool parseChange(const char *s, size_t n, Change &c) {
-  if (n < 5 || n > 24 || s[0] != 'S' || s[1] != '|') return false;
+  if (n < 5 || n > 28 || s[0] != 'S' || s[1] != '|') return false;
   char buf[32]; memcpy(buf, s, n); buf[n] = 0;
   char *k = buf + 2, *bar = strchr(k, '|'); if (!bar || bar == k || bar - k > 3) return false;
-  *bar = 0; char *end = nullptr; long v = strtol(bar + 1, &end, 10); if (end == bar + 1 || v < -100000 || v > 100000) return false;
+  *bar = 0; char *end = nullptr; long v = strtol(bar + 1, &end, 10); if (end == bar + 1 || v < -100000 || v > 16777215) return false;
   strcpy(c.key, k); c.v = (int)v; return true;
 }
 // Applies one change; returns false for an unknown key or a value out of range (nothing changes then).
-inline bool applyChange(settings::Settings &cfg, uint8_t &gauge, int &brightness, const Change &c) {
+inline bool applyChange(settings::Settings &cfg, uint8_t &gauge, int &brightness, uint32_t &customRgb, const Change &c) {
   const char *k = c.key; int v = c.v;
   if (!strcmp(k, "sp")) cfg.speedKmh = v != 0; else if (!strcmp(k, "tp")) cfg.tempC = v != 0; else if (!strcmp(k, "pr")) cfg.pressBar = v != 0;
   else if (!strcmp(k, "th")) { if (v < 0 || v >= settings::THEMES) return false; cfg.theme = (uint8_t)v; }
   else if (!strcmp(k, "md")) { if (v < 0 || v >= settings::MODES) return false; cfg.mode = (uint8_t)v; }
   else if (!strcmp(k, "ga")) { if (v < 0 || v > 2) return false; gauge = (uint8_t)v; }
+  else if (!strcmp(k, "cc")) { if (v < 0) return false; customRgb = (uint32_t)v & 0xFFFFFF; cfg.mode = 7; }   // a custom accent colour 0xRRGGBB, and switch to it
   else if (!strcmp(k, "br")) brightness = v < 5 ? 5 : (v > 100 ? 100 : v);
   else if (!strcmp(k, "wc")) settings::warnAdjust(cfg, settings::W_COOL_WARN, v >= 0 ? 1 : -1);
   else if (!strcmp(k, "wh")) settings::warnAdjust(cfg, settings::W_COOL_HOT, v >= 0 ? 1 : -1);
@@ -127,9 +128,24 @@ inline bool applyChange(settings::Settings &cfg, uint8_t &gauge, int &brightness
   else return false;
   return true;
 }
-inline void formatConfig(char *out, size_t n, const settings::Settings &c, uint8_t gauge, int brightness) {
-  snprintf(out, n, "C|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d", c.speedKmh, c.tempC, c.pressBar, c.theme, c.mode, (int)gauge, (int)c.coolWarnC, (int)c.coolHotC,
-           (int)c.battLowDeciV, (int)c.fuelLowPct, (int)c.redlineRpm, brightness);
+inline void formatConfig(char *out, size_t n, const settings::Settings &c, uint8_t gauge, int brightness, uint32_t customRgb) {
+  snprintf(out, n, "C|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%u", c.speedKmh, c.tempC, c.pressBar, c.theme, c.mode, (int)gauge, (int)c.coolWarnC, (int)c.coolHotC,
+           (int)c.battLowDeciV, (int)c.fuelLowPct, (int)c.redlineRpm, brightness, (unsigned)customRgb);
+}
+
+// ---- fault codes (the app asks with "F?"; "F|X" clears them; the board answers on the CODES characteristic) ----
+//   M|answered|mil|milCount|total|status       the check-engine status and the board's status text ("NO CODES", "TURN THE ENGINE OFF FIRST", ...)
+//   D|code|kind|isNew|description              one code: kind 0 stored, 1 pending; isNew 1 = appeared during this trip
+//   E|count                                    end of the list
+// Sent when the app asks, and again whenever the codes or the status text change. Clearing is the board's own routine (engine off only).
+inline bool isCodesQuery(const char *s, size_t n) { return n >= 2 && s[0] == 'F' && s[1] == '?'; }
+inline bool isCodesClear(const char *s, size_t n) { return n >= 3 && s[0] == 'F' && s[1] == '|' && s[2] == 'X'; }
+inline void cleanField(const char *in, char *out, size_t n) { size_t o = 0; for (; *in && o + 1 < n; in++) out[o++] = (*in == '|' || *in == '\n' || *in == '\r') ? ' ' : *in; out[o] = 0; }
+inline void formatCodesHeader(char *out, size_t n, bool answered, bool mil, int milCount, int total, const char *status) {
+  char st[40]; cleanField(status, st, sizeof(st)); snprintf(out, n, "M|%d|%d|%d|%d|%s", answered ? 1 : 0, mil ? 1 : 0, milCount, total, st);
+}
+inline void formatCodeRow(char *out, size_t n, const char *code, int kind, bool isNew, const char *desc) {
+  char c[8], d[60]; cleanField(code, c, sizeof(c)); cleanField(desc ? desc : "", d, sizeof(d)); snprintf(out, n, "D|%s|%d|%d|%s", c, kind, isNew ? 1 : 0, d);
 }
 
 }  // namespace nav

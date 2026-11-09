@@ -26,7 +26,7 @@ struct Settings {
 };
 #pragma pack(pop)
 
-constexpr int THEMES = 5, MODES = 7;               // modes: the theme's own colour + 6 accent colours
+constexpr int THEMES = 5, MODES = 8;               // modes: the theme's own colour, 6 accent colours, CUSTOM (any colour from the phone app; the colour itself is saved under its own key)
 
 inline bool valid(const Settings &s) {
   Settings d;

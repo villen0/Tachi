@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Revsense gauge from the board's welcome screen: white ring, red arc over a grey track, white needle, red hub. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M25.20,54.00 A28.80,28.80 0 1,1 82.80,54.00 A28.80,28.80 0 1,1 25.20,54.00" android:strokeColor="#FFFFFF" android:strokeWidth="2.40" android:fillColor="#00000000"/>
+    <path android:pathData="M64.39,35.79 A20.96,20.96 0 0,1 68.82,68.82" android:strokeColor="#4A4A4E" android:strokeWidth="3.56" android:strokeLineCap="round" android:fillColor="#00000000"/>
+    <path android:pathData="M39.18,68.82 A20.96,20.96 0 0,1 64.39,35.79" android:strokeColor="#E7462A" android:strokeWidth="3.56" android:strokeLineCap="round" android:fillColor="#00000000"/>
+    <path android:pathData="M54.00,54.00 L62.17,39.87" android:strokeColor="#FFFFFF" android:strokeWidth="1.73" android:strokeLineCap="round" android:fillColor="#00000000"/>
+    <path android:pathData="M51.12,54.00 A2.88,2.88 0 1,1 56.88,54.00 A2.88,2.88 0 1,1 51.12,54.00 Z" android:fillColor="#E7462A"/>
+</vector>

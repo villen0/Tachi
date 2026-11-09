@@ -17,7 +17,7 @@ struct Look {
   RGB bezel, panel, panelEdge;
 };
 
-constexpr int THEMES = 5, MODES = 7;
+constexpr int THEMES = 5, MODES = 8;   // modes: 0 the theme's own colour, 1..6 fixed accents, 7 CUSTOM (any colour, set from the phone app)
 
 inline const Look &look(int t) {
   static const Look L[THEMES] = {
@@ -31,12 +31,14 @@ inline const Look &look(int t) {
 }
 
 // accent colours for the modes 1..6 (mode 0 keeps the theme's own)
+inline RGB &customColor() { static RGB c = {231, 70, 42}; return c; }   // the CUSTOM mode colour (main.cpp loads and saves it)
 inline RGB modeColor(int m) {
-  static const RGB M[MODES - 1] = {{0, 200, 255}, {110, 240, 130}, {255, 208, 50}, {255, 120, 40}, {255, 70, 90}, {200, 100, 255}};
-  return M[(m >= 1 && m < MODES ? m : 1) - 1];
+  if (m == 7) return customColor();
+  static const RGB M[6] = {{0, 200, 255}, {110, 240, 130}, {255, 208, 50}, {255, 120, 40}, {255, 70, 90}, {200, 100, 255}};
+  return M[(m >= 1 && m < 7 ? m : 1) - 1];
 }
 inline const char *modeName(int m) {
-  static const char *N[MODES] = {"THEME", "CYAN", "GREEN", "AMBER", "ORANGE", "RED", "VIOLET"};
+  static const char *N[MODES] = {"THEME", "CYAN", "GREEN", "AMBER", "ORANGE", "RED", "VIOLET", "CUSTOM"};
   return N[m >= 0 && m < MODES ? m : 0];
 }
 

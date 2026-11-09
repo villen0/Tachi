@@ -15,11 +15,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.drawscope.Stroke as DrawStroke
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -53,7 +59,7 @@ fun AppRoot(askBluetooth: () -> Unit, askNotification: () -> Unit) {
         containerColor = Rv.Bg,
         bottomBar = {
             NavigationBar(containerColor = Color(0xFF10131A)) {
-                listOf("Home" to Icons.Filled.Home, "Trips" to Icons.AutoMirrored.Filled.List, "Settings" to Icons.Filled.Settings).forEachIndexed { i, (name, icon) ->
+                listOf("Home" to Icons.Filled.Home, "Trips" to Icons.AutoMirrored.Filled.List, "Codes" to Icons.Filled.Warning, "Settings" to Icons.Filled.Settings).forEachIndexed { i, (name, icon) ->
                     NavigationBarItem(
                         selected = tab == i, onClick = { tab = i }, icon = { Icon(icon, name) }, label = { Text(name, fontSize = 11.sp) },
                         colors = NavigationBarItemDefaults.colors(selectedIconColor = Rv.Acc, selectedTextColor = Rv.Acc, indicatorColor = Color(0xFF2A1A1A), unselectedIconColor = Rv.Dim, unselectedTextColor = Rv.Dim)
@@ -66,6 +72,7 @@ fun AppRoot(askBluetooth: () -> Unit, askNotification: () -> Unit) {
             when (tab) {
                 0 -> HomeScreen(askBluetooth, askNotification) { showLog = true }
                 1 -> TripsScreen()
+                2 -> CodesScreen()
                 else -> SettingsScreen()
             }
         }
@@ -84,7 +91,9 @@ fun HomeScreen(askBluetooth: () -> Unit, askNotification: () -> Unit, openLog: (
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(20.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Revsense", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).pointerInput(Unit) { detectTapGestures(onLongPress = { openLog() }) })
+            Row(Modifier.weight(1f).pointerInput(Unit) { detectTapGestures(onLongPress = { openLog() }) }, verticalAlignment = Alignment.CenterVertically) {   // long-press: the log
+                RevsenseMark(38.dp); Spacer(Modifier.width(10.dp)); Wordmark(26.sp)
+            }
             StatusPill(AppState.bleConnected)
         }
         Spacer(Modifier.height(14.dp))
@@ -375,7 +384,7 @@ fun SettingsScreen() {
                 Names.modes.forEachIndexed { i, n ->
                     Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                         Box(
-                            Modifier.size(34.dp).clip(CircleShape).background(Color(Names.modesRgb[i]))
+                            Modifier.size(34.dp).clip(CircleShape).background(if (i == 7) Color(0xFF000000.toInt() or c.customRgb) else Color(Names.modesRgb[i]))
                                 .border(if (c.mode == i) 2.dp else 0.dp, Rv.Text, CircleShape).clickable { BleLink.change("md", i) }
                         )
                         Spacer(Modifier.height(3.dp))
@@ -383,6 +392,17 @@ fun SettingsScreen() {
                     }
                 }
             }
+            Spacer(Modifier.height(14.dp))
+            SectionLabel("CUSTOM COLOUR")
+            var shown by remember(c.customRgb) { mutableIntStateOf(c.customRgb) }
+            var lastSend by remember { mutableLongStateOf(0L) }
+            val pick = { rgb: Int, fin: Boolean ->
+                shown = rgb; val t = SystemClock.elapsedRealtime()
+                if (fin || t - lastSend >= 250) { lastSend = t; BleLink.change("cc", rgb) }                  // live while dragging (about 4 times a second), and once more on release
+            }
+            Card(Modifier.fillMaxWidth()) { Text("Standard colorwheel", fontSize = 14.sp, color = Rv.Dim); Spacer(Modifier.height(10.dp)); StandardWheel(shown, pick) }
+            Spacer(Modifier.height(10.dp))
+            Card(Modifier.fillMaxWidth()) { Text("Gradient colorwheel", fontSize = 14.sp, color = Rv.Dim); Spacer(Modifier.height(10.dp)); GradientWheel(shown, pick) }
             Spacer(Modifier.height(14.dp))
             SectionLabel("GAUGE STYLE")
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -448,4 +468,83 @@ fun StepRow(label: String, value: String, onStep: (Int) -> Unit) {
 @Composable
 fun StepButton(t: String, onClick: () -> Unit) {
     Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Rv.Track).clickable { onClick() }, contentAlignment = Alignment.Center) { Text(t, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+}
+
+/** The logo's gauge (the one the board draws on its welcome screen): white ring, red arc with a grey rest of the track, needle and hub. */
+@Composable
+fun RevsenseMark(size: Dp, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(size)) {
+        val s = this.size.minDimension / 2f / 322f; val c = center                       // the logo's units: ring outer radius 312, stroke 25
+        fun arc(r: Float, w: Float, a0: Float, sweep: Float, col: Color) =
+            drawArc(col, a0 - 90f, sweep, false, Offset(c.x - r * s, c.y - r * s), Size(2 * r * s, 2 * r * s), style = DrawStroke(w * s, cap = StrokeCap.Round))
+        drawCircle(Color.White, 299.5f * s, c, style = DrawStroke(25f * s))
+        arc(218f, 37f, 29.7f, 105.3f, Color(0xFF4A4A4E))                                 // the rest of the track, clockwise from 12 o'clock
+        arc(218f, 37f, -135f, 164.7f, Rv.Acc)                                            // the red fill
+        drawLine(Color.White, c, Offset(c.x + 85f * s, c.y - 147f * s), strokeWidth = 18f * s, cap = StrokeCap.Round)
+        drawCircle(Rv.Acc, 30f * s, c)
+    }
+}
+
+/** "Rev" in white, "sense" in the logo red, like the welcome screen. */
+@Composable
+fun Wordmark(fontSize: androidx.compose.ui.unit.TextUnit) {
+    Text(buildAnnotatedString { withStyle(SpanStyle(color = Rv.Text)) { append("Rev") }; withStyle(SpanStyle(color = Rv.Acc)) { append("sense") } }, fontSize = fontSize, fontWeight = FontWeight.Medium)
+}
+
+@Composable
+fun CodesScreen() {
+    val connected = AppState.bleConnected
+    LaunchedEffect(connected) { if (connected) BleLink.requestCodes() }
+    val st = AppState.codes
+    var confirm by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(20.dp))
+        Text("Fault codes", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text(if (connected) "Read from the car by the board" else "Connect to the board to read the codes", fontSize = 13.sp, color = Rv.Dim)
+        Spacer(Modifier.height(14.dp))
+        if (st == null || !st.answered) {
+            Card(Modifier.fillMaxWidth()) {
+                Text(if (st == null) "Not read yet" else "The car did not answer", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text(st?.status?.ifEmpty { null } ?: "Connect the board to the car, then read the codes.", fontSize = 13.sp, color = Rv.Dim)
+            }
+        } else {
+            Card(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(14.dp).clip(CircleShape).background(if (st.mil) Rv.Warn else Rv.Ok)); Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(if (st.mil) "Check engine light is ON" else "Check engine light is off", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(if (st.total == 0) "No fault codes stored" else "${st.total} code${if (st.total == 1) "" else "s"}", fontSize = 13.sp, color = Rv.Dim)
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            st.rows.forEach { r ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(16.dp)).background(Rv.Card).border(1.dp, Rv.Edge, RoundedCornerShape(16.dp)).padding(14.dp), verticalAlignment = Alignment.Top) {
+                    Column(Modifier.weight(1f)) {
+                        Text(r.code, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text(r.desc.ifEmpty { "No description in the board's list" }, fontSize = 13.sp, color = Rv.Dim)
+                    }
+                    val col = if (r.isNew) Rv.Acc else if (r.kind == 1) Rv.Warn else Rv.Dim
+                    Text(r.tag, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = col, modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(col.copy(alpha = 0.15f)).padding(horizontal = 8.dp, vertical = 4.dp))
+                }
+            }
+        }
+        if (st != null && st.status.isNotEmpty()) { Spacer(Modifier.height(4.dp)); Text(st.status, fontSize = 12.sp, color = Rv.Dim) }
+        Spacer(Modifier.height(14.dp))
+        SetupButton("Read the codes again") { BleLink.requestCodes() }
+        Spacer(Modifier.height(8.dp))
+        Box(
+            Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(12.dp)).border(1.dp, Rv.Acc, RoundedCornerShape(12.dp)).clickable(enabled = connected) { confirm = true },
+            contentAlignment = Alignment.Center
+        ) { Text("Clear codes…", color = Rv.Acc, fontWeight = FontWeight.Bold) }
+        Spacer(Modifier.height(24.dp))
+    }
+    if (confirm) AlertDialog(
+        onDismissRequest = { confirm = false },
+        title = { Text("Clear the fault codes?") },
+        text = { Text("The engine must be off (the board refuses otherwise). Clearing also resets the car's readiness monitors and freeze-frame data, so only do it once the problem is fixed.") },
+        confirmButton = { TextButton(onClick = { confirm = false; BleLink.clearCodes() }) { Text("Clear", color = Rv.Acc) } },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } }
+    )
 }

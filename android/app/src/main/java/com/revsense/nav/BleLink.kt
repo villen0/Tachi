@@ -24,6 +24,7 @@ object BleLink {
     val LIVE: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000003")
     val TRIPS: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000004")
     val CONFIG: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000005")
+    val CODES: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000006")
     private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private lateinit var ctx: Context
@@ -32,6 +33,7 @@ object BleLink {
     private var nav: BluetoothGattCharacteristic? = null
     private val pendingSubs = ArrayDeque<BluetoothGattCharacteristic>()
     private val tripBuf = ArrayList<TripRec>()
+    private val codesAsm = CodesAssembler()
     private var scanning = false
     private var started = false
 
@@ -73,7 +75,7 @@ object BleLink {
     private val gattCb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) g.requestMtu(185)          // room for a long street name
-            else { nav = null; AppState.live = null; g.close(); gatt = null; AppLog.setBle("board disconnected"); main.postDelayed({ scan() }, 2000) }
+            else { nav = null; AppState.live = null; AppState.codes = null; g.close(); gatt = null; AppLog.setBle("board disconnected"); main.postDelayed({ scan() }, 2000) }
         }
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { g.discoverServices() }
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
@@ -82,12 +84,12 @@ object BleLink {
             ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             nav = ch; AppLog.setBle("connected to the board")
             val svc = g.getService(SERVICE)                                                    // subscribe to the live values and the trips (older firmware has none)
-            pendingSubs.clear(); listOfNotNull(svc?.getCharacteristic(LIVE), svc?.getCharacteristic(TRIPS), svc?.getCharacteristic(CONFIG)).forEach { pendingSubs.add(it) }
+            pendingSubs.clear(); listOfNotNull(svc?.getCharacteristic(LIVE), svc?.getCharacteristic(TRIPS), svc?.getCharacteristic(CONFIG), svc?.getCharacteristic(CODES)).forEach { pendingSubs.add(it) }
             subscribeNext(g)
         }
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { subscribeNext(g) }
         private fun subscribeNext(g: BluetoothGatt) {
-            val c = pendingSubs.removeFirstOrNull() ?: run { requestTrips(); requestConfig(); return }
+            val c = pendingSubs.removeFirstOrNull() ?: run { requestTrips(); requestConfig(); requestCodes(); return }
             val cccd = c.getDescriptor(CCCD) ?: run { subscribeNext(g); return }
             g.setCharacteristicNotification(c, true)
             if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
@@ -95,7 +97,7 @@ object BleLink {
         }
         private fun incoming(c: BluetoothGattCharacteristic, b: ByteArray?) {
             if (b == null) return
-            when (c.uuid) { TRIPS -> trips(String(b)); CONFIG -> ConfigParser.parse(String(b))?.let { AppState.config = it }; else -> live(b) }
+            when (c.uuid) { TRIPS -> trips(String(b)); CONFIG -> ConfigParser.parse(String(b))?.let { AppState.config = it }; CODES -> codesAsm.feed(String(b))?.let { AppState.codes = it }; else -> live(b) }
         }
         private fun trips(line: String) {
             if (line.startsWith("E|")) { AppState.trips = tripBuf.toList(); AppState.tripsAt = SystemClock.elapsedRealtime(); tripBuf.clear(); return }
@@ -109,6 +111,12 @@ object BleLink {
 
     /** Asks the board for its trips; the answer arrives as notifications (see Trips.kt). */
     fun requestTrips() { tripBuf.clear(); send("Q|T") }
+
+    /** Asks the board to read and send its fault codes; the board also sends them again whenever they change. */
+    fun requestCodes() { send("F?") }
+
+    /** Clears the fault codes (the board's own routine: only with the engine off). */
+    fun clearCodes() { send("F|X") }
 
     /** Asks the board for its settings; the answer arrives on the CONFIG characteristic. */
     fun requestConfig() { send("S?") }
