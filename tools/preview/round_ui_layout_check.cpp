@@ -152,6 +152,15 @@ int main() {
     printf("%-14s %3d records, %d problems\n", "gforce", (int)rui::layoutLog().size(), bad);
     if (rui::gforceZeroAt(rui::GF_BTN_X + 4, rui::GF_BTN_Y + 4) != 1 || rui::gforceZeroAt(rui::CX, rui::GF_CY) == 1) { puts("  ZERO chip hit zone wrong"); totalBad++; }
   }
+  // ---- Navigation page: widest street, longest number ----
+  {
+    rui::Data d; d.dotN = 13; d.dotCur = 5; rui::NavView &N = d.nav; N.have = true; N.dir = 3; strcpy(N.num, "0.4"); strcpy(N.unit, "MI"); N.close = 0.5f;
+    strcpy(N.street, "WWWWWWWWWWWWWWWWWWWWWWWW"); while (rui::textW(rui::F_LBL, N.street) > rui::NV_ST_MAXW) N.street[strlen(N.street) - 1] = 0;
+    rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+    rui::frame(fb.data(), rui::PG_NAV, d, 1000, true);
+    int bad = check("nav", rui::layoutLog(), scaleNew, 4, true);   // information only: the distance uses the 26 px number font like the boost number (not in the clean-up type scale)
+    printf("%-14s %3d records, %d problems\n", "nav", (int)rui::layoutLog().size(), bad);
+  }
   Page others[] = {{rui::PG_SPORT, "sport"}, {rui::PG_TACH, "tach"}, {rui::PG_SPEEDO, "speedo"}, {rui::PG_VITALS, "vitals"}, {rui::PG_ARC, "arc"}, {rui::PG_CUSTOM, "custom"}, {rui::PG_QUAD, "quad"}, {rui::PG_DUAL, "dual"}, {rui::PG_GEAR, "gear"}};
   for (auto &o : others) {
     rui::Data d; d.dotN = 13; d.dotCur = 5; d.rpm = 6500; d.mph = 120; d.haveCool = d.haveFuel = d.haveBatt = d.haveLoad = true; d.coolShown = 260; d.fuelPct = 100; d.battV = 14.8f; d.loadPct = 100;

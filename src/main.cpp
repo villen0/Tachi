@@ -21,7 +21,8 @@
 #include "settings.h"
 #include "theme.h"
 #include "brand.h"           // the Revsense welcome screen
-#include "gforce.h"          // G-force meter (the board's motion sensor)
+#include "gforce.h"       // G-force meter (the board's motion sensor)
+#include "nav.h"          // turn-by-turn messages from the phone app
 
 // Arduino_GFX 1.6.x names its colors RGB565_*; keep short names for readability.
 #define BLACK  RGB565_BLACK
@@ -87,6 +88,9 @@ static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP 
 static settings::Settings cfg;
 static uint8_t gaugeStyle = 0;                       // tach / speedo style: 0 DIAL, 1 ARC, 2 TICKS (its own flash key, so the main settings blob stays valid)
 static const char *const GAUGE_NAMES[3] = {"DIAL", "ARC", "TICKS"};
+// Navigation: the phone app writes turns to the board's own Bluetooth service (NimBLE host task); the UI task reads them (navMux).
+static nav::Turn navTurn; static uint32_t navMs = 0; static volatile bool phoneLinked = false; static portMUX_TYPE navMux = portMUX_INITIALIZER_UNLOCKED;
+static bool navFresh() { portENTER_CRITICAL(&navMux); bool a = navTurn.active; uint32_t t = navMs; portEXIT_CRITICAL(&navMux); return a && (uint32_t)(millis() - t) < NAV_STALE_MS; }
 static gforce::Meter gMeter;                         // G-force meter (UI task only); its learned axis directions are saved in flash
 // Face page background: a gradient from the top colour to the bottom colour (0..255). Classic keeps the original navy / indigo; the other
 // looks use a soft, muted version of the theme colour (the accent washed toward grey and kept dark, so the eyes stay the brightest thing).
@@ -113,7 +117,7 @@ static uint32_t lastOilTry = 0;
 uint32_t lastValidMs = 0;   // last time any PID returned valid data
 bool linked = false;
 volatile bool demo = DEMO_MODE_DEFAULT;
-enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_GFORCE, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_BATTERY, PAGE_GEAR, PAGE_TRIP, PAGE_HISTORY, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
+enum Page { PAGE_FACE, PAGE_CLUSTER, PAGE_DIAL_TACH, PAGE_DIAL_SPEEDO, PAGE_ARC, PAGE_GFORCE, PAGE_NAV, PAGE_DIAL_VITALS, PAGE_CUSTOM, PAGE_QUAD, PAGE_DUAL, PAGE_BATTERY, PAGE_GEAR, PAGE_TRIP, PAGE_HISTORY, PAGE_CODES, PAGE_SETTINGS, PAGE_COUNT };   // Settings is always last: Brightness and Debug are inside it, not pages of their own
 static_assert(PAGE_SETTINGS == PAGE_COUNT - 1, "Settings must stay the last page: add new pages before it");
 volatile int page = PAGE_FACE;       // a tap or swipe changes the page (see pageVisible)
 
@@ -140,6 +144,7 @@ static bool pageVisible(int p) {
   if (p == PAGE_DIAL_TACH || p == PAGE_DIAL_SPEEDO) return SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_DIAL_VITALS) return SHOW_PAGE_VITALS && SHOW_PAGE_DIALS && !dialFailed;
   if (p == PAGE_BATTERY) return SHOW_PAGE_BATTERY && !dialFailed;
+  if (p == PAGE_NAV) return SHOW_PAGE_NAV && !dialFailed && (demo || phoneLinked || navFresh());   // only while there is something to show
   if (p == PAGE_GFORCE) return SHOW_PAGE_GFORCE && !dialFailed && (imuOk || demo);   // needs the motion sensor (or demo mode)
   if (p == PAGE_CUSTOM) return SHOW_PAGE_CUSTOM && SHOW_PAGE_STYLES && !dialFailed && boostVisible();
   if (p == PAGE_ARC) return SHOW_PAGE_STYLES && !dialFailed && boostVisible();
@@ -1414,6 +1419,23 @@ static void fillOptionsData(rui::Data &d, int sub) {
   d.ver = (int)((uint32_t)(sub * 1000003u + cfg.speedKmh * 7u + cfg.tempC * 11u + cfg.pressBar * 13u + cfg.theme * 17u + cfg.mode * 19u + (uint32_t)cfg.coolWarnC * 23u + (uint32_t)cfg.coolHotC * 29u + cfg.battLowDeciV * 31u + cfg.fuelLowPct * 37u + cfg.redlineRpm * 41u + gaugeStyle * 43u) & 0x3FFFFFFF);
 }
 
+// Navigation page data: the latest turn from the phone (demo mode: a made-up route). The street is cut to fit the display.
+static void fillNav(rui::Data &d, uint32_t now) {
+  rui::NavView &N = d.nav; nav::Turn t; bool ok = false;
+  if (demo) {
+    static const struct { nav::Dir dir; const char *st; } route[] = {{nav::D_RIGHT, "BROAD ST"}, {nav::D_SLIGHT_L, "OAK AVE"}, {nav::D_STRAIGHT, "HIGHWAY 9"}, {nav::D_LEFT, "MARTIN LUTHER KING JR BLVD"},
+                                                                    {nav::D_ROUNDABOUT, "PARK RD"}, {nav::D_UTURN_L, ""}, {nav::D_SHARP_R, "5TH ST"}, {nav::D_ARRIVE, "HOME"}};
+    int i = (int)((now / 5000) % 8); t.active = true; t.dir = route[i].dir; t.distM = (uint32_t)(640 - (now % 5000) * 600 / 5000); strncpy(t.street, route[i].st, sizeof(t.street) - 1); ok = true;
+  } else if (navFresh()) { portENTER_CRITICAL(&navMux); t = navTurn; portEXIT_CRITICAL(&navMux); ok = true; }
+  N.have = ok;
+  if (ok) {
+    N.dir = (uint8_t)t.dir; N.close = nav::closeness(t.distM);
+    nav::formatDist(t.distM, cfg.speedKmh != 0, N.num, sizeof(N.num), N.unit, sizeof(N.unit));
+    snprintf(N.street, sizeof(N.street), "%s", t.street);
+    while (rui::textW(rui::F_LBL, N.street) > rui::NV_ST_MAXW && strlen(N.street) > 3) { size_t n = strlen(N.street); N.street[n - 1] = 0; if (n > 3) { N.street[n - 2] = '.'; N.street[n - 3] = '.'; } if (rui::textW(rui::F_LBL, N.street) <= rui::NV_ST_MAXW) break; N.street[n - 3] = 0; }
+  } else snprintf(N.status, sizeof(N.status), "%s", phoneLinked ? "WAITING FOR MAPS" : "CONNECT THE PHONE APP");
+}
+
 // G-force page data: the filtered position, the peak and the last second as a trail (demo mode: a made-up drive).
 static void fillGForce(rui::Data &d, uint32_t now) {
   rui::GForceView &g = d.g;
@@ -1451,10 +1473,11 @@ static void roundDialFrame(int p, uint32_t now) {
   fillStyleData(d, p);
   fillReportData(d, p);
   if (p == PAGE_GFORCE) fillGForce(d, now);
+  if (p == PAGE_NAV) fillNav(d, now);
   if (p == PAGE_SETTINGS) { if (optCount(settingsSub) > 0) fillOptionsData(d, settingsSub); else fillSettingsData(d); }
   d.ver = (int)(((uint32_t)d.ver * 8u + (cfg.speedKmh ? 1u : 0u) + (cfg.tempC ? 2u : 0u) + (cfg.pressBar ? 4u : 0u)) & 0x3FFFFFFF);   // unit labels are part of the static content
   int pg = p == PAGE_CLUSTER ? rui::PG_SPORT : p == PAGE_DIAL_TACH ? rui::PG_TACH : p == PAGE_DIAL_SPEEDO ? rui::PG_SPEEDO : p == PAGE_ARC ? rui::PG_ARC
-         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_TRI : p == PAGE_DUAL ? rui::PG_TRI : p == PAGE_BATTERY ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_GFORCE ? rui::PG_GFORCE : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
+         : p == PAGE_CUSTOM ? rui::PG_CUSTOM : p == PAGE_QUAD ? rui::PG_TRI : p == PAGE_DUAL ? rui::PG_TRI : p == PAGE_BATTERY ? rui::PG_DUAL : p == PAGE_GEAR ? rui::PG_GEAR : p == PAGE_GFORCE ? rui::PG_GFORCE : p == PAGE_NAV ? rui::PG_NAV : p == PAGE_TRIP ? rui::PG_TRIP : p == PAGE_HISTORY ? rui::PG_HISTORY : p == PAGE_CODES ? rui::PG_CODES : p == PAGE_SETTINGS ? (optCount(settingsSub) > 0 ? rui::PG_OPTIONS : rui::PG_SETTINGS) : rui::PG_VITALS;
   uint32_t t0 = micros();
   uint16_t *fb = fullCanvas->getFramebuffer();
   rui::frame(fb, pg, d, now, forceDraw || drawnPage != page);   // redraw from scratch when another page was on screen
@@ -1705,6 +1728,38 @@ bool connectAdapter() {
 }
 
 // ---------- Arduino entry points ----------
+// ---------- Phone link (turn-by-turn) ----------
+// The board is also a Bluetooth peripheral called "Revsense": the phone app connects and writes turn messages (see nav.h). It runs next to the
+// OBD adapter link (the board is the client there, a server here). Only one phone at a time; advertising restarts when it leaves.
+class NavServerCb : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *, NimBLEConnInfo &) override { phoneLinked = true; Serial.println("phone connected"); }
+  void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
+    phoneLinked = false; portENTER_CRITICAL(&navMux); navTurn = nav::Turn(); portEXIT_CRITICAL(&navMux); Serial.println("phone left");
+  }
+};
+class NavWriteCb : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
+    NimBLEAttValue v = c->getValue(); nav::Turn t; portENTER_CRITICAL(&navMux); t = navTurn; portEXIT_CRITICAL(&navMux);
+    if (nav::parse((const char *)v.data(), v.size(), t)) { portENTER_CRITICAL(&navMux); navTurn = t; navMs = millis(); portEXIT_CRITICAL(&navMux); }
+  }
+};
+static void navBleInit() {
+  NimBLEDevice::setMTU(185);
+  NimBLEServer *srv = NimBLEDevice::createServer();
+  srv->setCallbacks(new NavServerCb()); srv->advertiseOnDisconnect(true);
+  NimBLEService *svc = srv->createService(NAV_SERVICE_UUID);
+  NimBLECharacteristic *ch = svc->createCharacteristic(NAV_CHAR_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  ch->setCallbacks(new NavWriteCb());
+  svc->start();
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  adv->addServiceUUID(NAV_SERVICE_UUID); adv->setName("Revsense"); adv->enableScanResponse(true); adv->start();
+}
+static void navBleKeepAlive() {                      // main loop: make sure the phone can always find the board
+  static uint32_t last = 0; uint32_t now = millis(); if (now - last < 5000) return; last = now;
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (!phoneLinked && !adv->isAdvertising()) { adv->start(); Serial.println("advertising again"); }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);
@@ -1729,13 +1784,15 @@ void setup() {
   sdInit();
   loadSettings();
   loadTrips();
-  NimBLEDevice::init("");
+  NimBLEDevice::init("Revsense");
+  navBleInit();
   Serial.printf("Revsense starting [%s, built %s %s], demo mode %s\n", FW_TAG, __DATE__, __TIME__, demo ? "ON" : "OFF");
   xTaskCreatePinnedToCore(uiTask, "ui", 10240, nullptr, 2, nullptr, 1);   // display + button + animation
 }
 
 void loop() {
   static int cycle = 0;
+  navBleKeepAlive();
 
   if (demo) {
     if (client && client->isConnected()) client->disconnect();

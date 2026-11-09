@@ -43,6 +43,10 @@
 #define SHOW_PAGE_DIALS    1   // analog tachometer and analog speedometer
 #define SHOW_PAGE_VITALS   0   // the four vitals rings (hidden, set 1 to bring it back)
 #define SHOW_PAGE_GFORCE   1   // G-force page: friction circle from the board's motion sensor (hidden if the sensor is not found; works in demo mode)
+#define SHOW_PAGE_NAV      1   // turn-by-turn card fed by the phone app over Bluetooth (the page shows up only while a phone is connected or a route is running)
+#define NAV_SERVICE_UUID "52657673-656e-7365-0000-4e4156000001"   // "Revsense" + "NAV": the board's own Bluetooth service the phone app writes to
+#define NAV_CHAR_UUID    "52657673-656e-7365-0000-4e4156000002"
+#define NAV_STALE_MS 20000     // no update from the phone for this long: the turn card goes away
 #define SHOW_PAGE_BATTERY  0   // battery page: one value with a bar, same style as TEMPS (comes right after it)
 #define SHOW_PAGE_CUSTOM   0   // custom boost page: the arc with three readouts (needs SHOW_PAGE_STYLES; hidden, the Arc page keeps the boost gauge)
 #define SHOW_PAGE_GEAR     0   // estimated gear page (needs SHOW_PAGE_STYLES; hidden for now, set 1 to bring it back)

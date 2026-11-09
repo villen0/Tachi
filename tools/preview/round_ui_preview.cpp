@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : ".";
   if (!rui::begin()) { puts("alloc failed"); return 1; }
   std::vector<uint16_t> fb(rui::W * rui::H, 0);
-  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "tri", "gear", "gforce", "trip", "history", "codes", "settings", "options"};
+  const char *names[] = {"sport", "tach", "speedo", "vitals", "arc", "custom", "quad", "dual", "tri", "nav", "gear", "gforce", "trip", "history", "codes", "settings", "options"};
   struct Case { float rpm, mph; const char *tag; } cases[] = {{3763, 63, "mid"}, {6900, 112, "red"}, {0, 0, "idle"}};
   for (int pg = 0; pg < rui::PG_COUNT; pg++) for (auto &c : cases) {
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;           // restart each picture from scratch
@@ -38,6 +38,7 @@ int main(int argc, char **argv) {
       const char *tl[3] = {"COOLANT", "BATTERY", "FUEL"}, *tu[3] = {"F", "V", "%"}, *tt[3] = {c.rpm > 6000 ? "228" : "197", "14.0", c.rpm > 6000 ? "12" : "61"}; float tf[3] = {c.rpm > 6000 ? 0.9f : 0.6f, 0.7f, c.rpm > 6000 ? 0.12f : 0.61f};
       strcpy(d.title, "HEALTH"); for (int k = 0; k < 3; k++) { strcpy(d.rd[k].label, tl[k]); strcpy(d.rd[k].unit, tu[k]); strcpy(d.rd[k].text, tt[k]); d.rd[k].frac = tf[k]; d.rd[k].col = (k == 0 && c.rpm > 6000) ? rui::RED : rui::WHITE; }
     }
+    if (pg == rui::PG_NAV) { rui::NavView &N = d.nav; N.have = c.rpm > 0; N.dir = c.rpm > 6000 ? 3 : 2; strcpy(N.num, c.rpm > 6000 ? "300" : "0.4"); strcpy(N.unit, c.rpm > 6000 ? "FT" : "MI"); strcpy(N.street, c.rpm > 6000 ? "BROAD ST" : "MARTIN LUTHER KING JR BLVD"); N.close = c.rpm > 6000 ? 0.8f : 0.1f; strcpy(N.status, "WAITING FOR MAPS"); }
     if (pg == rui::PG_DUAL) { d.rdN = 1; strcpy(d.rd[1].label, "OIL TEMP"); d.rd[1].icon = rui::IC_BOOST; }
     { rui::GForceView &G = d.g; G.have = true; float k = c.rpm > 6000 ? 1.0f : (c.rpm > 0 ? 0.55f : 0.0f); G.x = 0.62f * k; G.y = -0.38f * k; G.total = sqrtf(G.x * G.x + G.y * G.y); G.peak = 0.83f * k; G.peakX = 0.71f * k; G.peakY = -0.44f * k;
       G.n = 12; for (int i = 0; i < 12; i++) { float f = (i + 1) / 12.0f; G.tx[i] = G.x * f * f; G.ty[i] = G.y * f * f - 0.1f * (1 - f) * k; } }
@@ -65,6 +66,10 @@ int main(int argc, char **argv) {
     rui::Data d; d.rpm = c.rpm; d.mph = c.mph; d.gauge = g; d.dotN = 7; d.dotCur = pg;
     rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100); rui::frame(fb.data(), pg, d, 2000);
     save(fb, dir + "/" + names[pg] + (g == 1 ? "_arc_" : "_ticks_") + c.tag + ".ppm");
+  }
+  for (int dr = 1; dr <= 11; dr++) {                                    // every turn arrow
+    rui::st().page = -1; rui::Data d; d.dotN = 7; d.dotCur = 5; d.nav.have = true; d.nav.dir = (uint8_t)dr; strcpy(d.nav.num, "300"); strcpy(d.nav.unit, "FT"); strcpy(d.nav.street, "MAIN ST"); d.nav.close = 0.5f;
+    rui::frame(fb.data(), rui::PG_NAV, d, 1000); char nm[40]; snprintf(nm, sizeof(nm), "/nav_dir%02d.ppm", dr); save(fb, dir + nm);
   }
   puts("done");
     // themes (sport, speedo in km/h, vitals) and the theme chooser

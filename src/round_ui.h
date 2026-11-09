@@ -23,7 +23,7 @@
 namespace rui {
 
 constexpr int W = 480, H = 480, CX = 240, CY = 240;
-enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_TRI, PG_GEAR, PG_GFORCE, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
+enum Pg { PG_SPORT = 0, PG_TACH, PG_SPEEDO, PG_VITALS, PG_ARC, PG_CUSTOM, PG_QUAD, PG_DUAL, PG_TRI, PG_NAV, PG_GEAR, PG_GFORCE, PG_TRIP, PG_HISTORY, PG_CODES, PG_SETTINGS, PG_OPTIONS, PG_COUNT };
 
 inline uint16_t rgb(int r, int g, int b) {
   r = r < 0 ? 0 : (r > 255 ? 255 : r); g = g < 0 ? 0 : (g > 255 ? 255 : g); b = b < 0 ? 0 : (b > 255 ? 255 : b);
@@ -190,8 +190,14 @@ struct GForceView {
   bool have = false; float x = 0, y = 0, total = 0, peak = 0, peakX = 0, peakY = 0;
   int n = 0; float tx[12] = {0}, ty[12] = {0};      // trail, oldest first
 };
+// Navigation page: the caller formats everything (units, street name already fitted to the display font).
+struct NavView {
+  bool have = false; uint8_t dir = 0;      // dir: nav::Dir (0 none, 1 straight, 2 left, 3 right, 4 slight left, 5 slight right, 6 sharp left, 7 sharp right, 8 u-turn left, 9 u-turn right, 10 roundabout, 11 arrive)
+  char num[10] = "--", unit[4] = "", street[40] = "", status[28] = "";   // status: shown instead when there is no route ("WAITING FOR MAPS")
+  float close = 0;                         // 0..1, fills the bar as the turn gets near
+};
 struct Data {
-  GForceView g;
+  GForceView g; NavView nav;
   TripView trip; HistoryView hist; CodesView codes; SettingsView settings; OptionsView opts;
   int ver = 0;                           // must change whenever any STATIC content changes (trip title/labels/chips/live, code rows/tags/mil/answered/total) so the page is rebuilt;
                                          // live numbers (tile values, footers, status, clear progress) are redrawn every frame without it
@@ -230,6 +236,7 @@ struct State {
   int16_t dmin[H], dmax[H];                 // per row: the span of pixels changed this frame (dmax < dmin: row is clean)
   int16_t nmin[H], nmax[H]; int nr0 = 0, nr1 = -1;   // per row: where the needle was drawn last frame
   SBox sbox[MAX_RINGS][MAX_SEG];            // bounding box of every ring segment
+  int navDir = -1;                                             // navigation page: arrow drawn last frame (-1 not drawn yet)
   int8_t triQ[3] = {-1, -1, -1}; uint16_t triCol[3] = {0, 0, 0};   // triangle page: arc steps and colour last drawn
   int16_t barPx[2] = {-1, -1}; uint16_t barCol[2] = {0, 0};   // dual page: fill width and colour last drawn
   int ver = -1;                                                // content version last built (Data::ver)
@@ -438,6 +445,31 @@ inline void triCell(int i, int *cx, int *yl, int *yv, int *yu) {
   if (i == 2) { *cx = CX; *yl = 296; *yv = 316; *yu = 350; }
   else { *cx = i == 0 ? CX - 92 : CX + 92; *yl = 150; *yv = 172; *yu = 204; }
 }
+// Navigation page layout: title, a turn arrow, the distance with its unit, the street, and a bar that fills as the turn gets close
+constexpr int NV_ACY = 150, NV_NUM_Y = 226, NV_UNIT_Y = 264, NV_ST_Y = 300, NV_BAR_Y = 340, NV_BAR_W = 180, NV_BAR_X = CX - NV_BAR_W / 2, NV_ST_MAXW = 330;
+inline void arrowPath(uint16_t *b, const float (*p)[2], int n, float cx, float cy, float hw, float headLen, float headHw, uint16_t col, float mir = 1.0f) {
+  for (int i = 0; i + 1 < n; i++) taper(b, cx + mir * p[i][0], cy + p[i][1], cx + mir * p[i + 1][0], cy + p[i + 1][1], hw, hw, col);
+  for (int i = 1; i + 1 < n; i++) discAA(b, cx + mir * p[i][0], cy + p[i][1], hw, col);                 // round the corners
+  float dx = mir * (p[n - 1][0] - p[n - 2][0]), dy = p[n - 1][1] - p[n - 2][1], l = sqrtf(dx * dx + dy * dy); if (l < 0.01f) return; dx /= l; dy /= l;
+  float bx = cx + mir * p[n - 1][0], by = cy + p[n - 1][1];
+  taper(b, bx, by, bx + dx * headLen, by + dy * headLen, headHw, 0.4f, col);                          // the arrow head
+}
+inline void navArrow(uint16_t *b, int dir, uint16_t col) {
+  const float cx = CX, cy = NV_ACY, hw = 6.5f, hl = 30, hh = 17;
+  static const float st[][2] = {{0, 58}, {0, -14}}, tl[][2] = {{0, 58}, {0, 8}, {-40, 8}}, ts[][2] = {{0, 58}, {0, 18}, {-30, -12}},
+                     tsh[][2] = {{0, 58}, {0, -8}, {-34, 26}}, tu[][2] = {{14, 58}, {14, -22}, {-14, -22}, {-14, 10}}, rb[][2] = {{0, -8}, {0, -24}};
+  switch (dir) {
+    case 1: arrowPath(b, st, 2, cx, cy, hw, hl, hh, col); break;
+    case 2: case 3: arrowPath(b, tl, 3, cx + (dir == 2 ? 30 : -30), cy, hw, hl, hh, col, dir == 2 ? 1.0f : -1.0f); break;      // shifted so the arrow looks centred
+    case 4: case 5: arrowPath(b, ts, 3, cx + (dir == 4 ? 22 : -22), cy, hw, hl, hh, col, dir == 4 ? 1.0f : -1.0f); break;
+    case 6: case 7: arrowPath(b, tsh, 3, cx + (dir == 6 ? 24 : -24), cy, hw, hl, hh, col, dir == 6 ? 1.0f : -1.0f); break;
+    case 8: case 9: arrowPath(b, tu, 4, cx, cy, hw, hl, hh, col, dir == 8 ? 1.0f : -1.0f); break;
+    case 10:                                                                     // roundabout: a ring, a way in from below and the way out straight ahead
+      ringAA(b, cx, cy + 22, 19, 27, col); taper(b, cx, cy + 66, cx, cy + 50, hw, hw, col); arrowPath(b, rb, 2, cx, cy + 22, hw, hl - 4, hh - 1, col); break;
+    case 11: ringAA(b, cx, cy, 30, 40, col); discAA(b, cx, cy, 15, col); break;      // arrived: a target
+    default: break;
+  }
+}
 inline void buildStyle(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg; char t[16];
   if (pg == PG_ARC || pg == PG_CUSTOM) {
@@ -489,6 +521,10 @@ inline void buildStyle(State &S, int pg, const Data &d) {
       textC(b, F_LBL, d.rd[i].unit, cx, yu, DIM);
     }
     for (int i = 0; i < 3; i++) { S.triQ[i] = -1; S.triCol[i] = 0; }
+  } else if (pg == PG_NAV) {
+    textC(b, F_LBL, "NAVIGATION", CX, 64, CYAN);
+    taper(b, NV_BAR_X + 4, NV_BAR_Y + 4, NV_BAR_X + NV_BAR_W - 4, NV_BAR_Y + 4, 4, 4, PANEL); discAA(b, NV_BAR_X + 4, NV_BAR_Y + 4, 4, PANEL); discAA(b, NV_BAR_X + NV_BAR_W - 4, NV_BAR_Y + 4, 4, PANEL);
+    S.navDir = -1;
   } else if (pg == PG_DUAL) {
     if (d.title[0]) textC(b, F_LBL, d.title, CX, 74, CYAN);
     for (int i = 0; i < d.rdN && i < 2; i++) {
@@ -784,6 +820,15 @@ inline void frameStyle(State &S, uint16_t *fb, int pg, const Data &d) {
       annulus(CX, CY, 213, 227, [&](int x, int y, float, float dx, float dy) { float th = atan2f(dx, -dy) * 57.29578f; if (th >= c0 && th <= c1) mark(S, x, y, x, y); });
       S.triQ[i] = (int8_t)q; S.triCol[i] = col;
     }
+  } else if (pg == PG_NAV) {
+    const NavView &N = d.nav; const int dir = N.have ? N.dir : 0;
+    if (dir != S.navDir) {                                                  // the arrow changed: put the background back and draw the new one
+      restore(fb, S.bg, CX - 76, NV_ACY - 52, 152, 126); navArrow(fb, dir, CYAN); mark(S, CX - 76, NV_ACY - 52, CX + 75, NV_ACY + 73); S.navDir = dir;
+    }
+    num(S, fb, 0, F_NUM, N.have ? N.num : "", CX, NV_NUM_Y, 0, WHITE);
+    num(S, fb, 1, F_LBL, N.have ? N.unit : "", CX, NV_UNIT_Y, 0, DIM);
+    num(S, fb, 2, F_LBL, N.have ? N.street : N.status, CX, NV_ST_Y, 0, N.have ? WHITE : DIM);   // no route: the status line takes the street's place
+    barFill(S, fb, 0, NV_BAR_X, NV_BAR_Y, NV_BAR_W, 8, N.have ? N.close : 0, CYAN);
   } else if (pg == PG_DUAL) {
     for (int i = 0; i < d.rdN && i < 2; i++) {
       const int y0 = d.rdN == 1 ? 190 : (i ? 262 : 120);

@@ -39,6 +39,8 @@ int main() {
       { rui::OptionsView &O = d.opts; O.n = 1 + (i / 80) % 5; O.swatch = (i / 160) % 2; for (int k = 0; k < O.n; k++) { snprintf(O.row[k].label, sizeof(O.row[k].label), "OPT %d", k); snprintf(O.row[k].value, sizeof(O.row[k].value), "%d", (i / 33 + k) % 90); O.row[k].kind = (uint8_t)(k & 1); } d.ver += O.n * 1000000 + (i / 33) * 13; }
       rui::applyTheme((i / 110) % theme::THEMES, (i / 170) % theme::MODES); d.theme = rui::themeGen; d.kmh = (i / 130) % 2; d.gauge = (i / 55) % 3;   // theme / unit changes rebuild the page
       { rui::HistoryView &Hv = d.hist; Hv.n = (i / 70) % 7; for (int k = 0; k < Hv.n; k++) { snprintf(Hv.row[k].tag, sizeof(Hv.row[k].tag), "#%d", 5 + k); snprintf(Hv.row[k].mid, sizeof(Hv.row[k].mid), "%d MIN %d.%d MI", 5 + (i / 70) + k, k, i / 70); Hv.row[k].col = k & 1 ? rui::MINT : rui::YELLOW; } d.ver += Hv.n * 20000000 + (i / 70) * 31; }
+      { rui::NavView &N = d.nav; N.have = (i % 90) > 10; N.dir = (uint8_t)((i / 25) % 12); snprintf(N.num, sizeof(N.num), "%d", 20 + (i * 7) % 900); snprintf(N.unit, sizeof(N.unit), (i / 40) % 2 ? "M" : "FT");
+        snprintf(N.street, sizeof(N.street), (i / 33) % 3 ? "MAIN ST %d" : "", i % 40); N.close = (i % 50) / 50.0f; snprintf(N.status, sizeof(N.status), "WAITING FOR MAPS"); }
       float ph = i * 0.07f;
       d.rpm = 800 + 3000 * (0.5f + 0.5f * sinf(ph)) + (i % 97 == 0 ? 3200 : 0); d.mph = 45 * (0.5f + 0.5f * sinf(ph * 0.6f));
       d.coolC = 80 + (i / 8) % 40; d.coolShown = (int)(d.coolC * 1.8f + 32); d.fuelPct = 100 - (i / 5) % 100; d.battV = 11.0f + (i % 50) * 0.08f; d.loadPct = (i * 3) % 100;
