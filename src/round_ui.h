@@ -636,14 +636,14 @@ inline void buildBlockGauge(State &S, uint16_t *b, int pg, const Data &d) {
     blkC(b, t, (int)(x + 0.5f), (int)(y + 0.5f) - 5 * cell / 2, cell, tach && v >= d.redline ? RED : WHITE);
   }
   const char *unit = tach ? "RPM" : (d.kmh ? "KMH" : "MPH");
-  if (ticks) blkC(b, unit, CX + 92, 332 + 40 + 12, 3, DIM); else blkC(b, unit, CX, 196 + 45 + 18, 4, CYAN);   // the label sits right under the value, as one group
+  if (ticks) blkC(b, unit, CX, CY - 14, 3, WHITE); else blkC(b, unit, CX, 360, 4, CYAN);
 }
 inline void frameBlockGauge(State &S, uint16_t *fb, int pg, const Data &d, float value, float vmax) {
   const bool tach = pg == PG_TACH, ticks = d.gauge == 2;
   ringLevel(S, 0, value / vmax);
   char t[16]; snprintf(t, sizeof(t), "%d", (int)lroundf(value));
   uint16_t col = tach && value >= d.redline ? RED : (ticks ? CYAN : WHITE);
-  if (ticks) blkNum(S, fb, 0, t, CX + 92, 332, 8, col); else blkNum(S, fb, 0, t, CX, 196, 9, col);
+  if (ticks) blkNum(S, fb, 0, t, CX + 92, 332, 8, col); else blkNum(S, fb, 0, t, CX, 204, 9, col);
 }
 
 // ---- per page: static layer + ring setup ---------------------------------------------------------------------------
