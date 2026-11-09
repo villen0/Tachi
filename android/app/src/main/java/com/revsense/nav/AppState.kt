@@ -12,6 +12,7 @@ object AppState {
     var trips by mutableStateOf<List<TripRec>>(emptyList())     // the last list the board sent, newest first (the running trip leads)
     var tripsAt by mutableLongStateOf(0L)
     var codes by mutableStateOf<CodesState?>(null)               // the fault codes as the board last reported them
+    var pages by mutableStateOf<PagesState?>(null)               // the board's pages and whether its display is on
     var config by mutableStateOf<BoardConfig?>(null)             // the board's settings as it last reported them
     var turn by mutableStateOf<Turn?>(null)
     var turnAt by mutableLongStateOf(0L)

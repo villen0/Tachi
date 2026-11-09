@@ -75,7 +75,7 @@ object BleLink {
     private val gattCb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) g.requestMtu(185)          // room for a long street name
-            else { nav = null; AppState.live = null; AppState.codes = null; g.close(); gatt = null; AppLog.setBle("board disconnected"); main.postDelayed({ scan() }, 2000) }
+            else { nav = null; AppState.live = null; AppState.codes = null; AppState.pages = null; g.close(); gatt = null; AppLog.setBle("board disconnected"); main.postDelayed({ scan() }, 2000) }
         }
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { g.discoverServices() }
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
@@ -97,7 +97,7 @@ object BleLink {
         }
         private fun incoming(c: BluetoothGattCharacteristic, b: ByteArray?) {
             if (b == null) return
-            when (c.uuid) { TRIPS -> trips(String(b)); CONFIG -> ConfigParser.parse(String(b))?.let { AppState.config = it }; CODES -> codesAsm.feed(String(b))?.let { AppState.codes = it }; else -> live(b) }
+            when (c.uuid) { TRIPS -> trips(String(b)); CONFIG -> { val t = String(b); if (t.startsWith("G|")) PagesParser.parse(t)?.let { AppState.pages = it } else ConfigParser.parse(t)?.let { AppState.config = it } }; CODES -> codesAsm.feed(String(b))?.let { AppState.codes = it }; else -> live(b) }
         }
         private fun trips(line: String) {
             if (line.startsWith("E|")) { AppState.trips = tripBuf.toList(); AppState.tripsAt = SystemClock.elapsedRealtime(); tripBuf.clear(); return }
@@ -117,6 +117,14 @@ object BleLink {
 
     /** Clears the fault codes (the board's own routine: only with the engine off). */
     fun clearCodes() { send("F|X") }
+
+    /** Remote control: the next / previous page of the board, or jump to the N-th visible page. */
+    fun nextPage() = change("pg", -2)
+    fun prevPage() = change("pg", -1)
+    fun jumpToPage(index: Int) = change("pg", index)
+
+    /** Remote control: the board's display on or off (the board keeps working; a touch on it turns the display on again). */
+    fun display(on: Boolean) = change("sc", if (on) 1 else 0)
 
     /** Asks the board for its settings; the answer arrives on the CONFIG characteristic. */
     fun requestConfig() { send("S?") }

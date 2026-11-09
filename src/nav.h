@@ -148,4 +148,14 @@ inline void formatCodeRow(char *out, size_t n, const char *code, int kind, bool 
   char c[8], d[60]; cleanField(code, c, sizeof(c)); cleanField(desc ? desc : "", d, sizeof(d)); snprintf(out, n, "D|%s|%d|%d|%s", c, kind, isNew ? 1 : 0, d);
 }
 
+// ---- remote control (the phone drives the board's pages and display with the same "S|key|value" messages) ----
+//   S|pg|-2  next page    S|pg|-1  previous page    S|pg|N  jump to the N-th visible page (0 = the first)
+//   S|sc|0   display off  S|sc|1   display on       (a touch on the board also turns it on again)
+// The board reports on the CONFIG characteristic:  G|current|screenOn|name0,name1,...   (the visible pages in swipe order; current = index into them)
+inline void formatPages(char *out, size_t n, int current, bool screenOn, const char *const *names, int count) {
+  size_t o = (size_t)snprintf(out, n, "G|%d|%d|", current, screenOn ? 1 : 0);
+  for (int i = 0; i < count && o + 1 < n; i++) o += (size_t)snprintf(out + o, n - o, "%s%s", i ? "," : "", names[i]);
+  if (o >= n) out[n - 1] = 0;
+}
+
 }  // namespace nav

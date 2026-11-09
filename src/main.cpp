@@ -93,6 +93,8 @@ static const char *const GAUGE_NAMES[3] = {"DIAL", "ARC", "TICKS"};
 // Navigation: the phone app writes turns to the board's own Bluetooth service (NimBLE host task); the UI task reads them (navMux).
 static nav::Turn navTurn; static uint32_t navMs = 0; static volatile bool phoneLinked = false; static portMUX_TYPE navMux = portMUX_INITIALIZER_UNLOCKED;
 static NimBLECharacteristic *liveChr = nullptr, *tripsChr = nullptr, *configChr = nullptr, *codesChr = nullptr; static volatile bool phoneSub = false, phoneSubTrips = false, phoneSubCfg = false, phoneSubCodes = false, tripReq = false, cfgReq = false, codesReq = false;
+static volatile bool phoneScreenOff = false; static volatile uint32_t phoneOffAt = 0;   // the phone switched the display off (a touch on the board cancels it)
+static char pageLine[200] = ""; static volatile bool pageLineReady = false;
 static nav::Change pendChg[8]; static int pendN = 0; static char cfgLine[96] = ""; static volatile bool cfgLineReady = false;   // settings changes from the phone (applied by the UI task) and the line to send back (navMux)   // LIVE characteristic and whether the phone subscribed to it
 static bool navFresh() { portENTER_CRITICAL(&navMux); bool a = navTurn.active; uint32_t t = navMs; portEXIT_CRITICAL(&navMux); return a && (uint32_t)(millis() - t) < NAV_STALE_MS; }
 static gforce::Meter gMeter;                         // G-force meter (UI task only); its learned axis directions are saved in flash
@@ -1544,6 +1546,7 @@ void uiTick() {
       return c;
     }());
     bool lit = sleeper.update(now, lastValidMs, everSeen, lastTouchMs, demo);
+    if (phoneScreenOff) { if ((int32_t)(lastTouchMs - phoneOffAt) > 0) phoneScreenOff = false; else lit = false; }   // switched off from the phone: stays dark until the phone or a touch says otherwise
     if (lit != screenLit) {
       screenLit = lit;
       if (lit) { backlightRestore(); forceDraw = true; drawnPage = -1; } else backlightOff();
@@ -1826,21 +1829,47 @@ static void navBleTrips() {                          // main loop: answer a trip
 }
 static void navBleConfig() {                         // main loop: send the settings line the UI task prepared
   static uint32_t last = 0; uint32_t now = millis();
-  if (!configChr || !cfgLineReady || !phoneLinked || now - last < 40) return; last = now;
-  char line[96]; portENTER_CRITICAL(&navMux); strcpy(line, cfgLine); cfgLineReady = false; portEXIT_CRITICAL(&navMux);
+  if (!configChr || !(cfgLineReady || pageLineReady) || !phoneLinked || now - last < 40) return; last = now;
+  char line[200]; portENTER_CRITICAL(&navMux);
+  if (cfgLineReady) { strcpy(line, cfgLine); cfgLineReady = false; } else { strcpy(line, pageLine); pageLineReady = false; }
+  portEXIT_CRITICAL(&navMux);
   configChr->setValue((const uint8_t *)line, strlen(line)); configChr->notify();
 }
 // UI task, every tick: apply the settings the phone changed, and prepare the settings line when the app asked or anything changed (also on the board itself).
 static void phoneSettingsTick() {
   nav::Change q[8]; int n; portENTER_CRITICAL(&navMux); n = pendN; for (int i = 0; i < n; i++) q[i] = pendChg[i]; pendN = 0; portEXIT_CRITICAL(&navMux);
   bool changed = false;
+  bool pageMoved = false;
   for (int i = 0; i < n; i++) {
     int br = backlightPct;
+    if (!strcmp(q[i].key, "pg")) {                                                       // remote control: move between the pages
+      int v = q[i].v;
+      if (v == -2) page = nextPage(page, 1); else if (v == -1) page = prevPage(page, 1);
+      else if (v >= 0) { int idx = 0; for (int p = 0; p < PAGE_COUNT; p++) if (pageVisible(p)) { if (idx++ == v) { page = p; break; } } }
+      forceDraw = true; pageMoved = true; if (!phoneScreenOff) lastTouchMs = millis();   // a page change wakes a screen that went dark for lack of car data
+      continue;
+    }
+    if (!strcmp(q[i].key, "sc")) {                                                       // remote control: display on / off
+      if (q[i].v == 0) { phoneScreenOff = true; phoneOffAt = millis(); } else { phoneScreenOff = false; lastTouchMs = millis(); }
+      pageMoved = true; continue;
+    }
     if (nav::applyChange(cfg, gaugeStyle, br, customRgb, q[i])) { if (br != backlightPct) { setBacklight(br); saveBacklight(); } changed = true; }
   }
   if (changed) { useCustomColor(); applyLook(); cfgGen = cfgGen + 1; cfgSaveReq = true; forceDraw = true; }
   static uint32_t seenGen = 0; static int seenBl = -1; static uint8_t seenGauge = 255; static uint32_t seenCc = 0xFFFFFFFF;
   if (!phoneSubCfg) return;
+  {   // the page list and the display state (when the app asks, or when they change)
+    static int seenPage = -1, seenMask = -1; static bool seenLit = true;
+    int mask = 0; for (int p = 0; p < PAGE_COUNT; p++) if (pageVisible(p)) mask |= 1 << p;
+    if (cfgReq || pageMoved || page != seenPage || mask != seenMask || screenLit != seenLit) {
+      seenPage = page; seenMask = mask; seenLit = screenLit;
+      static const char *const NAMES[PAGE_COUNT] = {"Face", "Cluster", "Tach", "Speedo", "Boost", "G-Force", "Navigation", "Vitals", "Custom", "Engine", "Health", "Battery", "Gear", "Drive report", "Trip history", "Fault codes", "Settings"};
+      const char *vis[PAGE_COUNT]; int nv = 0, cur = 0;
+      for (int p = 0; p < PAGE_COUNT; p++) if (pageVisible(p)) { if (p == page) cur = nv; vis[nv++] = NAMES[p]; }
+      char line[200]; nav::formatPages(line, sizeof(line), cur, screenLit, vis, nv);
+      portENTER_CRITICAL(&navMux); strcpy(pageLine, line); pageLineReady = true; portEXIT_CRITICAL(&navMux);
+    }
+  }
   if (cfgReq || changed || cfgGen != seenGen || backlightPct != seenBl || gaugeStyle != seenGauge || customRgb != seenCc) {
     cfgReq = false; seenCc = customRgb; seenGen = cfgGen; seenBl = backlightPct; seenGauge = gaugeStyle;
     char line[96]; nav::formatConfig(line, sizeof(line), cfg, gaugeStyle, backlightPct, customRgb);

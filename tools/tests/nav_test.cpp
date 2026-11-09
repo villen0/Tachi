@@ -64,6 +64,11 @@ int main() {
     formatCodesHeader(b, sizeof(b), false, false, -1, 0, "A|B"); CHECK(!strcmp(b, "M|0|0|-1|0|A B"));       // a bar in the text never breaks the line
     formatCodeRow(b, sizeof(b), "P0301", 0, true, "Misfire cylinder 1"); CHECK(!strcmp(b, "D|P0301|0|1|Misfire cylinder 1"));
     formatCodeRow(b, sizeof(b), "P0420", 1, false, nullptr); CHECK(!strcmp(b, "D|P0420|1|0|")); }
+  { char b[160]; const char *names[] = {"Tach", "Speedo", "Boost", "Settings"}; Change ch;
+    formatPages(b, sizeof(b), 2, true, names, 4); CHECK(!strcmp(b, "G|2|1|Tach,Speedo,Boost,Settings"));
+    formatPages(b, sizeof(b), 0, false, names, 0); CHECK(!strcmp(b, "G|0|0|"));
+    char tiny[16]; formatPages(tiny, sizeof(tiny), 1, true, names, 4); CHECK(strlen(tiny) < 16 && tiny[0] == 'G');                // never overflows
+    CHECK(parseChange("S|pg|-2", 7, ch) && !strcmp(ch.key, "pg") && ch.v == -2); CHECK(parseChange("S|pg|3", 6, ch) && ch.v == 3); CHECK(parseChange("S|sc|0", 6, ch) && ch.v == 0); }
   printf("%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;
 }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -60,7 +61,7 @@ fun AppRoot(askBluetooth: () -> Unit, askNotification: () -> Unit) {
         containerColor = Rv.Bg,
         bottomBar = {
             NavigationBar(containerColor = Color(0xFF10131A)) {
-                listOf("Home" to Icons.Filled.Home, "Trips" to Icons.AutoMirrored.Filled.List, "Codes" to Icons.Filled.Warning, "Settings" to Icons.Filled.Settings).forEachIndexed { i, (name, icon) ->
+                listOf("Home" to Icons.Filled.Home, "Trips" to Icons.AutoMirrored.Filled.List, "Codes" to Icons.Filled.Warning, "Control" to Icons.Filled.PlayArrow, "Settings" to Icons.Filled.Settings).forEachIndexed { i, (name, icon) ->
                     NavigationBarItem(
                         selected = tab == i, onClick = { tab = i }, icon = { Icon(icon, name) }, label = { Text(name, fontSize = 11.sp) },
                         colors = NavigationBarItemDefaults.colors(selectedIconColor = Rv.Acc, selectedTextColor = Rv.Acc, indicatorColor = Color(0xFF2A1A1A), unselectedIconColor = Rv.Dim, unselectedTextColor = Rv.Dim)
@@ -74,6 +75,7 @@ fun AppRoot(askBluetooth: () -> Unit, askNotification: () -> Unit) {
                 0 -> HomeScreen(askBluetooth, askNotification) { showLog = true }
                 1 -> TripsScreen()
                 2 -> CodesScreen()
+                3 -> ControlScreen()
                 else -> SettingsScreen()
             }
         }
@@ -548,4 +550,66 @@ fun CodesScreen() {
         confirmButton = { TextButton(onClick = { confirm = false; BleLink.clearCodes() }) { Text("Clear", color = Rv.Acc) } },
         dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } }
     )
+}
+
+@Composable
+fun ControlScreen() {
+    val connected = AppState.bleConnected; val pg = AppState.pages
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(20.dp))
+        Text("Remote", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text(if (connected) "Control the dashboard from your phone" else "Connect to the board to use the remote", fontSize = 13.sp, color = Rv.Dim)
+        Spacer(Modifier.height(14.dp))
+        Card(Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Dashboard display", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(if (pg == null) "Unknown" else if (pg.screenOn) "On" else "Off · tap the board's screen to wake it too", fontSize = 12.sp, color = Rv.Dim)
+                }
+                Switch(
+                    checked = pg?.screenOn ?: true, onCheckedChange = { BleLink.display(it) }, enabled = connected && pg != null,
+                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Rv.Acc, uncheckedThumbColor = Rv.Dim, uncheckedTrackColor = Rv.Track)
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Card(Modifier.fillMaxWidth()) {
+            Text("PAGE ON THE BOARD", fontSize = 10.sp, color = Rv.Dim, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text(pg?.names?.getOrNull(pg.current) ?: "--", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            if (pg != null && pg.names.isNotEmpty()) Text("${pg.current + 1} of ${pg.names.size}", fontSize = 12.sp, color = Rv.Dim)
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ArrowButton("‹  Previous", Modifier.weight(1f), connected) { BleLink.prevPage() }
+                ArrowButton("Next  ›", Modifier.weight(1f), connected) { BleLink.nextPage() }
+            }
+        }
+        if (pg != null && pg.names.isNotEmpty()) {
+            Spacer(Modifier.height(18.dp))
+            Text("JUMP TO", fontSize = 11.sp, color = Rv.Dim, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            pg.names.chunked(3).forEachIndexed { r, rowNames ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    rowNames.forEachIndexed { k, n ->
+                        val i = r * 3 + k; val on = i == pg.current
+                        Box(
+                            Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(12.dp)).background(if (on) Rv.Acc else Rv.Card).border(1.dp, if (on) Rv.Acc else Rv.Edge, RoundedCornerShape(12.dp))
+                                .clickable(enabled = connected) { BleLink.jumpToPage(i) },
+                            contentAlignment = Alignment.Center
+                        ) { Text(n, fontSize = 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 1) }
+                    }
+                    repeat(3 - rowNames.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+fun ArrowButton(text: String, modifier: Modifier, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier.height(52.dp).clip(RoundedCornerShape(14.dp)).background(Rv.Track).border(1.dp, Rv.Edge, RoundedCornerShape(14.dp)).clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center
+    ) { Text(text, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (enabled) Rv.Text else Rv.Dim) }
 }

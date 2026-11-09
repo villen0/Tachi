@@ -24,3 +24,15 @@ object Names {
     val modesRgb = listOf(0xFF808AA0, 0xFF00C8FF, 0xFF6EF082, 0xFFFFD032, 0xFFFF7828, 0xFFFF465A, 0xFFC864FF, 0xFFE7462A)   // the last one is replaced by the custom colour on screen
     val gauges = listOf("Dial", "Arc", "Ticks")
 }
+
+/** The board's pages and display: "G|current|screenOn|name0,name1,..." (the visible pages in swipe order). */
+data class PagesState(val current: Int, val screenOn: Boolean, val names: List<String>)
+
+object PagesParser {
+    fun parse(s: String): PagesState? {
+        val p = s.trim().split('|', limit = 4)
+        if (p.size < 4 || p[0] != "G") return null
+        val cur = p[1].toIntOrNull() ?: return null
+        return PagesState(cur, p[2] == "1", p[3].split(',').filter { it.isNotBlank() })
+    }
+}
