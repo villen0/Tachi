@@ -37,7 +37,7 @@ int main() {
       d.ver += (i / 60) * 100 + (d.codes.answered ? 1000 : 0) + (d.trip.live ? 2000 : 0);   // every static field must be reflected in ver
       { rui::SettingsView &V = d.settings; V.n = 2 + (i / 90) % 4; for (int k = 0; k < V.n; k++) { snprintf(V.row[k].label, sizeof(V.row[k].label), "ROW %d", k); snprintf(V.row[k].value, sizeof(V.row[k].value), "%d %%", (i / 45 + k) % 100); V.row[k].icon = (uint8_t)(rui::IC_SUN + (k & 1)); } d.ver += V.n * 100000 + (i / 45) * 7; }
       { rui::OptionsView &O = d.opts; O.n = 1 + (i / 80) % 5; O.swatch = (i / 160) % 2; for (int k = 0; k < O.n; k++) { snprintf(O.row[k].label, sizeof(O.row[k].label), "OPT %d", k); snprintf(O.row[k].value, sizeof(O.row[k].value), "%d", (i / 33 + k) % 90); O.row[k].kind = (uint8_t)(k & 1); } d.ver += O.n * 1000000 + (i / 33) * 13; }
-      rui::applyTheme((i / 110) % theme::THEMES, (i / 170) % theme::MODES); d.theme = rui::themeGen; d.kmh = (i / 130) % 2;   // theme / unit changes rebuild the page
+      rui::applyTheme((i / 110) % theme::THEMES, (i / 170) % theme::MODES); d.theme = rui::themeGen; d.kmh = (i / 130) % 2; d.gauge = (i / 55) % 3;   // theme / unit changes rebuild the page
       { rui::HistoryView &Hv = d.hist; Hv.n = (i / 70) % 7; for (int k = 0; k < Hv.n; k++) { snprintf(Hv.row[k].tag, sizeof(Hv.row[k].tag), "#%d", 5 + k); snprintf(Hv.row[k].mid, sizeof(Hv.row[k].mid), "%d MIN %d.%d MI", 5 + (i / 70) + k, k, i / 70); Hv.row[k].col = k & 1 ? rui::MINT : rui::YELLOW; } d.ver += Hv.n * 20000000 + (i / 70) * 31; }
       float ph = i * 0.07f;
       d.rpm = 800 + 3000 * (0.5f + 0.5f * sinf(ph)) + (i % 97 == 0 ? 3200 : 0); d.mph = 45 * (0.5f + 0.5f * sinf(ph * 0.6f));

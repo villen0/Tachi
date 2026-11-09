@@ -60,6 +60,12 @@ int main(int argc, char **argv) {
     d.rpm = c.rpm; rui::frame(fb.data(), pg, d, 2000);
     save(fb, dir + "/" + names[pg] + "_" + c.tag + ".ppm");
   }
+  for (int g = 1; g <= 2; g++) for (int pg : {rui::PG_TACH, rui::PG_SPEEDO}) for (auto &c : cases) {   // the ARC / TICKS gauge styles
+    rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+    rui::Data d; d.rpm = c.rpm; d.mph = c.mph; d.gauge = g; d.dotN = 7; d.dotCur = pg;
+    rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100); rui::frame(fb.data(), pg, d, 2000);
+    save(fb, dir + "/" + names[pg] + (g == 1 ? "_arc_" : "_ticks_") + c.tag + ".ppm");
+  }
   puts("done");
     // themes (sport, speedo in km/h, vitals) and the theme chooser
   for (int t = 0; t < theme::THEMES; t++) for (int pg : {rui::PG_SPORT, rui::PG_SPEEDO, rui::PG_VITALS, rui::PG_OPTIONS}) {

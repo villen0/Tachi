@@ -85,6 +85,8 @@ static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP 
 
 // The user's settings (units, warning levels, theme): loaded in setup(), changed on the Settings pages, saved by the main loop (cfgSaveReq).
 static settings::Settings cfg;
+static uint8_t gaugeStyle = 0;                       // tach / speedo style: 0 DIAL, 1 ARC, 2 TICKS (its own flash key, so the main settings blob stays valid)
+static const char *const GAUGE_NAMES[3] = {"DIAL", "ARC", "TICKS"};
 static gforce::Meter gMeter;                         // G-force meter (UI task only); its learned axis directions are saved in flash
 // Face page background: a gradient from the top colour to the bottom colour (0..255). Classic keeps the original navy / indigo; the other
 // looks use a soft, muted version of the theme colour (the accent washed toward grey and kept dark, so the eyes stay the brightest thing).
@@ -507,6 +509,7 @@ static void loadSettings() {                         // setup(): the saved setti
   Preferences pr; if (!pr.begin("tachi", true)) return;
   settings::Settings c;
   if (pr.getBytes("cfg", &c, sizeof(c)) == sizeof(c) && settings::valid(c)) cfg = c;
+  { uint8_t g = pr.getUChar("gauge", 0); gaugeStyle = g < 3 ? g : 0; }
   pr.end();
   applyLook();
   tracker.setConfig(tripConfig());
@@ -515,7 +518,7 @@ static void persistTick() {                          // main loop
   if (cfgSaveReq) {
     cfgSaveReq = false;
     settings::Settings c = cfg;
-    Preferences pr; if (pr.begin("tachi", false)) { pr.putBytes("cfg", &c, sizeof(c)); pr.end(); Serial.println("saved settings"); }
+    Preferences pr; if (pr.begin("tachi", false)) { pr.putBytes("cfg", &c, sizeof(c)); pr.putUChar("gauge", gaugeStyle); pr.end(); Serial.println("saved settings"); }
   }
   if (tripSaveReq) {
     tripSaveReq = false;
@@ -915,13 +918,13 @@ enum { SUB_HUB, SUB_BRIGHT, SUB_DEBUG, SUB_UNITS, SUB_WARN, SUB_THEME };
 static int settingsSub = SUB_HUB;                    // which Settings screen is showing
 static const int SETTINGS_ROWS = 5;                  // rows of the hub
 static const int ROW_SUB[SETTINGS_ROWS] = {SUB_BRIGHT, SUB_UNITS, SUB_WARN, SUB_THEME, SUB_DEBUG};
-static int optCount(int sub) { return sub == SUB_UNITS ? 3 : sub == SUB_WARN ? settings::W_COUNT : sub == SUB_THEME ? 2 : 0; }   // rows of the options screens
+static int optCount(int sub) { return sub == SUB_UNITS ? 3 : sub == SUB_WARN ? settings::W_COUNT : sub == SUB_THEME ? 3 : 0; }   // rows of the options screens
 static int optKind(int sub) { return sub == SUB_WARN ? 1 : 0; }                                  // 1 = - value + stepper, 0 = tap to change
 // A tap on an options row: change the setting, apply it, ask the main loop to save it.
 static void optApply(int sub, int row, int part) {
   if (sub == SUB_UNITS) { if (row == 0) cfg.speedKmh ^= 1; else if (row == 1) cfg.tempC ^= 1; else cfg.pressBar ^= 1; }
   else if (sub == SUB_WARN) settings::warnAdjust(cfg, row, part == 2 ? 1 : -1);
-  else if (sub == SUB_THEME) { if (row == 0) cfg.theme = (cfg.theme + 1) % settings::THEMES; else cfg.mode = (cfg.mode + 1) % settings::MODES; applyLook(); }
+  else if (sub == SUB_THEME) { if (row == 0) cfg.theme = (cfg.theme + 1) % settings::THEMES; else if (row == 1) cfg.mode = (cfg.mode + 1) % settings::MODES; else gaugeStyle = (gaugeStyle + 1) % 3; applyLook(); }
   cfgGen = cfgGen + 1; cfgSaveReq = true; forceDraw = true;
 }
 static bool inBrightness() { return page == PAGE_SETTINGS && settingsSub == 1; }
@@ -1406,9 +1409,9 @@ static void fillOptionsData(rui::Data &d, int sub) {
     for (int i = 0; i < settings::W_COUNT; i++) { char t[16]; settings::warnText(i, cfg, t, sizeof(t)); row(i, settings::warnLabel(i), t); }
   } else {
     snprintf(o.title, sizeof(o.title), "THEME"); o.swatch = true;
-    row(0, "LOOK", theme::look(cfg.theme).name); row(1, "COLOUR", theme::modeName(cfg.mode));
+    row(0, "LOOK", theme::look(cfg.theme).name); row(1, "COLOUR", theme::modeName(cfg.mode)); row(2, "GAUGE", GAUGE_NAMES[gaugeStyle]);
   }
-  d.ver = (int)((uint32_t)(sub * 1000003u + cfg.speedKmh * 7u + cfg.tempC * 11u + cfg.pressBar * 13u + cfg.theme * 17u + cfg.mode * 19u + (uint32_t)cfg.coolWarnC * 23u + (uint32_t)cfg.coolHotC * 29u + cfg.battLowDeciV * 31u + cfg.fuelLowPct * 37u + cfg.redlineRpm * 41u) & 0x3FFFFFFF);
+  d.ver = (int)((uint32_t)(sub * 1000003u + cfg.speedKmh * 7u + cfg.tempC * 11u + cfg.pressBar * 13u + cfg.theme * 17u + cfg.mode * 19u + (uint32_t)cfg.coolWarnC * 23u + (uint32_t)cfg.coolHotC * 29u + cfg.battLowDeciV * 31u + cfg.fuelLowPct * 37u + cfg.redlineRpm * 41u + gaugeStyle * 43u) & 0x3FFFFFFF);
 }
 
 // G-force page data: the filtered position, the peak and the last second as a trail (demo mode: a made-up drive).
@@ -1443,7 +1446,7 @@ static void roundDialFrame(int p, uint32_t now) {
   d.haveBatt = have(G_BATT); d.battV = gVal[G_BATT];
   d.haveLoad = have(G_LOAD); d.loadPct = (int)lroundf(gVal[G_LOAD]);
   d.redline = cfg.redlineRpm; d.hotC = cfg.coolWarnC; d.worryC = cfg.coolHotC; d.fuelLowPct = cfg.fuelLowPct;
-  d.battCritV = settings::battCritV(cfg); d.battLowV = settings::battLowOffV(cfg); d.unitF = !cfg.tempC; d.kmh = cfg.speedKmh != 0; d.theme = rui::themeGen;
+  d.battCritV = settings::battCritV(cfg); d.battLowV = settings::battLowOffV(cfg); d.unitF = !cfg.tempC; d.kmh = cfg.speedKmh != 0; d.theme = rui::themeGen; d.gauge = gaugeStyle;
   d.dotN = visibleCount(); d.dotCur = visibleIndex(page);
   fillStyleData(d, p);
   fillReportData(d, p);

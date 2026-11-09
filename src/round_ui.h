@@ -209,20 +209,21 @@ struct Data {
   float battCritV = 11.5f, battLowV = 12.4f;
   bool unitF = true, kmh = false;   // display units: coolant in F / C; speed in mph / km/h (values stay mph, converted here)
   int theme = 0;                 // themeGen: the page is rebuilt when the colours change
+  int gauge = 0;                 // tach / speedo style: 0 DIAL (needle), 1 ARC (thick arc, block digits), 2 TICKS (tick dial, block digits)
   int dotN = 1, dotCur = 0;      // page dots: how many pages, which one is shown
 };
 
 // ---- ring segments: a precomputed pixel list per ring --------------------------------------------------------------
 // entry bits: 0-17 pixel index, 18-24 segment, 25-26 ring, 27-31 coverage (0..31)
 constexpr int MAX_RINGS = 4, MAX_SEG = 128, MAP_CAP = 36000;
-struct Ring { float cx, cy, r0, r1; int nseg; float segDeg, gapDeg; uint16_t lit[MAX_SEG], dim[MAX_SEG]; int cur, prev; bool valid; };
+struct Ring { float cx, cy, r0, r1; int nseg; float segDeg, gapDeg, startDeg, sweepDeg; uint16_t lit[MAX_SEG], dim[MAX_SEG]; int cur, prev; bool valid; };
 
 struct Slot { char s[44]; uint16_t col; int16_t x0, x1; };   // x0..x1: where the text was drawn
 struct SBox { int16_t x0, y0, x1, y1; };
 struct State {
   bool ok = false; uint16_t *bg = nullptr; uint32_t *map = nullptr; int nmap = 0;
   Ring ring[MAX_RINGS]; int nring = 0;
-  int page = -1, dotN = -1, dotCur = -1; bool unitF = true, kmh = false; int redline = 0, theme = -1;
+  int page = -1, gauge = -1, dotN = -1, dotCur = -1; bool unitF = true, kmh = false; int redline = 0, theme = -1;
   float rpm = 0, mph = 0; uint32_t lastT = 0;
   Slot slot[10];
   Box needle = {0, 0, -1, -1}; float needleAng = 1e9f; bool forceRings = true;
@@ -259,12 +260,13 @@ inline bool begin() {
   return S.ok;
 }
 
-inline void buildRing(State &S, int id, float cx, float cy, float r0, float r1, int nseg, float gapDeg) {
+inline void buildRing(State &S, int id, float cx, float cy, float r0, float r1, int nseg, float gapDeg, float startDeg = -135.0f, float sweepDeg = 270.0f) {
   for (int g = 0; g < MAX_SEG; g++) S.sbox[id][g] = {W, H, -1, -1};
-  Ring &R = S.ring[id]; R.cx = cx; R.cy = cy; R.r0 = r0; R.r1 = r1; R.nseg = nseg; R.segDeg = 270.0f / nseg; R.gapDeg = gapDeg; R.cur = 0; R.prev = -1; R.valid = true;
+  Ring &R = S.ring[id]; R.cx = cx; R.cy = cy; R.r0 = r0; R.r1 = r1; R.nseg = nseg; R.segDeg = sweepDeg / nseg; R.gapDeg = gapDeg; R.startDeg = startDeg; R.sweepDeg = sweepDeg; R.cur = 0; R.prev = -1; R.valid = true;
   annulus(cx, cy, r0, r1, [&](int x, int y, float d, float dx, float dy) {
-    float s = atan2f(dx, -dy) * 57.29578f + 135.0f;               // degrees along the sweep, 0 at the lower left end
-    if (s < 0 || s >= 270.0f) return;
+    float s = atan2f(dx, -dy) * 57.29578f - startDeg;              // degrees along the sweep, 0 at its start
+    s = fmodf(s + 720.0f, 360.0f);
+    if (s >= sweepDeg) return;
     int seg = (int)(s / R.segDeg); if (seg >= nseg) return;
     float fr = s - seg * R.segDeg, e = fminf(fr - R.gapDeg * 0.5f, R.segDeg - R.gapDeg * 0.5f - fr);
     float cov = clamp01(e * 0.0174533f * d + 0.5f) * clamp01(fminf(d - r0, r1 - d) + 0.5f);
@@ -583,6 +585,67 @@ inline void buildStyle(State &S, int pg, const Data &d) {
 }
 
 
+// ---- block font: the square, one-cell-stroke digits and capitals of the ARC / TICKS gauge styles ------------------------------------
+// Each glyph is 5 rows of '1' / '0' (width = the row length); `cell` is the pixel size of one cell, glyphs are one cell apart.
+struct BGlyph { char c; const char *r[5]; };
+inline const BGlyph *blkFind(char c) {
+  static const BGlyph T[] = {
+    {'0', {"1111", "1001", "1001", "1001", "1111"}}, {'1', {"1", "1", "1", "1", "1"}}, {'2', {"1111", "0001", "1111", "1000", "1111"}},
+    {'3', {"1111", "0001", "0111", "0001", "1111"}}, {'4', {"1001", "1001", "1111", "0001", "0001"}}, {'5', {"1111", "1000", "1111", "0001", "1111"}},
+    {'6', {"1111", "1000", "1111", "1001", "1111"}}, {'7', {"1111", "0001", "0001", "0001", "0001"}}, {'8', {"1111", "1001", "1111", "1001", "1111"}},
+    {'9', {"1111", "1001", "1111", "0001", "1111"}}, {'R', {"1110", "1001", "1110", "1010", "1001"}}, {'P', {"1111", "1001", "1111", "1000", "1000"}},
+    {'M', {"10001", "11011", "10101", "10001", "10001"}}, {'K', {"1001", "1010", "1100", "1010", "1001"}}, {'H', {"1001", "1001", "1111", "1001", "1001"}},
+    {'X', {"1001", "1001", "0110", "1001", "1001"}}, {'/', {"0001", "0001", "0010", "0100", "1000"}}, {'-', {"0000", "0000", "1111", "0000", "0000"}},
+    {'.', {"0", "0", "0", "0", "1"}}, {' ', {"00", "00", "00", "00", "00"}}, {'V', {"1001", "1001", "1001", "1001", "0110"}},
+    {'C', {"1111", "1000", "1000", "1000", "1111"}}, {'F', {"1111", "1000", "1110", "1000", "1000"}}};
+  for (const BGlyph &g : T) if (g.c == c) return &g;
+  return &T[19];
+}
+inline int blkW(const char *s, int cell) { int w = 0, n = 0; for (; *s; s++, n++) w += (int)strlen(blkFind(*s)->r[0]) * cell; return n ? w + (n - 1) * cell : 0; }
+inline void blk(uint16_t *b, const char *s, int x0, int y, int cell, uint16_t col) {
+  for (; *s; s++) {
+    const BGlyph *g = blkFind(*s); int gw = (int)strlen(g->r[0]);
+    for (int r = 0; r < 5; r++) for (int c = 0; c < gw; c++) if (g->r[r][c] == '1')
+      for (int yy = y + r * cell; yy < y + (r + 1) * cell; yy++) for (int xx = x0 + c * cell; xx < x0 + (c + 1) * cell; xx++) if (xx >= 0 && xx < W && yy >= 0 && yy < H) b[yy * W + xx] = col;
+    x0 += (gw + 1) * cell;
+  }
+}
+inline void blkC(uint16_t *b, const char *s, int cx, int y, int cell, uint16_t col) { blk(b, s, cx - blkW(s, cell) / 2, y, cell, col); }
+inline void blkNum(State &S, uint16_t *fb, int slot, const char *s, int cx, int y, int cell, uint16_t col) {   // like num(), in the block font
+  Slot &sl = S.slot[slot];
+  if (sl.col == col && strcmp(sl.s, s) == 0) return;
+  int w = blkW(s, cell), nx0 = cx - w / 2 - 1, nx1 = cx - w / 2 + w;
+  int rx0 = sl.x1 >= sl.x0 && sl.x0 < nx0 ? sl.x0 : nx0, rx1 = sl.x1 >= sl.x0 && sl.x1 > nx1 ? sl.x1 : nx1;
+  strncpy(sl.s, s, sizeof(sl.s) - 1); sl.s[sizeof(sl.s) - 1] = 0; sl.col = col; sl.x0 = nx0; sl.x1 = nx1;
+  restore(fb, S.bg, rx0, y, rx1 - rx0 + 1, 5 * cell);
+  blkC(fb, s, cx, y, cell, col);
+  mark(S, rx0, y, rx1, y + 5 * cell - 1);
+}
+// TICKS style: 0 sits at the lower left, the sweep runs clockwise to 3 o'clock (248 degrees); ARC style uses the usual -135..135 sweep.
+constexpr float TICK_START = 202.0f, TICK_SWEEP = 248.0f;
+inline void buildBlockGauge(State &S, uint16_t *b, int pg, const Data &d) {
+  const bool tach = pg == PG_TACH, ticks = d.gauge == 2; const int mx = rpmMax(d.redline);
+  const float vmax = tach ? (float)mx : (d.kmh ? 280.0f : 160.0f), majorStep = tach ? 1000.0f : (d.kmh ? 40.0f : 20.0f);
+  if (!ticks) buildRing(S, 0, CX, CY, 204, 222, 128, -0.6f);                               // a thick solid arc
+  else { const int nt = (int)(vmax / (majorStep / 5.0f) + 0.5f) + 1; const float seg = TICK_SWEEP / (nt - 1); buildRing(S, 0, CX, CY, 196, 222, nt, seg - 0.9f, TICK_START - seg / 2, TICK_SWEEP + seg); }
+  S.nring = 1;
+  const int cell = ticks ? 4 : 3; char t[16];
+  for (float v = 0; v <= vmax + 0.01f; v += majorStep) {
+    snprintf(t, sizeof(t), "%d", (int)(tach ? v / 1000 + 0.5f : v + 0.5f));
+    float x, y; polar(ticks ? 160.0f : 166.0f, ticks ? TICK_START + TICK_SWEEP * v / vmax : angOf(v, vmax), &x, &y);
+    blkC(b, t, (int)(x + 0.5f), (int)(y + 0.5f) - 5 * cell / 2, cell, tach && v >= d.redline ? RED : WHITE);
+  }
+  const char *unit = tach ? "RPM" : (d.kmh ? "KMH" : "MPH");
+  if (ticks) blkC(b, unit, CX, CY - 14, 3, WHITE); else blkC(b, unit, CX, 360, 4, CYAN);
+}
+inline void frameBlockGauge(State &S, uint16_t *fb, int pg, const Data &d, float value, float vmax) {
+  const bool tach = pg == PG_TACH, ticks = d.gauge == 2;
+  ringLevel(S, 0, value / vmax);
+  char t[16]; snprintf(t, sizeof(t), "%d", (int)lroundf(value));
+  uint16_t col = tach && value >= d.redline ? RED : (ticks ? CYAN : WHITE);
+  if (ticks) blkNum(S, fb, 0, t, CX + 92, 332, 8, col); else blkNum(S, fb, 0, t, CX, 204, 9, col);
+}
+
 // ---- per page: static layer + ring setup ---------------------------------------------------------------------------
 inline void buildPage(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg;
@@ -599,6 +662,8 @@ inline void buildPage(State &S, int pg, const Data &d) {
     const int PW = 88, PY = 298, PH = 58;
     pill(b, CX - 94, PY, PW, PH, "COOL"); pill(b, CX, PY, PW, PH, "FUEL"); pill(b, CX + 94, PY, PW, PH, "BATT");
     textC(b, F_LBL, "TACHI", CX, 390, FAINT);
+  } else if ((pg == PG_TACH || pg == PG_SPEEDO) && d.gauge != 0) {
+    buildBlockGauge(S, b, pg, d);                // ARC / TICKS styles
   } else if (pg == PG_TACH || pg == PG_SPEEDO) {
     bool tach = pg == PG_TACH; float vmax = tach ? (float)mx : (d.kmh ? 280.0f : 160.0f);
     buildRing(S, 0, CX, CY, 214, 226, 90, 0.7f); S.nring = 1;
@@ -623,6 +688,11 @@ inline void buildPage(State &S, int pg, const Data &d) {
 
   // ring colours
   if (pg >= PG_ARC) {                            // the multi-value pages set their ring colours in buildStyle
+  } else if ((pg == PG_TACH || pg == PG_SPEEDO) && d.gauge != 0) {   // one solid colour (the accent); the tach turns red past the redline
+    struct C { int mx, rl; bool tach, ticks; } c = {mx, d.redline, pg == PG_TACH, d.gauge == 2};
+    setRingColors(S.ring[0], [](float f, const void *p) { const C *c = (const C *)p; return c->tach && f * c->mx >= c->rl ? RED : (c->ticks ? WHITE : CYAN); }, &c);
+    if (d.gauge == 2) for (int i = 0; i < S.ring[0].nseg; i++) S.ring[0].dim[i] = mix(BG, WHITE, 38);   // unlit ticks: dim but readable
+    else for (int i = 0; i < S.ring[0].nseg; i++) S.ring[0].dim[i] = mix(BG, S.ring[0].lit[i], 56);
   } else if (pg == PG_SPORT || pg == PG_TACH) {
     struct C { int mx, rl; } c = {mx, d.redline};
     setRingColors(S.ring[0], [](float f, const void *p) { const C *c = (const C *)p; return rpmColor(f * c->mx, c->rl); }, &c);
@@ -781,10 +851,10 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
   State &S = st(); if (!S.ok) return;
   float k = S.lastT ? 1.0f - expf(-(float)(now - S.lastT) / 90.0f) : 1.0f; S.lastT = now;
   S.rpm += (d.rpm - S.rpm) * k; S.mph += (d.mph - S.mph) * k;
-  if (full || pg != S.page || d.dotN != S.dotN || d.dotCur != S.dotCur || d.unitF != S.unitF || d.kmh != S.kmh || d.theme != S.theme || d.redline != S.redline || d.ver != S.ver) {
+  if (full || pg != S.page || d.dotN != S.dotN || d.dotCur != S.dotCur || d.unitF != S.unitF || d.kmh != S.kmh || d.gauge != S.gauge || d.theme != S.theme || d.redline != S.redline || d.ver != S.ver) {
     buildPage(S, pg, d);
     memcpy(fb, S.bg, (size_t)W * H * 2);
-    S.page = pg; S.dotN = d.dotN; S.dotCur = d.dotCur; S.unitF = d.unitF; S.kmh = d.kmh; S.theme = d.theme; S.redline = d.redline; S.ver = d.ver;
+    S.page = pg; S.dotN = d.dotN; S.dotCur = d.dotCur; S.unitF = d.unitF; S.kmh = d.kmh; S.gauge = d.gauge; S.theme = d.theme; S.redline = d.redline; S.ver = d.ver;
     for (Slot &s : S.slot) { s.s[0] = '\x01'; s.s[1] = 0; s.col = 0; s.x0 = 0; s.x1 = -1; }
     S.needle = {0, 0, -1, -1}; S.needleAng = 1e9f; S.forceRings = true; S.nr0 = 0; S.nr1 = -1; S.barPx[0] = S.barPx[1] = -1; S.ngr = 0;
     mark(S, 0, 0, W - 1, H - 1);
@@ -803,6 +873,8 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
     num(S, fb, 3, F_MED, t, CX, PY, 84, !d.haveFuel ? DIM : (d.fuelPct < d.fuelLowPct / 2 ? RED : (d.fuelPct < d.fuelLowPct ? YELLOW : WHITE)));
     if (d.haveBatt) snprintf(t, sizeof(t), "%.1f", d.battV); else snprintf(t, sizeof(t), "--");
     num(S, fb, 4, F_MED, t, CX + 94, PY, 84, !d.haveBatt ? DIM : (d.battV < d.battCritV ? RED : (d.battV < d.battLowV ? YELLOW : WHITE)));
+  } else if ((pg == PG_TACH || pg == PG_SPEEDO) && d.gauge != 0) {
+    if (pg == PG_TACH) frameBlockGauge(S, fb, pg, d, S.rpm, (float)mx); else frameBlockGauge(S, fb, pg, d, spd, spdMax);
   } else if (pg == PG_TACH) {
     ringLevel(S, 0, S.rpm / mx);
     needle(S, fb, angOf(fminf(S.rpm, (float)mx), (float)mx), S.rpm >= d.redline ? RED : ORANGE);
