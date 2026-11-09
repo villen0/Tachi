@@ -86,8 +86,6 @@ static uint8_t oilFails = 0; // consecutive failed oil polls; after OIL_GIVE_UP 
 // The user's settings (units, warning levels, theme): loaded in setup(), changed on the Settings pages, saved by the main loop (cfgSaveReq).
 static settings::Settings cfg;
 static gforce::Meter gMeter;                         // G-force meter (UI task only); its learned axis directions are saved in flash
-static int gSavedLon = 0, gSavedLat = 0;
-static volatile bool gSignsSaveReq = false; static volatile int gSaveLon = 0, gSaveLat = 0;     // learned axis directions, saved by the main loop
 // Face page background: a gradient from the top colour to the bottom colour (0..255). Classic keeps the original navy / indigo; the other
 // looks use a soft, muted version of the theme colour (the accent washed toward grey and kept dark, so the eyes stay the brightest thing).
 static float faceBgTop[3] = {5, 10, 26}, faceBgBot[3] = {20, 12, 46};
@@ -509,16 +507,11 @@ static void loadSettings() {                         // setup(): the saved setti
   Preferences pr; if (!pr.begin("tachi", true)) return;
   settings::Settings c;
   if (pr.getBytes("cfg", &c, sizeof(c)) == sizeof(c) && settings::valid(c)) cfg = c;
-  uint8_t gs[2]; if (pr.getBytes("gsg", gs, 2) == 2 && gs[0] <= 1 && gs[1] <= 1) { gSavedLon = gs[0] ? 1 : -1; gSavedLat = gs[1] ? 1 : -1; gMeter.setSigns(gSavedLon, gSavedLat); }   // axis directions learned on an earlier drive
   pr.end();
   applyLook();
   tracker.setConfig(tripConfig());
 }
 static void persistTick() {                          // main loop
-  if (gSignsSaveReq) {
-    gSignsSaveReq = false; uint8_t gs[2] = {(uint8_t)(gSaveLon > 0), (uint8_t)(gSaveLat > 0)};
-    Preferences pr; if (pr.begin("tachi", false)) { pr.putBytes("gsg", gs, 2); pr.end(); Serial.println("saved G-force axis directions"); }
-  }
   if (cfgSaveReq) {
     cfgSaveReq = false;
     settings::Settings c = cfg;
@@ -885,8 +878,7 @@ void IRAM_ATTR onButtonEdge() {
 
 // ---------- G-force: the board's QMI8658 motion sensor (on the same I2C bus as the touch chip, so only the UI task reads it) ----------
 static uint8_t imuAddr = 0;
-static gforce::Vec gLastAcc{0, 1, 0};
-static uint32_t gSignsSavedAt = 0;
+static gforce::Vec gLastAcc{0, 1, 0}, gLastGyro{0, 0, 0};
 static bool imuWrite(uint8_t reg, uint8_t v) { Wire.beginTransmission(imuAddr); Wire.write(reg); Wire.write(v); return Wire.endTransmission() == 0; }
 static bool imuRead(uint8_t reg, uint8_t *buf, size_t n) {
   Wire.beginTransmission(imuAddr); Wire.write(reg);
@@ -912,13 +904,10 @@ static void imuTick(uint32_t now) {                  // every UI tick, also whil
   auto i16 = [&](int k) { return (float)(int16_t)(b[k] | (b[k + 1] << 8)); };
   gforce::Vec acc{i16(0) / 8192.0f, i16(2) / 8192.0f, i16(4) / 8192.0f}, gy{i16(6) / 128.0f, i16(8) / 128.0f, i16(10) / 128.0f};
   gLastAcc = acc;
-  gMeter.feed(acc, gy, fresh(tsMph, FAST_FRESH_MS) ? (float)mph : -1.0f, now);
-  if (gMeter.learned() && now - gSignsSavedAt > 5000) {                      // remember the learned directions for the next start
-    gSignsSavedAt = now;
-    if (gMeter.signLon() != gSavedLon || gMeter.signLat() != gSavedLat) { gSavedLon = gSaveLon = gMeter.signLon(); gSavedLat = gSaveLat = gMeter.signLat(); gSignsSaveReq = true; }
-  }
+  gLastGyro = gy;
+  gMeter.feed(acc, gy, fresh(tsMph, FAST_FRESH_MS) ? (float)mph : -1.0f, tsMph, now);
 }
-static void gZeroNow() { gMeter.zero(gLastAcc); }    // the ZERO chip: this is "level", forget the peak
+static void gZeroNow() { gMeter.zero(gLastAcc, gLastGyro); }    // the ZERO chip: this is "level", forget the peak
 
 // UI-side state of the two report pages
 // Settings page: the hub, or one of its sub-screens (UI task only). Leaving the page always returns to the hub.
