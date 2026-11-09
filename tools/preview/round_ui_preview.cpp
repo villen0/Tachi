@@ -61,9 +61,10 @@ int main(int argc, char **argv) {
     d.rpm = c.rpm; rui::frame(fb.data(), pg, d, 2000);
     save(fb, dir + "/" + names[pg] + "_" + c.tag + ".ppm");
   }
-  for (int g = 1; g <= 2; g++) for (int pg : {rui::PG_TACH, rui::PG_SPEEDO}) for (auto &c : cases) {   // the ARC / TICKS gauge styles
+  for (int g = 1; g <= 2; g++) for (int pg : {rui::PG_TACH, rui::PG_SPEEDO, rui::PG_ARC}) for (auto &c : cases) {   // the ARC / TICKS gauge styles
     rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
     rui::Data d; d.rpm = c.rpm; d.mph = c.mph; d.gauge = g; d.dotN = 7; d.dotCur = pg;
+    if (pg == rui::PG_ARC) { d.arcMin = -20; d.arcMax = 30; d.arcMajor = 10; d.arcMinor = 2; d.arcRed = 24; d.arcDec = 0; strcpy(d.arcLabel, "BOOST"); strcpy(d.arcUnit, "PSI"); d.haveArc = true; d.arcVal = c.rpm > 6000 ? 26.0f : (c.rpm > 0 ? 9.5f : -11.0f); snprintf(d.arcText, sizeof(d.arcText), "%.1f", d.arcVal); }
     rui::frame(fb.data(), pg, d, 1000); rui::frame(fb.data(), pg, d, 1100); rui::frame(fb.data(), pg, d, 2000);
     save(fb, dir + "/" + names[pg] + (g == 1 ? "_arc_" : "_ticks_") + c.tag + ".ppm");
   }

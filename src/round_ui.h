@@ -633,7 +633,9 @@ inline const BGlyph *blkFind(char c) {
     {'M', {"10001", "11011", "10101", "10001", "10001"}}, {'K', {"1001", "1010", "1100", "1010", "1001"}}, {'H', {"1001", "1001", "1111", "1001", "1001"}},
     {'X', {"1001", "1001", "0110", "1001", "1001"}}, {'/', {"0001", "0001", "0010", "0100", "1000"}}, {'-', {"0000", "0000", "1111", "0000", "0000"}},
     {'.', {"0", "0", "0", "0", "1"}}, {' ', {"00", "00", "00", "00", "00"}}, {'V', {"1001", "1001", "1001", "1001", "0110"}},
-    {'C', {"1111", "1000", "1000", "1000", "1111"}}, {'F', {"1111", "1000", "1110", "1000", "1000"}}};
+    {'C', {"1111", "1000", "1000", "1000", "1111"}}, {'F', {"1111", "1000", "1110", "1000", "1000"}},
+    {'B', {"1110", "1001", "1110", "1001", "1110"}}, {'O', {"1111", "1001", "1001", "1001", "1111"}}, {'S', {"1111", "1000", "1111", "0001", "1111"}},
+    {'T', {"1111", "0110", "0110", "0110", "0110"}}, {'I', {"111", "010", "010", "010", "111"}}, {'A', {"1111", "1001", "1111", "1001", "1001"}}};
   for (const BGlyph &g : T) if (g.c == c) return &g;
   return &T[19];
 }
@@ -682,6 +684,36 @@ inline void frameBlockGauge(State &S, uint16_t *fb, int pg, const Data &d, float
   if (ticks) blkNum(S, fb, 0, t, CX + 92, 332, 8, col); else blkNum(S, fb, 0, t, CX, 204, 9, col);
 }
 
+// The Boost page in the ARC / TICKS styles: the same look as the Tach / Speedo (thick arc or lit ticks, block digits), with the boost scale (arcMin..arcMax, majors every arcMajor).
+inline void buildBoostBlock(State &S, uint16_t *b, const Data &d) {
+  const bool ticks = d.gauge == 2;
+  float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
+  float minor = d.arcMinor > 0.0001f ? d.arcMinor : 1; int per = (int)(d.arcMajor / minor + 0.5f); if (per < 1) per = 1;
+  const int n = (int)(span / minor + 0.5f);
+  if (!ticks) buildRing(S, 0, CX, CY, 204, 222, 128, -0.6f);
+  else { const int nt = n + 1; const float seg = TICK_SWEEP / (nt - 1); buildRing(S, 0, CX, CY, 196, 222, nt, seg - 0.9f, TICK_START - seg / 2, TICK_SWEEP + seg); }
+  S.nring = 1;
+  const int cell = ticks ? 4 : 3; char t[16];
+  for (int i = 0; i <= n; i += per) {
+    float v = d.arcMin + i * minor; snprintf(t, sizeof(t), "%.*f", d.arcDec, v);
+    float x, y; polar(ticks ? 160.0f : 166.0f, ticks ? TICK_START + TICK_SWEEP * (v - d.arcMin) / span : angOf(v - d.arcMin, span), &x, &y);
+    blkC(b, t, (int)(x + 0.5f), (int)(y + 0.5f) - 5 * cell / 2, cell, v >= d.arcRed ? RED : WHITE);
+  }
+  if (ticks) { if (d.arcLabel[0]) blkC(b, d.arcLabel, CX, CY - 30, 3, WHITE); if (d.arcUnit[0]) blkC(b, d.arcUnit, CX, CY - 8, 3, DIM); }
+  else { if (d.arcLabel[0]) blkC(b, d.arcLabel, CX, 140, 3, DIM); if (d.arcUnit[0]) blkC(b, d.arcUnit, CX, 360, 4, CYAN); }
+  struct C { float min, span, red; bool ticks; } c = {d.arcMin, span, d.arcRed, ticks};
+  setRingColors(S.ring[0], [](float f, const void *p) { const C *c = (const C *)p; return c->min + f * c->span >= c->red ? RED : (c->ticks ? WHITE : CYAN); }, &c);
+  for (int i = 0; i < S.ring[0].nseg; i++) S.ring[0].dim[i] = ticks ? mix(BG, WHITE, 38) : mix(BG, S.ring[0].lit[i], 56);
+}
+inline void frameBoostBlock(State &S, uint16_t *fb, const Data &d) {
+  const bool ticks = d.gauge == 2;
+  float span = d.arcMax - d.arcMin; if (span < 0.001f) span = 1;
+  ringLevel(S, 0, d.haveArc ? (d.arcVal - d.arcMin) / span : 0);
+  uint16_t col = !d.haveArc ? DIM : (d.arcVal >= d.arcRed ? RED : (ticks ? CYAN : WHITE));
+  const char *t = d.haveArc ? d.arcText : "--";
+  if (ticks) blkNum(S, fb, 0, t, CX + 92, 332, 8, col); else blkNum(S, fb, 0, t, CX, 196, 9, col);
+}
+
 // ---- per page: static layer + ring setup ---------------------------------------------------------------------------
 inline void buildPage(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg;
@@ -711,6 +743,8 @@ inline void buildPage(State &S, int pg, const Data &d) {
     for (float v = 0; v <= vmax + 0.01f; v += majorStep) { snprintf(t, sizeof(t), "%d", (int)(tach ? v / 1000 + 0.5f : v + 0.5f)); numeral(b, v, vmax, 148.0f, t, v >= d.redline && tach ? RED : WHITE); }
     textC(b, F_LBL, tach ? "X1000 RPM" : (d.kmh ? "KMH" : "MPH"), CX, 290, DIM);
     textC(b, F_LBL, tach ? (d.kmh ? "KMH" : "MPH") : "RPM", CX, 374, DIM);
+  } else if (pg == PG_ARC && d.gauge != 0) {
+    buildBoostBlock(S, b, d);                    // boost in the ARC / TICKS styles
   } else if (pg == PG_VITALS) {   // vitals: four ring gauges
     static const int cxs[4] = {CX - 104, CX + 104, CX - 104, CX + 104}, cys[4] = {CY - 98, CY - 98, CY + 98, CY + 98};
     for (int i = 0; i < 4; i++) buildRing(S, i, (float)cxs[i], (float)cys[i], 66, 78, 45, 1.8f);
@@ -941,6 +975,8 @@ inline void frame(uint16_t *fb, int pg, const Data &d, uint32_t now, bool full =
       else snprintf(t, sizeof(t), "%d", d.loadPct);
       num(S, fb, i, F_NUM, t, cxs[i], cys[i] - 22, 110, have[i] ? WHITE : DIM);
     }
+  } else if (pg == PG_ARC && d.gauge != 0) {
+    frameBoostBlock(S, fb, d);
   } else {
     frameStyle(S, fb, pg, d);                    // arc, custom, quad, dual, gear
   }
