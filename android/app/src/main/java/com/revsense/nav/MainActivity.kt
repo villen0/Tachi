@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
         requestPermissions(p, 1)
     }
 
-    override fun onRequestPermissionsResult(code: Int, p: Array<out String>, r: IntArray) {
+    override fun onRequestPermissionsResult(code: Int, p: Array<String>, r: IntArray) {
         super.onRequestPermissionsResult(code, p, r)
         refreshState(); if (BleLink.hasPermission(this)) BleLink.start(this)
     }
