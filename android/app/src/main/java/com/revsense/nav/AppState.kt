@@ -9,6 +9,8 @@ import androidx.compose.runtime.setValue
 object AppState {
     var live by mutableStateOf<Live?>(null)
     var liveAt by mutableLongStateOf(0L)          // SystemClock.elapsedRealtime() of the last live line
+    var trips by mutableStateOf<List<TripRec>>(emptyList())     // the last list the board sent, newest first (the running trip leads)
+    var tripsAt by mutableLongStateOf(0L)
     var turn by mutableStateOf<Turn?>(null)
     var turnAt by mutableLongStateOf(0L)
     var bleConnected by mutableStateOf(false)

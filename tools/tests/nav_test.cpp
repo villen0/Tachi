@@ -34,6 +34,12 @@ int main() {
   CHECK(closeness(0) == 1.0f && closeness(500) == 0.0f && closeness(9000) == 0.0f && fabsf(closeness(250) - 0.5f) < 1e-4f);
   { char b[96]; formatLive(b, sizeof(b), 2150, 45, 92, 140, 61, 42, 3, 31, 195, 62); CHECK(!strcmp(b, "L|2150|45|92|140|61|42|3|31|195|62"));
     formatLive(b, sizeof(b), -1, -1, -1, -1, -1, -1, 0, NO_VALUE, NO_VALUE, NO_VALUE); CHECK(!strcmp(b, "L|-1|-1|-1|-1|-1|-1|0|-999|-999|-999")); }
+  { trip::Record r; r.seq = 12; r.durationS = 1980; r.distCentiMi = 1120; r.topMph = 74; r.avgMph = 31; r.maxRpm = 4850; r.maxCoolC = 95; r.peakBoostDeciPsi = -24; r.minBattDeciV = 131; r.maxBattDeciV = 142;
+    r.newCodeCount = 2; strcpy(r.newCodes[0], "P0301"); strcpy(r.newCodes[1], "P0420");
+    char b[128]; formatTrip(b, sizeof(b), r, true); CHECK(!strcmp(b, "R|1|12|1980|1120|74|31|4850|95|-24|131|142|P0301;P0420"));
+    trip::Record e; formatTrip(b, sizeof(b), e, false); CHECK(!strcmp(b, "R|0|0|0|0|0|0|0|-32768|-32768|0|0|"));
+    r.newCodeCount = 4; strcpy(r.newCodes[2], "P0171"); strcpy(r.newCodes[3], "P0100"); formatTrip(b, sizeof(b), r, false); CHECK(strlen(b) < 100);
+    CHECK(isTripQuery("Q|T", 3) && !isTripQuery("Q|", 2) && !isTripQuery("N|R|1|x", 7)); }
   printf("%d checks, %d failed\n", checks, fails);
   return fails ? 1 : 0;
 }

@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -64,7 +65,7 @@ fun AppRoot(askBluetooth: () -> Unit, askNotification: () -> Unit) {
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
                 0 -> HomeScreen(askBluetooth, askNotification) { showLog = true }
-                1 -> Placeholder("Trips", "Your drive reports and trip history will show here in the next update.")
+                1 -> TripsScreen()
                 else -> Placeholder("Settings", "Units, warning levels, theme and gauge style of the board will be set here in a later update.")
             }
         }
@@ -252,5 +253,78 @@ fun Placeholder(title: String, text: String) {
         Text(title, fontSize = 26.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
         Text(text, color = Rv.Dim, fontSize = 14.sp, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+fun TripsScreen() {
+    val connected = AppState.bleConnected
+    LaunchedEffect(connected) { while (connected) { BleLink.requestTrips(); delay(10_000) } }        // load now, then refresh the running trip every 10 s
+    val trips = AppState.trips; val live = AppState.live
+    val kmh = live?.kmh ?: false; val tc = live?.tempC ?: false; val bar = ((live?.units ?: 0) and 4) != 0
+    var sel by remember { mutableIntStateOf(0) }
+    if (sel >= trips.size) sel = 0
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(20.dp))
+        Text("Trips", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text(if (connected) "Last 5 drives kept on the board" else "Connect to the board to load your trips", fontSize = 13.sp, color = Rv.Dim)
+        Spacer(Modifier.height(14.dp))
+        if (trips.isEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Text("No trips yet", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text("A trip is saved after you drive and the engine stops (at least 90 seconds and 0.2 mi). It then shows up here.", fontSize = 13.sp, color = Rv.Dim)
+            }
+        } else {
+            val t = trips[sel]
+            Card(Modifier.fillMaxWidth()) {
+                Text(tripTitle(t).uppercase(), fontSize = 10.sp, color = Rv.Dim, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text(TripFmt.distance(t.distCentiMi, kmh) + " in " + TripFmt.duration(t.durationS), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                ReportRow("Top speed", TripFmt.speed(t.topMph, kmh))
+                ReportRow("Max RPM", t.maxRpm.toString())
+                ReportRow("Max coolant", TripFmt.coolant(t.maxCoolC, tc))
+                ReportRow("Peak boost", TripFmt.boost(t.peakBoostDeciPsi, bar))
+                ReportRow("Battery", TripFmt.battery(t.minBattDeciV, t.maxBattDeciV))
+                ReportRow("New codes", TripFmt.codes(t.codes), if (t.codes.isEmpty()) Rv.Ok else Rv.Warn)
+            }
+            if (trips.size > 1) {
+                Spacer(Modifier.height(18.dp))
+                Text("ALL TRIPS", fontSize = 11.sp, color = Rv.Dim, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                trips.forEachIndexed { i, r ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(if (i == sel) Color(0xFF241A1C) else Rv.Card)
+                            .border(1.dp, if (i == sel) Rv.Acc else Rv.Edge, RoundedCornerShape(16.dp)).clickable { sel = i }.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(tripTitle(r), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            Text(TripFmt.distance(r.distCentiMi, kmh) + " · " + TripFmt.duration(r.durationS), fontSize = 12.sp, color = Rv.Dim)
+                        }
+                        Text(TripFmt.speed(r.topMph, kmh), fontSize = 13.sp, color = Rv.Acc, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+private fun tripTitle(t: TripRec): String {
+    val seen = TripStore.whenSeen(t.seq)
+    return if (t.live) "Current trip · live" else "Trip #${t.seq}" + (seen?.let { " · $it" } ?: "")
+}
+
+@Composable
+fun ReportRow(label: String, value: String, valueColor: Color = Rv.Text) {
+    Column {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Rv.Edge))
+        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Text(label, fontSize = 13.sp, color = Rv.Dim, modifier = Modifier.weight(1f))
+            Text(value, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = valueColor)
+        }
     }
 }

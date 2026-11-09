@@ -22,12 +22,15 @@ object BleLink {
     val SERVICE: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000001")
     val CHAR: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000002")
     val LIVE: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000003")
+    val TRIPS: UUID = UUID.fromString("52657673-656e-7365-0000-4e4156000004")
     private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private lateinit var ctx: Context
     private val main = Handler(Looper.getMainLooper())
     private var gatt: BluetoothGatt? = null
     private var nav: BluetoothGattCharacteristic? = null
+    private val pendingSubs = ArrayDeque<BluetoothGattCharacteristic>()
+    private val tripBuf = ArrayList<TripRec>()
     private var scanning = false
     private var started = false
 
@@ -39,7 +42,7 @@ object BleLink {
         else c.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
     fun start(c: Context) {
-        ctx = c.applicationContext
+        ctx = c.applicationContext; TripStore.init(ctx)
         if (!hasPermission(ctx)) { AppLog.setBle("no Bluetooth permission yet"); return }
         if (started) return
         started = true; scan()
@@ -77,18 +80,34 @@ object BleLink {
             if (ch == null) { AppLog.setBle("the board has no NAV service (old firmware?)"); g.disconnect(); return }
             ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             nav = ch; AppLog.setBle("connected to the board")
-            val live = g.getService(SERVICE)?.getCharacteristic(LIVE)                       // subscribe to the live values (older firmware has none)
-            val cccd = live?.getDescriptor(CCCD)
-            if (live != null && cccd != null) {
-                g.setCharacteristicNotification(live, true)
-                if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                else { @Suppress("DEPRECATION") run { cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; g.writeDescriptor(cccd) } }
-            }
+            val svc = g.getService(SERVICE)                                                    // subscribe to the live values and the trips (older firmware has none)
+            pendingSubs.clear(); listOfNotNull(svc?.getCharacteristic(LIVE), svc?.getCharacteristic(TRIPS)).forEach { pendingSubs.add(it) }
+            subscribeNext(g)
+        }
+        override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { subscribeNext(g) }
+        private fun subscribeNext(g: BluetoothGatt) {
+            val c = pendingSubs.removeFirstOrNull() ?: run { requestTrips(); return }
+            val cccd = c.getDescriptor(CCCD) ?: run { subscribeNext(g); return }
+            g.setCharacteristicNotification(c, true)
+            if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+            else { @Suppress("DEPRECATION") run { cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; g.writeDescriptor(cccd) } }
+        }
+        private fun incoming(c: BluetoothGattCharacteristic, b: ByteArray?) {
+            if (b == null) return
+            if (c.uuid == TRIPS) trips(String(b)) else live(b)
+        }
+        private fun trips(line: String) {
+            if (line.startsWith("E|")) { AppState.trips = tripBuf.toList(); AppState.tripsAt = SystemClock.elapsedRealtime(); tripBuf.clear(); return }
+            val t = TripParser.parse(line) ?: return
+            TripStore.note(t.seq, t.live); tripBuf.add(t)
         }
         private fun live(b: ByteArray?) { val l = b?.let { LiveParser.parse(String(it)) } ?: return; AppState.live = l; AppState.liveAt = SystemClock.elapsedRealtime() }
-        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) = live(value)
-        @Deprecated("old callback") override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) { @Suppress("DEPRECATION") live(c.value) }
+        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) = incoming(c, value)
+        @Deprecated("old callback") override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) { @Suppress("DEPRECATION") incoming(c, c.value) }
     }
+
+    /** Asks the board for its trips; the answer arrives as notifications (see Trips.kt). */
+    fun requestTrips() { tripBuf.clear(); send("Q|T") }
 
     /** Sends one message line to the board. Returns false if there is no link right now. */
     fun send(text: String): Boolean {

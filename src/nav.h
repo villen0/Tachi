@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include "trip.h"
 
 namespace nav {
 
@@ -81,6 +82,19 @@ inline float closeness(uint32_t m) { float f = 1.0f - m / 500.0f; return f < 0 ?
 constexpr int NO_VALUE = -999;
 inline void formatLive(char *out, size_t n, int rpm, int mph, int coolC, int battDeciV, int fuel, int load, int units, int intakeC, int torqueNm, int torquePct) {
   snprintf(out, n, "L|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d", rpm, mph, coolC, battDeciV, fuel, load, units, intakeC, torqueNm, torquePct);
+}
+
+// ---- trips (the app asks with "Q|T"; the board answers on the TRIPS characteristic, newest first, then "E|count") ----
+//   R|live|seq|durationS|distCentiMi|topMph|avgMph|maxRpm|maxCoolC|peakBoostDeciPsi|minBattDeciV|maxBattDeciV|codes
+// live = 1 for the trip that is still running; -32768 = unknown (maxCoolC, peakBoost); 0 = unknown battery; codes = new fault codes joined by ';'.
+// The board has no clock, so no date is sent (the app notes when it first saw a trip). The rating is not sent (the grading was removed).
+inline bool isTripQuery(const char *s, size_t n) { return n >= 3 && s[0] == 'Q' && s[1] == '|' && s[2] == 'T'; }
+inline void formatTrip(char *out, size_t n, const trip::Record &r, bool live) {
+  char codes[4 * 6 + 1]; size_t o = 0;
+  for (int i = 0; i < r.newCodeCount && i < 4; i++) { if (i) codes[o++] = ';'; for (int k = 0; k < 5 && r.newCodes[i][k]; k++) codes[o++] = r.newCodes[i][k]; }
+  codes[o] = 0;
+  snprintf(out, n, "R|%d|%u|%u|%u|%u|%u|%u|%d|%d|%u|%u|%s", live ? 1 : 0, (unsigned)r.seq, (unsigned)r.durationS, (unsigned)r.distCentiMi, (unsigned)r.topMph, (unsigned)r.avgMph,
+           (unsigned)r.maxRpm, (int)r.maxCoolC, (int)r.peakBoostDeciPsi, (unsigned)r.minBattDeciV, (unsigned)r.maxBattDeciV, codes);
 }
 
 }  // namespace nav

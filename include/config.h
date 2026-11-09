@@ -47,6 +47,7 @@
 #define NAV_SERVICE_UUID "52657673-656e-7365-0000-4e4156000001"   // "Revsense" + "NAV": the board's own Bluetooth service the phone app writes to
 #define NAV_CHAR_UUID    "52657673-656e-7365-0000-4e4156000002"   // the phone writes turns here
 #define LIVE_CHAR_UUID   "52657673-656e-7365-0000-4e4156000003"   // the board notifies live values here (L|rpm|mph|...)
+#define TRIPS_CHAR_UUID  "52657673-656e-7365-0000-4e4156000004"   // the board notifies trips here after the app writes "Q|T" to the NAV characteristic
 #define NAV_STALE_MS 20000     // no update from the phone for this long: the turn card goes away
 #define SHOW_PAGE_BATTERY  0   // battery page: one value with a bar, same style as TEMPS (comes right after it)
 #define SHOW_PAGE_CUSTOM   0   // custom boost page: the arc with three readouts (needs SHOW_PAGE_STYLES; hidden, the Arc page keeps the boost gauge)

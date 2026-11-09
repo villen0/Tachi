@@ -90,7 +90,7 @@ static uint8_t gaugeStyle = 0;                       // tach / speedo style: 0 D
 static const char *const GAUGE_NAMES[3] = {"DIAL", "ARC", "TICKS"};
 // Navigation: the phone app writes turns to the board's own Bluetooth service (NimBLE host task); the UI task reads them (navMux).
 static nav::Turn navTurn; static uint32_t navMs = 0; static volatile bool phoneLinked = false; static portMUX_TYPE navMux = portMUX_INITIALIZER_UNLOCKED;
-static NimBLECharacteristic *liveChr = nullptr; static volatile bool phoneSub = false;   // LIVE characteristic and whether the phone subscribed to it
+static NimBLECharacteristic *liveChr = nullptr, *tripsChr = nullptr; static volatile bool phoneSub = false, phoneSubTrips = false, tripReq = false;   // LIVE characteristic and whether the phone subscribed to it
 static bool navFresh() { portENTER_CRITICAL(&navMux); bool a = navTurn.active; uint32_t t = navMs; portEXIT_CRITICAL(&navMux); return a && (uint32_t)(millis() - t) < NAV_STALE_MS; }
 static gforce::Meter gMeter;                         // G-force meter (UI task only); its learned axis directions are saved in flash
 // Face page background: a gradient from the top colour to the bottom colour (0..255). Classic keeps the original navy / indigo; the other
@@ -1296,6 +1296,7 @@ static void fillStyleData(rui::Data &d, int p) {
 // >>> report-ui-begin
 // Feeds the trip tracker once a second (UI task, also while the screen is dark) and reacts to its events.
 static report::CodeList tripBase; static bool haveTripBase = false;       // the codes that were there when the trip started
+static trip::Record navLiveRec; static bool navLiveActive = false;   // the running trip, copied once a second for the phone link (navMux)
 static void tripTick(uint32_t now) {
   { static uint32_t seenGen = cfgGen; if (seenGen != cfgGen) { seenGen = cfgGen; tracker.setConfig(tripConfig()); } }   // levels changed in Settings
   static uint32_t last = 0, lastLive = 0; static bool wasDemo = false;
@@ -1314,6 +1315,7 @@ static void tripTick(uint32_t now) {
   float kpa = 0; sm.boostFresh = boostValue(&kpa); sm.boostPsi = kpa * 0.145038f;
   sm.fuelFresh = gOk[G_FUEL] && fresh(gTs[G_FUEL], GAUGE_FRESH_MS); sm.fuelPct = gVal[G_FUEL];
   trip::Tracker::Event ev = tracker.update(sm);
+  portENTER_CRITICAL(&navMux); navLiveActive = tracker.active(); if (navLiveActive) navLiveRec = tracker.live(); portEXIT_CRITICAL(&navMux);
   if (ev == trip::Tracker::T_STARTED) {
     portENTER_CRITICAL(&codeMux); tripBase = codeList; haveTripBase = codeList.answered; portEXIT_CRITICAL(&codeMux);
     codeReq = 1;                                                             // a fresh look at the codes at the start of the drive
@@ -1735,15 +1737,20 @@ bool connectAdapter() {
 class NavServerCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override { phoneLinked = true; Serial.println("phone connected"); }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
-    phoneLinked = false; phoneSub = false; portENTER_CRITICAL(&navMux); navTurn = nav::Turn(); portEXIT_CRITICAL(&navMux); Serial.println("phone left");
+    phoneLinked = false; phoneSub = false; phoneSubTrips = false; tripReq = false; portENTER_CRITICAL(&navMux); navTurn = nav::Turn(); portEXIT_CRITICAL(&navMux); Serial.println("phone left");
   }
 };
 class LiveSubCb : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t subValue) override { phoneSub = (subValue & 1) != 0; }
 };
+class TripsSubCb : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t subValue) override { phoneSubTrips = (subValue & 1) != 0; }
+};
 class NavWriteCb : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
-    NimBLEAttValue v = c->getValue(); nav::Turn t; portENTER_CRITICAL(&navMux); t = navTurn; portEXIT_CRITICAL(&navMux);
+    NimBLEAttValue v = c->getValue();
+    if (nav::isTripQuery((const char *)v.data(), v.size())) { tripReq = true; return; }                     // the app wants the trip list
+    nav::Turn t; portENTER_CRITICAL(&navMux); t = navTurn; portEXIT_CRITICAL(&navMux);
     if (nav::parse((const char *)v.data(), v.size(), t)) { portENTER_CRITICAL(&navMux); navTurn = t; navMs = millis(); portEXIT_CRITICAL(&navMux); }
   }
 };
@@ -1756,6 +1763,8 @@ static void navBleInit() {
   ch->setCallbacks(new NavWriteCb());
   liveChr = svc->createCharacteristic(LIVE_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   liveChr->setCallbacks(new LiveSubCb());
+  tripsChr = svc->createCharacteristic(TRIPS_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  tripsChr->setCallbacks(new TripsSubCb());
   svc->start();
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->addServiceUUID(NAV_SERVICE_UUID); adv->setName("Revsense"); adv->enableScanResponse(true); adv->start();
@@ -1775,6 +1784,25 @@ static void navBleLive() {                           // main loop: stream the li
   nav::formatLive(line, sizeof(line), fresh(tsRpm, FAST_FRESH_MS) ? rpm : -1, fresh(tsMph, FAST_FRESH_MS) ? mph : -1, coolOk ? coolantC : -1,
                   have(G_BATT) ? (int)lroundf(gVal[G_BATT] * 10.0f) : -1, have(G_FUEL) ? (int)lroundf(gVal[G_FUEL]) : -1, have(G_LOAD) ? (int)lroundf(gVal[G_LOAD]) : -1, units, intake, tqNm, tqPct);
   liveChr->setValue((const uint8_t *)line, strlen(line)); liveChr->notify();
+}
+static void navBleTrips() {                          // main loop: answer a trip request, one trip per notification, newest first (the running trip leads)
+  static trip::Record rec[1 + trip::HISTORY]; static bool isLive[1 + trip::HISTORY]; static int n = 0, idx = -1; static uint32_t last = 0, waitSince = 0;
+  uint32_t now = millis();
+  if (tripReq && idx < 0) {
+    if (!phoneLinked) { tripReq = false; return; }
+    if (!phoneSubTrips) { if (!waitSince) waitSince = now; if (now - waitSince > 5000) { tripReq = false; waitSince = 0; } return; }   // wait for the app's subscription
+    tripReq = false; waitSince = 0; n = 0;
+    portENTER_CRITICAL(&navMux); bool la = navLiveActive; trip::Record lr = navLiveRec; portEXIT_CRITICAL(&navMux);
+    if (la) { rec[n] = lr; isLive[n++] = true; }
+    trip::History h; portENTER_CRITICAL(&tripMux); h = tripHist; portEXIT_CRITICAL(&tripMux);
+    for (int i = 0; i < h.count && n < 1 + trip::HISTORY; i++) { const trip::Record *r = h.get(i); if (r) { rec[n] = *r; isLive[n++] = false; } }
+    idx = 0;
+  }
+  if (idx < 0 || !tripsChr || now - last < 40) return; last = now;
+  char line[112];
+  if (idx < n) nav::formatTrip(line, sizeof(line), rec[idx], isLive[idx]); else snprintf(line, sizeof(line), "E|%d", n);
+  tripsChr->setValue((const uint8_t *)line, strlen(line)); tripsChr->notify();
+  if (idx >= n) idx = -1; else idx++;
 }
 static void navBleKeepAlive() {                      // main loop: make sure the phone can always find the board
   static uint32_t last = 0; uint32_t now = millis(); if (now - last < 5000) return; last = now;
@@ -1814,7 +1842,7 @@ void setup() {
 
 void loop() {
   static int cycle = 0;
-  navBleKeepAlive(); navBleLive();
+  navBleKeepAlive(); navBleLive(); navBleTrips();
 
   if (demo) {
     if (client && client->isConnected()) client->disconnect();
