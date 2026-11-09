@@ -45,7 +45,8 @@
 #define SHOW_PAGE_GFORCE   1   // G-force page: friction circle from the board's motion sensor (hidden if the sensor is not found; works in demo mode)
 #define SHOW_PAGE_NAV      1   // turn-by-turn card fed by the phone app over Bluetooth (the page shows up only while a phone is connected or a route is running)
 #define NAV_SERVICE_UUID "52657673-656e-7365-0000-4e4156000001"   // "Revsense" + "NAV": the board's own Bluetooth service the phone app writes to
-#define NAV_CHAR_UUID    "52657673-656e-7365-0000-4e4156000002"
+#define NAV_CHAR_UUID    "52657673-656e-7365-0000-4e4156000002"   // the phone writes turns here
+#define LIVE_CHAR_UUID   "52657673-656e-7365-0000-4e4156000003"   // the board notifies live values here (L|rpm|mph|...)
 #define NAV_STALE_MS 20000     // no update from the phone for this long: the turn card goes away
 #define SHOW_PAGE_BATTERY  0   // battery page: one value with a bar, same style as TEMPS (comes right after it)
 #define SHOW_PAGE_CUSTOM   0   // custom boost page: the arc with three readouts (needs SHOW_PAGE_STYLES; hidden, the Arc page keeps the boost gauge)

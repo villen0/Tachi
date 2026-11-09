@@ -14,6 +14,6 @@ object AppLog {
         lines.addFirst(s); while (lines.size > 40) lines.removeLast()
         main.post { onChange?.invoke() }
     }
-    fun setBle(s: String) { bleState = s; add("Bluetooth: $s") }
+    fun setBle(s: String) { bleState = s; AppState.bleText = s; AppState.bleConnected = s.startsWith("connected"); add("Bluetooth: $s") }
     @Synchronized fun text(): String = lines.joinToString("\n")
 }

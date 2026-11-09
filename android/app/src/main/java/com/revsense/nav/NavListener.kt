@@ -23,6 +23,7 @@ class NavListener : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         if (sbn.packageName != MAPS) return
         AppLog.add("Maps notification gone: route ended"); lastSent = ""
+        AppState.turn = null
         BleLink.send("C")
     }
 
@@ -36,6 +37,7 @@ class NavListener : NotificationListenerService() {
         if (turn == null) { AppLog.add("Maps (not a turn): " + fields.joinToString(" | ")); return }
         val msg = turn.message(); val now = System.currentTimeMillis()
         if (msg == lastSent && now - lastSentAt < 5000) return              // nothing changed (Maps re-posts often); repeat every 5 s so the board never times out
+        AppState.turn = turn; AppState.turnAt = android.os.SystemClock.elapsedRealtime()
         val ok = BleLink.send(msg)
         AppLog.add((if (ok) "sent: " else "NOT sent (no link): ") + msg + "    [" + fields.joinToString(" | ") + "]")
         lastSent = msg; lastSentAt = now

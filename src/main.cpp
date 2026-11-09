@@ -90,6 +90,7 @@ static uint8_t gaugeStyle = 0;                       // tach / speedo style: 0 D
 static const char *const GAUGE_NAMES[3] = {"DIAL", "ARC", "TICKS"};
 // Navigation: the phone app writes turns to the board's own Bluetooth service (NimBLE host task); the UI task reads them (navMux).
 static nav::Turn navTurn; static uint32_t navMs = 0; static volatile bool phoneLinked = false; static portMUX_TYPE navMux = portMUX_INITIALIZER_UNLOCKED;
+static NimBLECharacteristic *liveChr = nullptr; static volatile bool phoneSub = false;   // LIVE characteristic and whether the phone subscribed to it
 static bool navFresh() { portENTER_CRITICAL(&navMux); bool a = navTurn.active; uint32_t t = navMs; portEXIT_CRITICAL(&navMux); return a && (uint32_t)(millis() - t) < NAV_STALE_MS; }
 static gforce::Meter gMeter;                         // G-force meter (UI task only); its learned axis directions are saved in flash
 // Face page background: a gradient from the top colour to the bottom colour (0..255). Classic keeps the original navy / indigo; the other
@@ -1734,8 +1735,11 @@ bool connectAdapter() {
 class NavServerCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override { phoneLinked = true; Serial.println("phone connected"); }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
-    phoneLinked = false; portENTER_CRITICAL(&navMux); navTurn = nav::Turn(); portEXIT_CRITICAL(&navMux); Serial.println("phone left");
+    phoneLinked = false; phoneSub = false; portENTER_CRITICAL(&navMux); navTurn = nav::Turn(); portEXIT_CRITICAL(&navMux); Serial.println("phone left");
   }
+};
+class LiveSubCb : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t subValue) override { phoneSub = (subValue & 1) != 0; }
 };
 class NavWriteCb : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
@@ -1750,9 +1754,22 @@ static void navBleInit() {
   NimBLEService *svc = srv->createService(NAV_SERVICE_UUID);
   NimBLECharacteristic *ch = svc->createCharacteristic(NAV_CHAR_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   ch->setCallbacks(new NavWriteCb());
+  liveChr = svc->createCharacteristic(LIVE_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  liveChr->setCallbacks(new LiveSubCb());
   svc->start();
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->addServiceUUID(NAV_SERVICE_UUID); adv->setName("Revsense"); adv->enableScanResponse(true); adv->start();
+}
+static void navBleLive() {                           // main loop: stream the live values to the phone app, about twice a second
+  static uint32_t last = 0; uint32_t now = millis();
+  if (!liveChr || !phoneLinked || !phoneSub || now - last < 500) return; last = now;
+  auto have = [&](int g) { return gOk[g] && fresh(gTs[g], GAUGE_FRESH_MS); };
+  bool coolOk = fresh(tsCool, SLOW_FRESH_MS * 3) && coolantC > -30;
+  int units = (cfg.speedKmh ? 1 : 0) | (cfg.tempC ? 2 : 0) | (cfg.pressBar ? 4 : 0);
+  char line[64];
+  nav::formatLive(line, sizeof(line), fresh(tsRpm, FAST_FRESH_MS) ? rpm : -1, fresh(tsMph, FAST_FRESH_MS) ? mph : -1, coolOk ? coolantC : -1,
+                  have(G_BATT) ? (int)lroundf(gVal[G_BATT] * 10.0f) : -1, have(G_FUEL) ? (int)lroundf(gVal[G_FUEL]) : -1, have(G_LOAD) ? (int)lroundf(gVal[G_LOAD]) : -1, units);
+  liveChr->setValue((const uint8_t *)line, strlen(line)); liveChr->notify();
 }
 static void navBleKeepAlive() {                      // main loop: make sure the phone can always find the board
   static uint32_t last = 0; uint32_t now = millis(); if (now - last < 5000) return; last = now;
@@ -1792,7 +1809,7 @@ void setup() {
 
 void loop() {
   static int cycle = 0;
-  navBleKeepAlive();
+  navBleKeepAlive(); navBleLive();
 
   if (demo) {
     if (client && client->isConnected()) client->disconnect();

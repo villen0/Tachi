@@ -5,6 +5,7 @@
 // The phone writes one short text line to the board's NAV characteristic (see NAV_SERVICE_UUID in config.h):
 //   N|<code>|<meters>|<street>     a turn: code = S L R SL SR HL HR UL UR RB A (see parse), distance to it in metres, street name (may be empty)
 //   C                              the route ended: clear the card
+// The board answers on its LIVE characteristic (see formatLive).
 // Example: "N|R|350|Main St"  ->  a right turn in 350 m onto MAIN ST.
 #include <stdint.h>
 #include <stdio.h>
@@ -71,5 +72,12 @@ inline void formatDist(uint32_t m, bool metric, char *num, size_t nn, char *unit
 
 // 0 far away .. 1 at the turn (the bar under the distance fills as the turn gets close)
 inline float closeness(uint32_t m) { float f = 1.0f - m / 500.0f; return f < 0 ? 0 : (f > 1 ? 1 : f); }
+
+// The live values the board streams to the app (notification on the LIVE characteristic, about twice a second):
+//   L|rpm|mph|coolC|battDeciV|fuelPct|loadPct|units       (-1 = no fresh value; units: bit0 km/h, bit1 deg C, bit2 bar)
+// Speed is always mph and temperature deg C here; the app converts with the units bits (the same choice the board's Settings page shows).
+inline void formatLive(char *out, size_t n, int rpm, int mph, int coolC, int battDeciV, int fuel, int load, int units) {
+  snprintf(out, n, "L|%d|%d|%d|%d|%d|%d|%d", rpm, mph, coolC, battDeciV, fuel, load, units);
+}
 
 }  // namespace nav
