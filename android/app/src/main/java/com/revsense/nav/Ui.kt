@@ -61,7 +61,7 @@ fun AppRoot(askBluetooth: () -> Unit, askNotification: () -> Unit) {
         containerColor = Rv.Bg,
         bottomBar = {
             NavigationBar(containerColor = Color(0xFF10131A)) {
-                listOf("Home" to Icons.Filled.Home, "Trips" to Icons.AutoMirrored.Filled.List, "Codes" to Icons.Filled.Warning, "Control" to Icons.Filled.PlayArrow, "Settings" to Icons.Filled.Settings).forEachIndexed { i, (name, icon) ->
+                listOf("Home" to Icons.Filled.Home, "Control" to Icons.Filled.PlayArrow, "Trips" to Icons.AutoMirrored.Filled.List, "Codes" to Icons.Filled.Warning, "Settings" to Icons.Filled.Settings).forEachIndexed { i, (name, icon) ->
                     NavigationBarItem(
                         selected = tab == i, onClick = { tab = i }, icon = { Icon(icon, name) }, label = { Text(name, fontSize = 11.sp) },
                         colors = NavigationBarItemDefaults.colors(selectedIconColor = Rv.Acc, selectedTextColor = Rv.Acc, indicatorColor = Color(0xFF2A1A1A), unselectedIconColor = Rv.Dim, unselectedTextColor = Rv.Dim)
@@ -73,9 +73,9 @@ fun AppRoot(askBluetooth: () -> Unit, askNotification: () -> Unit) {
         Box(Modifier.padding(pad).fillMaxSize()) {
             when (tab) {
                 0 -> HomeScreen(askBluetooth, askNotification) { showLog = true }
-                1 -> TripsScreen()
-                2 -> CodesScreen()
-                3 -> ControlScreen()
+                1 -> ControlScreen()
+                2 -> TripsScreen()
+                3 -> CodesScreen()
                 else -> SettingsScreen()
             }
         }
