@@ -3,7 +3,9 @@
 // ===== User settings =====
 #define FW_TAG "round"   // short feature tag shown with the build time on the Debug page (proves which firmware is flashed)
 // Part of the BLE adapter's name (check with the nRF Connect app or the scan log).
-#define ADAPTER_NAME_SUBSTR "CodeReader"   // seen in nRF Connect as "CodeReader31B"
+// Adapters we accept: any advertised name containing one of these (old: "CodeReader31B", new: "OBDII").
+#define ADAPTER_NAME_SUBSTR_1 "CodeReader"
+#define ADAPTER_NAME_SUBSTR_2 "OBDII"
 
 // BLE ELM327 UUIDs, verified from a phone screenshot of the adapter.
 #define SERVICE_UUID_STR "FFF0"

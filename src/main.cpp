@@ -1658,7 +1658,7 @@ bool connectAdapter() {
     const NimBLEAdvertisedDevice *d = results.getDevice(i);
     String n = d->getName().c_str();
     Serial.printf("seen: '%s'\n", n.c_str());
-    if (n.indexOf(ADAPTER_NAME_SUBSTR) >= 0) { found = d; break; }
+    if (n.indexOf(ADAPTER_NAME_SUBSTR_1) >= 0 || n.indexOf(ADAPTER_NAME_SUBSTR_2) >= 0) { found = d; break; }
   }
   if (!found) return false;
 
@@ -1671,6 +1671,10 @@ bool connectAdapter() {
   if (!svc) { Serial.println("service not found"); dropClient(); return false; }
   rxChar = svc->getCharacteristic(NimBLEUUID(RX_UUID_STR));
   txChar = svc->getCharacteristic(NimBLEUUID(TX_UUID_STR));
+  if (rxChar && !txChar && (rxChar->canWrite() || rxChar->canWriteNoResponse())) {
+    txChar = rxChar;   // single-characteristic adapters (FFF1 does both notify and write)
+    Serial.println("no FFF2: using FFF1 for write too");
+  }
   if (!rxChar || !txChar) { Serial.println("characteristics not found"); dropClient(); return false; }
   rxChar->subscribe(true, onNotify);
 
