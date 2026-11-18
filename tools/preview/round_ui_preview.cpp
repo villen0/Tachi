@@ -72,6 +72,8 @@ int main(int argc, char **argv) {
     rui::st().page = -1; rui::Data d; d.dotN = 7; d.dotCur = 5; d.nav.have = true; d.nav.dir = (uint8_t)dr; strcpy(d.nav.num, "300"); strcpy(d.nav.unit, "FT"); strcpy(d.nav.street, "MAIN ST"); d.nav.close = 0.5f;
     rui::frame(fb.data(), rui::PG_NAV, d, 1000); char nm[40]; snprintf(nm, sizeof(nm), "/nav_dir%02d.ppm", dr); save(fb, dir + nm);
   }
+  { const char *tt[4] = {"SEARCHING", "CONNECTING", "NOT FOUND", "LINK LOST"}, *ss[4] = {"LOOKING FOR YOUR ADAPTER", "ONE MOMENT", "CHECK THE ADAPTER IS PLUGGED IN", "TRYING AGAIN"};
+    for (int k = 0; k < 4; k++) { rui::st().page = -1; rui::statusPage(fb.data(), k, k == 2 ? rui::YELLOW : (k == 3 ? rui::RED : rui::CYAN), tt[k], ss[k], 1700, true, k == 0 ? 20 : 3); save(fb, dir + "/status" + std::to_string(k) + ".ppm"); } }
   puts("done");
     // themes (sport, speedo in km/h, vitals) and the theme chooser
   for (int t = 0; t < theme::THEMES; t++) for (int pg : {rui::PG_SPORT, rui::PG_SPEEDO, rui::PG_VITALS, rui::PG_OPTIONS}) {

@@ -748,8 +748,8 @@ static void drawStatusScreen(uint32_t now, bool full) {
   memcpy(msg, statusMsg, sizeof(msg)); col = statusColor;
   portEXIT_CRITICAL(&statusMux);
   int kind = strncmp(msg, "Scan", 4) == 0 ? 0 : strncmp(msg, "Conn", 4) == 0 ? 1 : strncmp(msg, "Not f", 5) == 0 ? 2 : strncmp(msg, "Link", 4) == 0 ? 3 : 4;
-  static const char *titles[4] = {"SCANNING", "CONNECTING", "ADAPTER NOT FOUND", "LINK LOST"};
-  static const char *subs[4] = {"LOOKING FOR OBD ADAPTER", "SETTING UP THE ADAPTER", "CHECK ADAPTER IS PLUGGED IN", "RECONNECTING..."};
+  static const char *titles[4] = {"SEARCHING", "CONNECTING", "NOT FOUND", "LINK LOST"};
+  static const char *subs[4] = {"LOOKING FOR YOUR ADAPTER", "ONE MOMENT", "CHECK THE ADAPTER IS PLUGGED IN", "TRYING AGAIN"};
   char title[24] = "";
   if (kind == 4) { size_t n = 0; for (; msg[n] && n < sizeof(title) - 1; n++) title[n] = (msg[n] >= 'a' && msg[n] <= 'z') ? msg[n] - 32 : msg[n]; while (n && title[n - 1] == '.') n--; title[n] = 0; }
   if (!rui::begin()) { Serial.println("round UI buffers failed"); return; }

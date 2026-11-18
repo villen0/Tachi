@@ -1094,49 +1094,39 @@ inline void brightnessPage(uint16_t *fb, int pct, int dotN, int dotCur, bool ful
 }
 
 // ---- scanning / connecting / status page ---------------------------------------------------------------------------------
-// kind: 0 scanning (radar pulses), 1 connecting (two counter-rotating arcs), 2 not found, 3 link lost, 4 anything else (spinner).
-// accent is the colour the caller asked for. The animation area is redrawn every frame; the title, subtitle and the three-step
-// row are drawn when full is true (page entered or text changed). Marks what it touched (see flushDirty).
-constexpr int ST_AX = CX, ST_AY = 186, ST_R = 66;
-// waitSec: how long this wait has lasted (-1 = do not show). After 15 s the line also says the screen can be tapped to skip it.
+// kind: 0 searching (a slow comet round a ring), 1 connecting (faster), 2 not found, 3 link lost, 4 anything else (spinner).
+// accent is the colour the caller asked for. The animation area is redrawn every frame; the title and the one-line subtitle
+// are drawn when full is true (page entered or text changed). Marks what it touched (see flushDirty).
+constexpr int ST_AX = CX, ST_AY = 196, ST_R = 74;
 inline void statusPage(uint16_t *fb, int kind, uint16_t accent, const char *title, const char *sub, uint32_t now, bool full, int waitSec = -1) {
   State &S = st(); if (!S.ok) return;
-  static int shownSec = -2;
+  if (kind == 0 || kind == 1) accent = CYAN;         // searching / connecting always use the theme colour; the error states keep the colour the caller asked for
+  static bool hintShown = false;
   if (full) {
-    shownSec = -2;
+    hintShown = false;
     for (int i = 0; i < W * H; i++) fb[i] = BG;
     ringAA(fb, CX, CY, 235.5f, 238.5f, BEZEL);
-    textC(fb, F_TTL, title, CX, 274, WHITE);
-    if (sub[0]) textC(fb, F_SML, sub, CX, 304, DIM);
-    // three steps: scan -> connect -> live. The current one glows in the accent colour (error states point at the step that failed).
-    int cur = kind == 0 ? 0 : kind == 1 ? 1 : kind == 2 ? 0 : kind == 3 ? 2 : -1;
-    static const char *lab[3] = {"SCAN", "CONNECT", "LIVE"};
-    for (int k = 0; k < 3 && cur >= 0; k++) {
-      float x = CX + (k - 1) * 84.0f, y = 352;
-      if (k < 2) taper(fb, x + 10, y, x + 74, y, 0.7f, 0.7f, k < cur ? mix(BG, accent, 110) : FAINT);
-      if (k == cur) { discAA(fb, x, y, 8, mix(BG, accent, 60)); discAA(fb, x, y, 4.5f, accent); }
-      else if (k < cur) discAA(fb, x, y, 3.5f, mix(BG, accent, 140));
-      else ringAA(fb, x, y, 2, 3.5f, FAINT);
-      textC(fb, F_SML, lab[k], (int)x, 366, k == cur ? WHITE : (k < cur ? DIM : FAINT));
-    }
+    textC(fb, F_TTL, title, CX, 300, WHITE);                       // one title and one short line, nothing else
+    if (sub[0]) textC(fb, F_SML, sub, CX, 330, DIM);
     S.page = -1;                                   // the dial pages must rebuild their static layer next time
     mark(S, 0, 0, W - 1, H - 1);
   }
-  if (waitSec != shownSec) {                       // the waiting time, redrawn once a second
-    shownSec = waitSec;
-    for (int y = 318; y <= 334; y++) for (int x = CX - 130; x <= CX + 130; x++) fb[y * W + x] = BG;
-    if (waitSec >= 0) { char t[40]; if (waitSec >= 15) snprintf(t, sizeof(t), "%d S   TAP TO SKIP", waitSec); else snprintf(t, sizeof(t), "%d S", waitSec); textC(fb, F_SML, t, CX, 320, FAINT); }
-    mark(S, CX - 130, 318, CX + 130, 334);
+  const bool hint = waitSec >= 15;                 // after a long wait: a quiet hint that a tap skips the wait
+  if (hint != hintShown) {
+    hintShown = hint;
+    for (int y = 362; y <= 378; y++) for (int x = CX - 100; x <= CX + 100; x++) fb[y * W + x] = BG;
+    if (hint) textC(fb, F_SML, "TAP TO SKIP", CX, 364, FAINT);
+    mark(S, CX - 100, 362, CX + 100, 378);
   }
   const int AX = ST_AX, AY = ST_AY;
   for (int y = AY - ST_R; y <= AY + ST_R; y++) for (int x = AX - ST_R; x <= AX + ST_R; x++) fb[y * W + x] = BG;
   const float t = (float)now;
-  // a comet: a bright head with a fading tail running round a ring (dir +1 clockwise, -1 counter-clockwise)
-  auto comet = [&](float r0, float r1, float speed, int dir, float tail, float trackA) {
-    float head = fmodf(t * speed, 360.0f); if (dir < 0) head = 360.0f - head;
+  // a comet: a bright head with a fading tail running round the ring (the logo's gauge ring, in motion)
+  auto comet = [&](float r0, float r1, float speed, float tail, float trackA) {
+    float head = fmodf(t * speed, 360.0f);
     annulus(AX, AY, r0, r1, [&](int x, int y, float d, float dx, float dy) {
       float th = atan2f(dx, -dy) * 57.29578f; if (th < 0) th += 360.0f;
-      float delta = dir > 0 ? head - th : th - head; delta = fmodf(delta + 720.0f, 360.0f);
+      float delta = fmodf(head - th + 720.0f, 360.0f);
       float a = delta < tail ? (1.0f - delta / tail) : 0.0f; a = a * a;
       a = trackA + (1.0f - trackA) * a;
       float edge = clamp01(fminf(d - r0, r1 - d) + 0.5f);
@@ -1144,27 +1134,22 @@ inline void statusPage(uint16_t *fb, int kind, uint16_t accent, const char *titl
     });
   };
   const float pulse = 0.5f + 0.5f * sinf(t * 0.004f);
-  if (kind == 0) {                                  // radar: two pulses spreading out from a dot, plus a slow ring
-    for (int k = 0; k < 2; k++) {
-      float ph = fmodf(t / 2200.0f + k * 0.5f, 1.0f), r = 8 + 52 * ph, a = (1.0f - ph) * (1.0f - ph) * 0.85f;
-      ringAA(fb, AX, AY, r - 0.9f, r + 0.9f, mix(BG, accent, (int)(a * 255)));
-    }
-    comet(40, 44, 0.20f, 1, 110, 0.10f);
-    discAA(fb, AX, AY, 9, mix(BG, accent, 50)); discAA(fb, AX, AY, 4.5f, accent);
-  } else if (kind == 1) {                           // connecting: outer arc clockwise, inner arc the other way, a breathing core
-    comet(46, 50, 0.34f, 1, 150, 0.10f);
-    comet(29, 33, 0.46f, -1, 120, 0.10f);
-    discAA(fb, AX, AY, 7 + 2 * pulse, mix(BG, accent, 60)); discAA(fb, AX, AY, 4, accent);
+  if (kind == 0) {                                  // searching: a slow comet round the ring, a breathing dot in the middle
+    comet(60, 64, 0.16f, 140, 0.10f);
+    discAA(fb, AX, AY, 8 + 3 * pulse, mix(BG, accent, 60)); discAA(fb, AX, AY, 4.5f, accent);
+  } else if (kind == 1) {                           // connecting: the same ring, faster, with a steady dot
+    comet(60, 64, 0.34f, 150, 0.10f);
+    discAA(fb, AX, AY, 9, mix(BG, accent, 60)); discAA(fb, AX, AY, 5, accent);
   } else if (kind == 2) {                           // not found: a quiet ring and an exclamation mark
-    ringAA(fb, AX, AY, 41, 44.5f, mix(BG, accent, (int)((0.22f + 0.18f * pulse) * 255)));
-    taper(fb, AX, AY - 20, AX, AY + 3, 3.8f, 2.8f, accent); discAA(fb, AX, AY + 15, 3.8f, accent);
+    ringAA(fb, AX, AY, 60, 64, mix(BG, accent, (int)((0.25f + 0.20f * pulse) * 255)));
+    taper(fb, AX, AY - 22, AX, AY + 4, 4.2f, 3.2f, accent); discAA(fb, AX, AY + 17, 4.2f, accent);
   } else if (kind == 3) {                           // link lost: a broken ring and a cross
     uint16_t c = mix(BG, accent, (int)((0.55f + 0.30f * pulse) * 255));
-    arcAA(fb, AX, AY, 41, 44.5f, 28, 152, c); arcAA(fb, AX, AY, 41, 44.5f, -152, -28, c);
-    taper(fb, AX - 11, AY - 11, AX + 11, AY + 11, 3.2f, 3.2f, accent); taper(fb, AX + 11, AY - 11, AX - 11, AY + 11, 3.2f, 3.2f, accent);
+    arcAA(fb, AX, AY, 60, 64, 28, 152, c); arcAA(fb, AX, AY, 60, 64, -152, -28, c);
+    taper(fb, AX - 12, AY - 12, AX + 12, AY + 12, 3.4f, 3.4f, accent); taper(fb, AX + 12, AY - 12, AX - 12, AY + 12, 3.4f, 3.4f, accent);
   } else {
-    comet(40, 44.5f, 0.30f, 1, 150, 0.10f);
-    discAA(fb, AX, AY, 4, accent);
+    comet(60, 64, 0.30f, 150, 0.10f);
+    discAA(fb, AX, AY, 4.5f, accent);
   }
   mark(S, AX - ST_R, AY - ST_R, AX + ST_R, AY + ST_R);
 }
