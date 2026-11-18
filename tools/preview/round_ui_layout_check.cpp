@@ -106,38 +106,40 @@ int main() {
     if (rui::HI_Y0 + (rui::HI_H + rui::HI_GAP) * 6 > 400) { puts("  history rows run too low"); totalBad++; }
   }
 
-  // ---- Settings hub: five rows with the longest plausible values, and the BACK chip shared by the sub-screens ----
+  // ---- Settings: one setting at a time. Every setting of the hub with the longest plausible values, the options screens (both kinds, every item), the BACK label ----
   {
-    rui::Data d; d.dotN = 13; d.dotCur = 12;
-    const char *lab[5] = {"BRIGHTNESS", "UNITS", "WARNINGS", "THEME", "DEBUG"}, *val[5] = {"100 %", "KMH C BAR", "4 CHANGED", "SPORT RED", "cluster2"};
-    d.settings.n = 5;
-    for (int i = 0; i < 5; i++) { snprintf(d.settings.row[i].label, sizeof(d.settings.row[i].label), "%s", lab[i]); snprintf(d.settings.row[i].value, sizeof(d.settings.row[i].value), "%s", val[i]); d.settings.row[i].icon = (uint8_t)(rui::IC_SUN + (i & 1)); }
-    rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
-    rui::frame(fb.data(), rui::PG_SETTINGS, d, 1000, true);
-    int bad = check("settings-hub", rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
-    printf("%-14s %3d records, %d problems\n", "settings-hub", (int)rui::layoutLog().size(), bad);
+    const int scaleHero[] = {13, 11, 16, 21, 44};          // + the 44 px hero number of the - / + screens
+    const char *lab[5] = {"BRIGHTNESS", "UNITS", "WARNINGS", "THEME", "DEBUG"}, *val[5] = {"100 %", "KMH C BAR", "4 CHANGED", "TRACK ORANGE", "cluster2"};
+    for (int sel = 0; sel < 5; sel++) {
+      rui::Data d; d.dotN = 13; d.dotCur = 12; d.settings.n = 5; d.settings.sel = sel;
+      for (int i = 0; i < 5; i++) { snprintf(d.settings.row[i].label, sizeof(d.settings.row[i].label), "%s", lab[i]); snprintf(d.settings.row[i].value, sizeof(d.settings.row[i].value), "%s", val[i]); d.settings.row[i].icon = (uint8_t)(rui::IC_SUN + (i & 1)); }
+      rui::layoutLog().clear(); rui::State &S = rui::st(); S.page = -1; S.lastT = 0;
+      rui::frame(fb.data(), rui::PG_SETTINGS, d, 1000, true);
+      char nm[24]; snprintf(nm, sizeof(nm), "settings-hub-%d", sel);
+      int bad = check(nm, rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
+      printf("%-14s %3d records, %d problems\n", nm, (int)rui::layoutLog().size(), bad);
+    }
     rui::layoutLog().clear(); rui::backChip(fb.data());
-    bad = check("back-chip", rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
-    printf("%-14s %3d records, %d problems\n", "back-chip", (int)rui::layoutLog().size(), bad);
-    // options screens: worst-case labels and values, both row kinds
-    for (int kind = 0; kind < 2; kind++) {
-      rui::Data o; o.dotN = 13; o.dotCur = 12; strcpy(o.opts.title, "WARNINGS"); o.opts.n = 5; o.opts.swatch = kind == 0;
+    int bad = check("back-label", rui::layoutLog(), scaleNew, 4, true); totalBad += bad;
+    printf("%-14s %3d records, %d problems\n", "back-label", (int)rui::layoutLog().size(), bad);
+    for (int kind = 0; kind < 2; kind++) for (int sel = 0; sel < (kind ? 5 : 3); sel++) {
+      rui::Data o; o.dotN = 13; o.dotCur = 12; strcpy(o.opts.title, kind ? "WARNINGS" : "THEME"); o.opts.n = kind ? 5 : 3; o.opts.sel = sel; o.opts.swatch = kind == 0;
       const char *ol[5] = {"COOL WARM", "COOL HOT", "BATT LOW", "FUEL LOW", "REDLINE"}, *ov[5] = {"226 F", "226 F", "14.0 V", "50 %", "10000"};
-      const char *cl[5] = {"SPEED", "TEMPERATURE", "PRESSURE", "LOOK", "COLOUR"}, *cv[5] = {"MPH", "F", "PSI", "TRACK ORANGE", "VIOLET"};
-      for (int k = 0; k < 5; k++) { snprintf(o.opts.row[k].label, sizeof(o.opts.row[k].label), "%s", kind ? ol[k] : cl[k]); snprintf(o.opts.row[k].value, sizeof(o.opts.row[k].value), "%s", kind ? ov[k] : cv[k]); o.opts.row[k].kind = (uint8_t)kind; }
-      if (kind == 0) o.opts.n = 5;
+      const char *cl[5] = {"LOOK", "COLOUR", "GAUGE", "", ""}, *cv[5] = {"TRACK ORANGE", "VIOLET", "TICKS", "", ""};
+      for (int k = 0; k < o.opts.n; k++) { snprintf(o.opts.row[k].label, sizeof(o.opts.row[k].label), "%s", kind ? ol[k] : cl[k]); snprintf(o.opts.row[k].value, sizeof(o.opts.row[k].value), "%s", kind ? ov[k] : cv[k]); o.opts.row[k].kind = (uint8_t)kind; }
       rui::layoutLog().clear(); rui::State &S2 = rui::st(); S2.page = -1; S2.lastT = 0;
       rui::frame(fb.data(), rui::PG_OPTIONS, o, 1000, true);
-      char nm[24]; snprintf(nm, sizeof(nm), "options-%s", kind ? "steppers" : "cycle");
-      int bad2 = check(nm, rui::layoutLog(), scaleNew, 4, true); totalBad += bad2;
-      printf("%-14s %3d records, %d problems\n", nm, (int)rui::layoutLog().size(), bad2);
+      char nm[24]; snprintf(nm, sizeof(nm), "options-%s-%d", kind ? "step" : "cycle", sel);
+      int bad2 = check(nm, rui::layoutLog(), kind ? scaleHero : scaleNew, kind ? 5 : 4, true); totalBad += bad2;
+      printf("%-18s %3d records, %d problems\n", nm, (int)rui::layoutLog().size(), bad2);
     }
-    // the stepper chips must not overlap each other
-    if (rui::OPT_MINUS_X + rui::OPT_BTN_W >= rui::OPT_PLUS_X || rui::optionPart(1, rui::OPT_PLUS_X + 5) != 2 || rui::optionPart(1, rui::OPT_MINUS_X + 5) != 1 || rui::optionPart(1, rui::ST_ROW_X0 + 30) != -1) { puts("  stepper hit zones wrong"); totalBad++; }
-    // the hub rows, the BACK chip and the brightness presets must not touch each other's touch zones
-    for (int i = 0; i < 5; i++) { int y = rui::ST_ROW_Y0 + (rui::ST_ROW_H + rui::ST_ROW_GAP) * i + rui::ST_ROW_H / 2; if (rui::settingsRowAt(rui::CX, y) != i) { printf("  settings row %d hit test fails\n", i); totalBad++; } }
-    if (rui::backAt(rui::CX, rui::BACK_Y + rui::BACK_H / 2) != 1 || rui::backAt(rui::CX, rui::BR_PRESET_Y1 - 4) == 1) { puts("  BACK hit zone overlaps the brightness presets or misses the chip"); totalBad++; }
-    if (rui::BR_PRESET_Y1 + 6 > rui::BACK_Y - 4) { puts("  brightness presets too close to the BACK chip"); totalBad++; }
+    // touch zones: the arrows, the middle, the - / + circles, BACK, and no overlaps with the brightness presets
+    if (rui::focusZoneAt(60, 176) != 1 || rui::focusZoneAt(420, 176) != 2 || rui::focusZoneAt(rui::CX, 256) != 0 || rui::focusZoneAt(rui::CX, 450) != -1) { puts("  hub zones wrong"); totalBad++; }
+    if (rui::optZoneAt(1, rui::CX - rui::OPT_BTN_DX, rui::OPT_BTN_CY) != 3 || rui::optZoneAt(1, rui::CX + rui::OPT_BTN_DX, rui::OPT_BTN_CY) != 4 || rui::optZoneAt(1, 60, 176) != 1 || rui::optZoneAt(1, 420, 176) != 2 || rui::optZoneAt(1, rui::CX, 210) != -1) { puts("  stepper zones wrong"); totalBad++; }
+    if (rui::optZoneAt(0, rui::CX, 210) != 5 || rui::optZoneAt(0, 60, 176) != 1 || rui::optZoneAt(0, rui::CX, 330) != -1) { puts("  cycle zones wrong"); totalBad++; }
+    if (rui::backAt(rui::CX, rui::BACK_Y + rui::BACK_H / 2) != 1 || rui::backAt(rui::CX, rui::BR_PRESET_Y1 - 4) == 1) { puts("  BACK hit zone overlaps the brightness presets or misses the label"); totalBad++; }
+    if (rui::BR_PRESET_Y1 + 6 > rui::BACK_Y - 4) { puts("  brightness presets too close to the BACK label"); totalBad++; }
+    if (rui::OPT_BTN_CY + rui::OPT_BTN_R + 14 >= rui::BACK_Y - 20) { puts("  - / + circles too close to BACK"); totalBad++; }
   }
 
   // ---- the other pages, for information only (not part of the clean-up scope) ----

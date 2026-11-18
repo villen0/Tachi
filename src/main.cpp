@@ -928,6 +928,7 @@ static void gZeroNow() { gMeter.zero(gLastAcc, gLastGyro); }    // the ZERO chip
 // UI-side state of the two report pages
 // Settings page: the hub, or one of its sub-screens (UI task only). Leaving the page always returns to the hub.
 enum { SUB_HUB, SUB_BRIGHT, SUB_DEBUG, SUB_UNITS, SUB_WARN, SUB_THEME };
+static int settingsSel = 0, optSel = 0;              // the setting shown on the hub / the item shown on an options screen (one at a time)
 static int settingsSub = SUB_HUB;                    // which Settings screen is showing
 static const int SETTINGS_ROWS = 5;                  // rows of the hub
 static const int ROW_SUB[SETTINGS_ROWS] = {SUB_BRIGHT, SUB_UNITS, SUB_WARN, SUB_THEME, SUB_DEBUG};
@@ -955,7 +956,7 @@ static void pollTouch() {
   static bool slider = false;               // the finger went down on the brightness slider: it drags the slider, nothing else
   static bool preset = false;               // ... or on one of the preset chips: it jumps to that level
   static int tripChip = -1, codeBtn = -1, histRow = -1;   // drive report chip / fault codes button the finger went down on (-1 none)
-  static int setRow = -1, optRow = -1, optPart = 0; static bool backBtn = false, zeroBtn = false;   // Settings hub row / options row (and its - / + part) / BACK chip the finger went down on
+  static int setRow = -1, optRow = -1; static bool backBtn = false, zeroBtn = false;   // Settings hub zone (open / previous / next) / options zone (value, - / +, previous / next) / BACK the finger went down on
   static uint32_t holdStart = 0; static bool clearFired = false;
   uint32_t ms = millis();
   if (ms - lastPoll < 15) return;
@@ -969,11 +970,8 @@ static void pollTouch() {
     if (!btnDown) { swallowTouch = !screenLit; btnDown = true; btnDownMs = ms; btnLongFired = false; sx = x; sy = y; slider = (inBrightness() && y >= rui::BR_ZONE_Y0 && y <= rui::BR_ZONE_Y1); preset = (inBrightness() && rui::presetAt(x, y) >= 0);
       tripChip = (!swallowTouch && page == PAGE_TRIP) ? rui::tripChipAt(x, y) : -1; codeBtn = (!swallowTouch && page == PAGE_CODES) ? rui::codesButtonAt(x, y) : -1;
       histRow = (!swallowTouch && page == PAGE_HISTORY) ? rui::histRowAt(x, y) : -1; if (histRow >= (demo ? 4 : histRows())) histRow = -1;   // a touch that only wakes the screen never presses a button
-      setRow = (!swallowTouch && page == PAGE_SETTINGS && settingsSub == SUB_HUB) ? rui::settingsRowAt(x, y) : -1;
-      optRow = (!swallowTouch && page == PAGE_SETTINGS && optCount(settingsSub) > 0) ? rui::settingsRowAt(x, y) : -1;
-      if (optRow >= optCount(settingsSub)) optRow = -1;
-      optPart = optRow >= 0 ? rui::optionPart(optKind(settingsSub), x) : -1; if (optPart < 0) optRow = -1;   // a stepper's label and value are not buttons
-      if (setRow >= SETTINGS_ROWS) setRow = -1;                                // the empty part of the hub is an ordinary tap area
+      setRow = (!swallowTouch && page == PAGE_SETTINGS && settingsSub == SUB_HUB) ? rui::focusZoneAt(x, y) : -1;             // -1: the rest of the hub is an ordinary tap / swipe area
+      optRow = (!swallowTouch && page == PAGE_SETTINGS && optCount(settingsSub) > 0) ? rui::optZoneAt(optKind(settingsSub), x, y) : -1;
       backBtn = (!swallowTouch && page == PAGE_SETTINGS && settingsSub != 0 && rui::backAt(x, y) > 0 && !slider && !preset);
       zeroBtn = (!swallowTouch && page == PAGE_GFORCE && rui::gforceZeroAt(x, y) > 0);
       if (tripChip >= 0 || codeBtn >= 0 || histRow >= 0 || setRow >= 0 || optRow >= 0 || backBtn || zeroBtn) btnLongFired = true;   // a button press: not a page tap, a swipe or the demo long press
@@ -995,12 +993,20 @@ static void pollTouch() {
       bool movedZ = abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX;
       if (!movedZ) { if (rui::gforceZeroAt(lx, ly) > 0) gZeroNow(); return; }
     }
-    if (setRow >= 0 || optRow >= 0 || backBtn) {                                                           // Settings: open a row, change an option, or go back to the hub
-      int sr = setRow, orow = optRow, opart = optPart; bool bk = backBtn; setRow = optRow = -1; backBtn = false;
+    if (setRow >= 0 || optRow >= 0 || backBtn) {                                                           // Settings: move between items, open / change one, or go back
+      int sr = setRow, orow = optRow; bool bk = backBtn; setRow = optRow = -1; backBtn = false;
       bool moved = abs(lx - sx) > TAP_MAX_PX || abs(ly - sy) > TAP_MAX_PX;       // a finger that travelled is a swipe, not a press: handled below
       if (!moved) {
-        if (sr >= 0 && rui::settingsRowAt(lx, ly) == sr) { settingsSub = ROW_SUB[sr]; forceDraw = true; }
-        if (orow >= 0 && rui::settingsRowAt(lx, ly) == orow && rui::optionPart(optKind(settingsSub), lx) == opart) optApply(settingsSub, orow, opart);
+        if (sr >= 0 && rui::focusZoneAt(lx, ly) == sr) {
+          if (sr == 1) settingsSel = (settingsSel + SETTINGS_ROWS - 1) % SETTINGS_ROWS; else if (sr == 2) settingsSel = (settingsSel + 1) % SETTINGS_ROWS;
+          else { settingsSub = ROW_SUB[settingsSel]; optSel = 0; }
+          forceDraw = true;
+        }
+        if (orow >= 0 && rui::optZoneAt(optKind(settingsSub), lx, ly) == orow) {
+          int cnt = optCount(settingsSub);
+          if (orow == 1) { optSel = (optSel + cnt - 1) % cnt; forceDraw = true; } else if (orow == 2) { optSel = (optSel + 1) % cnt; forceDraw = true; }
+          else optApply(settingsSub, optSel, orow == 3 ? 1 : (orow == 4 ? 2 : 0));
+        }
         if (bk && rui::backAt(lx, ly) > 0) { settingsSub = 0; forceDraw = true; }
         return;
       }
@@ -1409,12 +1415,13 @@ static void fillSettingsData(rui::Data &d) {
   int ch = settings::warnChanged(cfg); if (ch) snprintf(b, sizeof(b), "%d CHANGED", ch); else snprintf(b, sizeof(b), "STANDARD"); row(2, "WARNINGS", b, rui::IC_ENGINE);
   row(3, "THEME", theme::look(cfg.theme).name, rui::IC_AIR);
   row(4, "DEBUG", FW_TAG, rui::IC_BUG);
-  d.ver = backlightPct + 128 * ch + 4096 * cfg.theme + 65536 * cfg.speedKmh + 131072 * cfg.tempC + 262144 * cfg.pressBar;
+  v.sel = settingsSel;
+  d.ver = (backlightPct + 128 * ch + 4096 * cfg.theme + 65536 * cfg.speedKmh + 131072 * cfg.tempC + 262144 * cfg.pressBar) * 8 + settingsSel;
 }
 
 // The options screens: units (tap to switch), warnings (- value +), theme (tap to switch look / colour mode).
 static void fillOptionsData(rui::Data &d, int sub) {
-  rui::OptionsView &o = d.opts; o = rui::OptionsView(); o.n = optCount(sub);
+  rui::OptionsView &o = d.opts; o = rui::OptionsView(); o.n = optCount(sub); o.sel = optSel < o.n ? optSel : 0;
   auto row = [&](int i, const char *label, const char *value) { snprintf(o.row[i].label, sizeof(o.row[i].label), "%s", label); snprintf(o.row[i].value, sizeof(o.row[i].value), "%s", value); o.row[i].kind = (uint8_t)optKind(sub); };
   if (sub == SUB_UNITS) {
     snprintf(o.title, sizeof(o.title), "UNITS");
@@ -1426,7 +1433,7 @@ static void fillOptionsData(rui::Data &d, int sub) {
     snprintf(o.title, sizeof(o.title), "THEME"); o.swatch = true;
     row(0, "LOOK", theme::look(cfg.theme).name); row(1, "COLOUR", theme::modeName(cfg.mode)); row(2, "GAUGE", GAUGE_NAMES[gaugeStyle]);
   }
-  d.ver = (int)((uint32_t)(sub * 1000003u + cfg.speedKmh * 7u + cfg.tempC * 11u + cfg.pressBar * 13u + cfg.theme * 17u + cfg.mode * 19u + (uint32_t)cfg.coolWarnC * 23u + (uint32_t)cfg.coolHotC * 29u + cfg.battLowDeciV * 31u + cfg.fuelLowPct * 37u + cfg.redlineRpm * 41u + gaugeStyle * 43u) & 0x3FFFFFFF);
+  d.ver = (int)((uint32_t)(sub * 1000003u + cfg.speedKmh * 7u + cfg.tempC * 11u + cfg.pressBar * 13u + cfg.theme * 17u + cfg.mode * 19u + (uint32_t)cfg.coolWarnC * 23u + (uint32_t)cfg.coolHotC * 29u + cfg.battLowDeciV * 31u + cfg.fuelLowPct * 37u + cfg.redlineRpm * 41u + gaugeStyle * 43u + (uint32_t)o.sel * 47u) & 0x3FFFFFFF);
 }
 
 // Navigation page data: the latest turn from the phone (demo mode: a made-up route). The street is cut to fit the display.

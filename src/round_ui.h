@@ -181,10 +181,10 @@ struct CodesView {
 };
 // Settings hub: one tappable row per section (icon, label, current value).
 struct SettingsRow { char label[16] = ""; char value[16] = ""; uint8_t icon = 0; };
-struct SettingsView { int n = 0; SettingsRow row[5]; };
+struct SettingsView { int n = 0, sel = 0; SettingsRow row[5]; };   // sel: the setting shown (one at a time)
 // Options screen (units, warnings, theme): rows with a label and either a value you tap to change (kind 0) or a - value + stepper (kind 1).
 struct OptRow { char label[16] = ""; char value[16] = ""; uint8_t kind = 0; };
-struct OptionsView { char title[16] = ""; int n = 0; OptRow row[5]; bool swatch = false; };   // swatch: show the gradient of the chosen look under the rows
+struct OptionsView { char title[16] = ""; int n = 0, sel = 0; OptRow row[5]; bool swatch = false; };   // sel: the item shown (one at a time)   // swatch: show the gradient of the chosen look under the rows
 // G-force page: positions in g (x: right is positive, y: accelerating is positive), the last second as a trail, and the peak.
 struct GForceView {
   bool have = false; float x = 0, y = 0, total = 0, peak = 0, peakX = 0, peakY = 0;
@@ -361,19 +361,20 @@ inline int histRowAt(int x, int y) {
   for (int i = 0; i < 6; i++) { int y0 = HI_Y0 + (HI_H + HI_GAP) * i; if (y >= y0 - 2 && y <= y0 + HI_H + 2) return i; }
   return -1;
 }
-// Settings hub rows and the BACK chip of the sub-screens (brightness, debug)
-constexpr int ST_ROW_X0 = 90, ST_ROW_W = 300, ST_ROW_Y0 = 104, ST_ROW_H = 52, ST_ROW_GAP = 8;
-inline int settingsRowAt(int x, int y) {                                      // which row (0..4) is under the finger, or -1
-  if (x < ST_ROW_X0 - 6 || x > ST_ROW_X0 + ST_ROW_W + 6) return -1;
-  for (int i = 0; i < 5; i++) { int y0 = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * i; if (y >= y0 - 3 && y <= y0 + ST_ROW_H + 3) return i; }
-  return -1;
+// Settings: one setting at a time. ‹ › at the sides move to the previous / next one, the middle acts (hub: open it; options: change the value, or - / + below it).
+constexpr int FC_ICON_Y = 172, OPT_VAL_Y = 196, OPT_BTN_CY = 304, OPT_BTN_DX = 90, OPT_BTN_R = 30;
+inline int focusZoneAt(int x, int y) {                                        // hub: 1 previous, 2 next, 0 open, -1 elsewhere
+  if (y < 104 || y > 360) return -1;
+  return x <= 150 ? 1 : (x >= 330 ? 2 : 0);
 }
-constexpr int OPT_BTN_W = 34, OPT_BTN_H = 28, OPT_PLUS_X = ST_ROW_X0 + ST_ROW_W - 10 - OPT_BTN_W, OPT_MINUS_X = OPT_PLUS_X - 104;   // - / + chips of a stepper row
-// 0 = tap on the row (kind 0), 1 = minus, 2 = plus, -1 = a stepper row's label / value (does nothing)
-inline int optionPart(int kind, int x) {
-  if (kind == 0) return 0;
-  if (x >= OPT_PLUS_X - 8) return 2;
-  if (x >= OPT_MINUS_X - 8 && x <= OPT_MINUS_X + OPT_BTN_W + 8) return 1;
+// options: 1 previous item, 2 next item, 3 minus, 4 plus (kind 1 rows), 5 change the value (kind 0 rows), -1 elsewhere
+inline int optZoneAt(int kind, int x, int y) {
+  if (y >= 104 && y <= 250) { if (x <= 120) return 1; if (x >= 360) return 2; }
+  if (kind == 1) {
+    float dy = (float)(y - OPT_BTN_CY);
+    if (hypotf((float)(x - (CX - OPT_BTN_DX)), dy) <= OPT_BTN_R + 14) return 3;
+    if (hypotf((float)(x - (CX + OPT_BTN_DX)), dy) <= OPT_BTN_R + 14) return 4;
+  } else if (x >= 110 && x <= 370 && y >= 160 && y <= 290) return 5;
   return -1;
 }
 // G-force page: the circle (1.0 g at its edge), the title and value on top, a ZERO chip below it
@@ -469,6 +470,25 @@ inline void navArrow(uint16_t *b, int dir, uint16_t col) {
     case 11: ringAA(b, cx, cy, 30, 40, col); discAA(b, cx, cy, 15, col); break;      // arrived: a target
     default: break;
   }
+}
+// ---- Settings drawing helpers (the clean look: thin lines, outlines, no boxes) ----
+inline void chevron(uint16_t *b, float x, float y, int dir, uint16_t c) {       // dir -1: ‹  +1: ›
+  taper(b, x - dir * 5, y - 11, x + dir * 5, y, 1.5f, 1.5f, c); taper(b, x + dir * 5, y, x - dir * 5, y + 11, 1.5f, 1.5f, c);
+}
+inline void focusDots(uint16_t *b, int n, int sel, int y) {
+  for (int i = 0; i < n; i++) { float x = CX + (i - (n - 1) / 2.0f) * 20.0f; if (i == sel) discAA(b, x, y, 4.5f, CYAN); else discAA(b, x, y, 3.0f, FAINT); }
+}
+inline void outlinePill(uint16_t *b, int cx, int cy, int w, int h, uint16_t c) {   // a thin rounded outline
+  float r = h / 2.0f;
+  for (int y = cy - h / 2 - 2; y <= cy + h / 2 + 2; y++) for (int x = cx - w / 2 - 2; x <= cx + w / 2 + 2; x++) {
+    float qx = fabsf(x + 0.5f - cx) - (w / 2.0f - r), qy = fabsf(y + 0.5f - cy) - (h / 2.0f - r);
+    float d = sqrtf((qx > 0 ? qx : 0) * (qx > 0 ? qx : 0) + (qy > 0 ? qy : 0) * (qy > 0 ? qy : 0)) + fminf(fmaxf(qx, qy), 0.0f) - r;
+    blendPx(b, x, y, c, (int)(clamp01(0.9f - fabsf(d + 0.6f)) * 255));
+  }
+}
+inline void backLabel(uint16_t *b) {                                              // "‹ BACK" in plain text (tap zone: backAt)
+  const int w = textW(F_LBL, "BACK"), x0 = CX - (w + 14) / 2;
+  chevron(b, x0 + 4, BACK_Y + BACK_H / 2, -1, DIM); text(b, F_LBL, "BACK", x0 + 14, BACK_Y + (BACK_H - F_LBL.h) / 2, DIM);
 }
 inline void buildStyle(State &S, int pg, const Data &d) {
   uint16_t *b = S.bg; char t[16];
@@ -575,35 +595,40 @@ inline void buildStyle(State &S, int pg, const Data &d) {
     chip(b, cdBtnX(0), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, CYAN, "READ");
     chip(b, cdBtnX(1), CD_BTN_Y, CD_BTN_W, CD_BTN_H, false, RED, "CLEAR");
     taper(b, cdBtnX(1) + 6, CD_BTN_Y + CD_BTN_H + 8, cdBtnX(1) + CD_BTN_W - 6, CD_BTN_Y + CD_BTN_H + 8, 3, 3, PANEL);
-  } else if (pg == PG_SETTINGS) {
-    textC(b, F_LBL, "SETTINGS", CX, 74, CYAN);
-    for (int i = 0; i < d.settings.n && i < 5; i++) {
-      const SettingsRow &R = d.settings.row[i]; int y = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * i;
-      pill(b, CX, y, ST_ROW_W, ST_ROW_H, "");
-      iconDraw(b, R.icon, ST_ROW_X0 + 26, y + ST_ROW_H / 2, CYAN);
-      text(b, F_LBL, R.label, ST_ROW_X0 + 46, y + (ST_ROW_H - F_LBL.h) / 2, WHITE);
-      if (R.value[0]) text(b, F_SML, R.value, ST_ROW_X0 + ST_ROW_W - 14 - textW(F_SML, R.value), y + (ST_ROW_H - F_SML.h) / 2, DIM);
-    }
-  } else if (pg == PG_OPTIONS) {
-    const OptionsView &O = d.opts;
-    textC(b, F_LBL, O.title, CX, 74, CYAN);
-    for (int i = 0; i < O.n && i < 5; i++) {
-      const OptRow &R = O.row[i]; int y = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * i;
-      pill(b, CX, y, ST_ROW_W, ST_ROW_H, "");
-      text(b, F_SML, R.label, ST_ROW_X0 + 16, y + (ST_ROW_H - F_SML.h) / 2, WHITE);
-      if (R.kind == 0) text(b, F_LBL, R.value, ST_ROW_X0 + ST_ROW_W - 16 - textW(F_LBL, R.value), y + (ST_ROW_H - F_LBL.h) / 2, CYAN);
-      else {
-        const int cy0 = y + (ST_ROW_H - OPT_BTN_H) / 2;
-        chip(b, OPT_MINUS_X, cy0, OPT_BTN_W, OPT_BTN_H, false, CYAN, "-");
-        chip(b, OPT_PLUS_X, cy0, OPT_BTN_W, OPT_BTN_H, false, CYAN, "+");
-        textC(b, F_SML, R.value, (OPT_MINUS_X + OPT_BTN_W + OPT_PLUS_X) / 2, y + (ST_ROW_H - F_SML.h) / 2, WHITE);
+  } else if (pg == PG_SETTINGS) {                  // one setting at a time: a ring with its icon, the name, the value, dots for the others
+    const SettingsView &V = d.settings; const int n = V.n > 0 ? V.n : 1, sel = V.sel < n ? V.sel : 0; const SettingsRow &R = V.row[sel];
+    textC(b, F_LBL, "SETTINGS", CX, 62, CYAN);
+    ringAA(b, CX, FC_ICON_Y, 44.6f, 46.2f, PANEL_EDGE);
+    iconDraw(b, R.icon, CX, FC_ICON_Y, CYAN);
+    textC(b, F_TTL, R.label, CX, 256, WHITE);
+    if (R.value[0]) textC(b, F_SML, R.value, CX, 284, DIM);
+    focusDots(b, n, sel, 326);
+    chevron(b, 58, FC_ICON_Y, -1, FAINT); chevron(b, 422, FC_ICON_Y, 1, FAINT);
+    textC(b, F_SML, "TAP TO OPEN", CX, 354, FAINT);
+  } else if (pg == PG_OPTIONS) {                   // one item at a time: its name, the value (tap it, or - / + below), dots for the others
+    const OptionsView &O = d.opts; const int n = O.n > 0 ? O.n : 1, sel = O.sel < n ? O.sel : 0; const OptRow &R = O.row[sel];
+    textC(b, F_LBL, O.title, CX, 62, CYAN);
+    textC(b, F_LBL, R.label, CX, 128, DIM);
+    if (R.kind == 0) {
+      int pw = textW(F_TTL, R.value) + 60; if (pw < 160) pw = 160;
+      outlinePill(b, CX, 210, pw, 52, PANEL_EDGE);
+      textC(b, F_TTL, R.value, CX, 210 - F_TTL.h / 2, WHITE);
+      textC(b, F_SML, "TAP TO CHANGE", CX, 252, FAINT);
+      if (O.swatch) {                                // the gradient of the chosen look (rev ring order: cool, mid, warm, hot)
+        const int x0 = CX - 90, x1 = CX + 90, y0 = 300;
+        for (int x = x0; x < x1; x++) { uint16_t c = rpmColor((float)(x - x0) / (x1 - x0) * 7000.0f, 6500); for (int y = y0; y < y0 + 8; y++) b[y * W + x] = c; }
       }
+    } else {
+      char num[16]; snprintf(num, sizeof(num), "%s", R.value); char *sp = strchr(num, ' '); const char *unit = ""; if (sp) { *sp = 0; unit = sp + 1; }
+      textC(b, F_BIG, num, CX, OPT_VAL_Y, WHITE);
+      if (unit[0]) textC(b, F_LBL, unit, CX, OPT_VAL_Y + 58, CYAN);
+      ringAA(b, CX - OPT_BTN_DX, OPT_BTN_CY, OPT_BTN_R - 1.4f, OPT_BTN_R, PANEL_EDGE); taper(b, CX - OPT_BTN_DX - 10, OPT_BTN_CY, CX - OPT_BTN_DX + 10, OPT_BTN_CY, 1.5f, 1.5f, DIM);
+      ringAA(b, CX + OPT_BTN_DX, OPT_BTN_CY, OPT_BTN_R - 1.4f, OPT_BTN_R, CYAN);
+      taper(b, CX + OPT_BTN_DX - 10, OPT_BTN_CY, CX + OPT_BTN_DX + 10, OPT_BTN_CY, 1.5f, 1.5f, CYAN); taper(b, CX + OPT_BTN_DX, OPT_BTN_CY - 10, CX + OPT_BTN_DX, OPT_BTN_CY + 10, 1.5f, 1.5f, CYAN);
     }
-    if (O.swatch) {                                  // the gradient of the chosen look (rev ring order: cool, mid, warm, hot)
-      const int x0 = ST_ROW_X0 + 10, x1 = ST_ROW_X0 + ST_ROW_W - 10, y0 = ST_ROW_Y0 + (ST_ROW_H + ST_ROW_GAP) * O.n + 8;
-      for (int x = x0; x < x1; x++) { uint16_t c = rpmColor((float)(x - x0) / (x1 - x0) * 7000.0f, 6500); for (int y = y0; y < y0 + 14; y++) b[y * W + x] = c; }
-    }
-    chip(b, BACK_X, BACK_Y, BACK_W, BACK_H, false, CYAN, "BACK");
+    focusDots(b, n, sel, 372);
+    chevron(b, 58, 176, -1, FAINT); chevron(b, 422, 176, 1, FAINT);
+    backLabel(b);
   } else if (pg == PG_GFORCE) {
     textC(b, F_LBL, "G-FORCE", CX, 38, CYAN);
     ringAA(b, GF_CX, GF_CY, GF_R * 0.5f - 0.6f, GF_R * 0.5f + 0.6f, FAINT);
@@ -1011,7 +1036,7 @@ inline void chip(uint16_t *b, int x, int y, int w, int h, bool on, uint16_t col,
 }
 // The BACK button of the Settings sub-screens (brightness, debug). Marks what it touched.
 inline void backChip(uint16_t *fb) {
-  chip(fb, BACK_X, BACK_Y, BACK_W, BACK_H, false, CYAN, "BACK");
+  backLabel(fb);
   mark(st(), BACK_X - 2, BACK_Y - 2, BACK_X + BACK_W + 2, BACK_Y + BACK_H + 2);
 }
 // full = draw the whole page; otherwise only the part that changes with the level. Marks what it touched (see flushDirty).
