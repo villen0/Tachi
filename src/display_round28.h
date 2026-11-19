@@ -160,6 +160,9 @@ static void waitBeamPast(int y) {
   }
 }
 
+// One row span of the frame buffer to the panel (the RGB panel is the same size as the frame buffer; the AMOLED board crops, see display_amoled175.h).
+static inline void panelPush(int x, int y, int w, const uint16_t *p) { rgbDisp->draw16bitRGBBitmap(x, y, (uint16_t *)p, w, 1); }
+
 // ---- backlight: PWM level in percent, adjustable from the brightness page and kept across restarts ----
 static int backlightPct = 85;                      // 5..100
 static void loadBacklight() { Preferences pr; if (pr.begin("tachi", true)) { backlightPct = pr.getInt("bl", 85); pr.end(); } if (backlightPct < 5 || backlightPct > 100) backlightPct = 85; }

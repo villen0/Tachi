@@ -1,7 +1,11 @@
 #pragma once
 // Tachi settings for the Waveshare ESP32-S3-Touch-LCD-2.8C (round 480x480 touch display). Pins and panel timings: board_round28.h.
 // ===== User settings =====
-#define FW_TAG "round"   // short feature tag shown with the build time on the Debug page (proves which firmware is flashed)
+#if defined(BOARD_AMOLED175)
+#define FW_TAG "amoled"
+#else
+#define FW_TAG "round"
+#endif   // short feature tag shown with the build time on the Debug page (proves which firmware is flashed)
 // Part of the BLE adapter's name (check with the nRF Connect app or the scan log).
 // Adapters we accept: any advertised name containing one of these (old: "CodeReader31B", new: "OBDII").
 #define ADAPTER_NAME_SUBSTR_1 "CodeReader"
@@ -119,4 +123,8 @@
 #define SCAN_TIME_MS       5000
 
 // ===== Board (pins, panel timings, layout) =====
+#if defined(BOARD_AMOLED175)
+#include "board_amoled175.h"
+#else
 #include "board_round28.h"
+#endif

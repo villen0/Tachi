@@ -5,6 +5,7 @@
 
 #define LCD_W 480
 #define LCD_H 480
+#define CANVAS_OUTPUT rgbDisp   // the frame-buffer canvas flushes straight to the RGB panel (display_round28.h)
 
 // RGB panel (esp_lcd order: DATA0-4 = B0-B4, DATA5-10 = G0-G5, DATA11-15 = R0-R4)
 #define PIN_LCD_HSYNC 38

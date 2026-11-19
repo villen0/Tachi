@@ -2,13 +2,19 @@
 // See README.md.
 #include <Arduino.h>
 #include <NimBLEDevice.h>
+#if !defined(BOARD_AMOLED175)
 #define private public    // see display_round28.h: the vsync hook needs Arduino_ESP32RGBPanel's panel handle
+#endif
 #include <Arduino_GFX_Library.h>
 #undef private
 #include <SD_MMC.h>
 #include <esp_system.h>
 #include "config.h"
+#if defined(BOARD_AMOLED175)
+#include "display_amoled175.h"   // CO5300 AMOLED (QSPI) + CST9217 touch of the 1.75" AMOLED board (env waveshare_s3_amoled175)
+#else
 #include "display_round28.h"   // ST7701 RGB panel + GT911 touch of the round 2.8C board
+#endif
 #include "mochi.h"
 #include "gear.h"           // gear estimate from RPM and speed
 #include "round_ui.h"   // round dial pages: sport cluster, analog tach / speedo, vitals rings
@@ -38,6 +44,15 @@ enum Mood { HAPPY, UNEASY, WORRIED, SLEEPY, EXCITED, CALM };
 // panel never scans out a half-drawn picture.
 Arduino_GFX *gfx = nullptr;                    // the canvas, created in setup()
 static Arduino_Canvas *fullCanvas = nullptr;
+// The whole frame buffer to the panel. RGB board: the canvas flushes itself. AMOLED board: row by row, cropped to the 466x466 panel (see panelPush).
+static void displayFlush() {
+#if defined(BOARD_AMOLED175)
+  uint16_t *fb = fullCanvas->getFramebuffer();
+  for (int y = 0; y < LCD_H; y++) panelPush(0, y, LCD_W, fb + y * LCD_W);
+#else
+  gfx->flush();
+#endif
+}
 
 // ---------- Boot type (welcome animation: full on a fresh power-up, short after a quick restart) ----------
 // The car's USB power can dip while the engine cranks and restart the board; replaying the long welcome each time would
@@ -757,8 +772,8 @@ static void drawStatusScreen(uint32_t now, bool full) {
   int waitSec = -1;                                                           // custom messages show no waiting time
   if (kind != 4) { waitSec = (int)((now - statusSince) / 1000); if (waitSec < 0) waitSec = 0; }
   rui::statusPage(fb, kind, col, kind == 4 ? title : titles[kind], kind == 4 ? "" : subs[kind], now, full, waitSec);
-  if (full) { gfx->flush(); rui::flushDirty([](int, int, int) {}); }        // whole page: one push, then forget the marks
-  else rui::flushDirty([&](int x, int y, int w) { rgbDisp->draw16bitRGBBitmap(x, y, fb + y * LCD_W + x, w, 1); });
+  if (full) { displayFlush(); rui::flushDirty([](int, int, int) {}); }        // whole page: one push, then forget the marks
+  else rui::flushDirty([&](int x, int y, int w) { panelPush(x, y, w, fb + y * LCD_W + x); });
 }
 // ---------- Face-page background (round board): a soft vertical gradient, dithered so it shows no bands ----------
 static void paintFaceBg(int x0, int y0, int w, int h) {
@@ -865,7 +880,7 @@ void drawDebugPage() {
   rui::backChip(fb);                                                       // a sub-screen: BACK instead of the page dots
   rui::flushDirty([](int, int, int) {});                                   // the whole frame is pushed below; forget the marks
   rui::st().page = -1;                                                     // the hub and the dial pages must rebuild when they are shown again
-  gfx->flush();
+  displayFlush();
 }
 
 // ---------- Input ----------
@@ -1118,7 +1133,7 @@ static void carEventReact(uint32_t now, bool settling) {
 // The Face page never waited for the panel's scan (the old code pushed the whole frame in one call): waiting cost ~37 ms per frame
 // on the round panel, more than the copying itself, so the animation ran at only ~13 fps. The dial pages keep their tear-free sync.
 static void flushRect(const uint16_t *fb, int sx, int sy, int sw, int sh) {
-  for (int y = sy; y < sy + sh; y++) rgbDisp->draw16bitRGBBitmap(sx, y, (uint16_t *)(fb + y * LCD_W + sx), sw, 1);
+  for (int y = sy; y < sy + sh; y++) panelPush(sx, y, sw, fb + y * LCD_W + sx);
 }
 
 static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
@@ -1192,7 +1207,7 @@ static void faceFrame(Mood m, bool moodChanged, bool entering, uint32_t now) {
     character.render(&sg, now, false);                              // the gradient is the background
   }
   uint32_t tFl = micros();
-  if (fullFlush) gfx->flush();
+  if (fullFlush) displayFlush();
   else {                                                            // send only the rows that can have changed (the face area, or the welcome's area)
     uint16_t *fb = fullCanvas->getFramebuffer();
     const int sx = introRect ? IX : FX, sy = introRect ? IY : FY, sw = introRect ? IW : FW, sh = introRect ? IH : FH;
@@ -1501,7 +1516,7 @@ static void roundDialFrame(int p, uint32_t now) {
   uint32_t t1 = micros();
   // Send only the rows / spans that changed to the panel: a full 480x480 copy takes ~39 ms and tears while the panel scans out.
   // Rows go out in order, each one only after the panel's scan has passed it, so a row never shows two different versions.
-  rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); rgbDisp->draw16bitRGBBitmap(x, y, fb + y * LCD_W + x, w, 1); });
+  rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); panelPush(x, y, w, fb + y * LCD_W + x); });
   uint32_t t2 = micros();
   static uint32_t frames = 0, sumDraw = 0, sumFlush = 0, win = 0;   // timing line on the serial monitor, once per 2 s
   frames++; sumDraw += t1 - t0; sumFlush += t2 - t1;
@@ -1520,7 +1535,7 @@ static void roundBrightnessFrame(bool full) {
   rui::brightnessPage(fb, backlightPct, 0, 0, full);                     // a sub-screen: no page dots, a BACK button instead
   if (full) rui::backChip(fb);
   shown = backlightPct;
-  rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); rgbDisp->draw16bitRGBBitmap(x, y, fb + y * LCD_W + x, w, 1); });
+  rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); panelPush(x, y, w, fb + y * LCD_W + x); });
 }
 
 
@@ -1577,7 +1592,7 @@ void uiTick() {
         if (skip) swallowTouch = true;                                           // this touch only skips the welcome, it is not also a tap
         if (skip || !brand::frame(wfb, now - t0)) { done = true; forceDraw = true; drawnPage = -1; }
         else {
-          rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); rgbDisp->draw16bitRGBBitmap(x, y, wfb + y * LCD_W + x, w, 1); });
+          rui::flushDirty([&](int x, int y, int w) { waitBeamPast(y); panelPush(x, y, w, wfb + y * LCD_W + x); });
           lastMood = (int)m;
           return;
         }
@@ -1922,11 +1937,11 @@ void setup() {
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON), onButtonEdge, CHANGE);
   if (!roundDisplayInit()) Serial.println("display init failed");
-  fullCanvas = new Arduino_Canvas(LCD_W, LCD_H, rgbDisp, 0, 0);
+  fullCanvas = new Arduino_Canvas(LCD_W, LCD_H, CANVAS_OUTPUT, 0, 0);
   if (!fullCanvas->begin(GFX_SKIP_OUTPUT_BEGIN)) Serial.println("canvas allocation failed");
   gfx = fullCanvas;
   gfx->fillScreen(BLACK);
-  gfx->flush();
+  displayFlush();
   touchInit();
   imuInit();
   character.begin(esp_random());

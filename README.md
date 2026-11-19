@@ -2,6 +2,28 @@
 
 Revsense: a round dash gauge for a 2025 Mazda 3 (the project and repo were first called Tachi). An ESP32-S3 round touch display reads live engine data from a BLE OBD-II adapter and shows it on dial-style pages. It starts with the Revsense welcome (the gauge draws itself, then the wordmark fades in; a touch skips it). The old animated Tachi faces and their welcome are still in the code but hidden (`SHOW_PAGE_FACE`, `MOCHI_INTRO` in `config.h`, set to 1 to bring them back).
 
+## AMOLED 1.75 board (Waveshare ESP32-S3-Touch-AMOLED-1.75)
+
+The same firmware also runs on the 1.75" round AMOLED board (466 x 466, CO5300 on QSPI, CST9217 touch, QMI8658 motion sensor, 16 MB flash, 8 MB PSRAM). **Written from Waveshare's hardware reference and demo code, not yet tried on a real board.** Everything that is specific to the board sits in four files; `main.cpp` is shared.
+
+| | Round 2.8C (RGB, 480 x 480) | AMOLED 1.75 (QSPI, 466 x 466) |
+|---|---|---|
+| Environment | `waveshare_s3_round28` (+ `_test`) | `waveshare_s3_amoled175` (+ `_test`) |
+| Pins | `include/board_round28.h` | `include/board_amoled175.h` |
+| Display and touch driver | `src/display_round28.h` (ST7701, GT911) | `src/display_amoled175.h` (CO5300, CST9217 through SensorLib 0.3.1) |
+| Brightness | PWM backlight pin | panel command (an AMOLED has no backlight) |
+| Bring-up sketch | `src/round28_bringup.cpp` | `src/amoled175_bringup.cpp` |
+
+**How the picture fits.** Every page is drawn into a 480 x 480 frame buffer. The AMOLED panel is 466 x 466, so its middle 466 x 466 is shown and 7 px are cropped on every side (only the outer bezel ring is lost). Rows are sent to the panel with even starts and widths, which the CO5300 prefers (`src/panel_crop.h`, tested by `tools/tests/panel_crop_test.cpp`). The scan-line synchronisation of the RGB board (`waitBeamPast`) does nothing here, so a fast needle may tear a little; the panel's TE pin (GPIO 13) could be used later.
+
+**First run (in this order)**
+1. Plug the USB-C cable into the board while holding **BOOT** (download mode; the port is the ESP32-S3's own USB, it shows up as `/dev/cu.usbmodem...`).
+2. Hardware test: `pio run -e waveshare_s3_amoled175_test -t upload`, then `pio device monitor`. It should show a colour-bar test picture with a full white circle, the corner marks (top-left red, top-right green, bottom-left blue, bottom-right yellow), a yellow dot under your finger, the brightness changing every 6 s, and on the serial port the I2C scan (0x18, 0x20, 0x34, 0x40, 0x51, 0x5A, 0x6B), "CST9217 touch found" and "IMU ... WHO_AM_I 0x05".
+3. If a tap lands mirrored or rotated, set `TOUCH_SWAP_XY`, `TOUCH_FLIP_X` or `TOUCH_FLIP_Y` in `include/board_amoled175.h` (the sketch prints the mapped coordinates).
+4. The full firmware: `pio run -e waveshare_s3_amoled175 -t upload`. The Settings, the phone app and everything else work as on the other board.
+
+**Not handled yet:** the AXP2101 power chip (battery charging and gauge: the board runs from USB / the car's USB power), the speaker, microphones, RTC and the TF slot (its pins are in `board_amoled175.h`, SD logging is off), and the TE-pin tearing fix.
+
 ## Hardware
 
 - **Board:** Waveshare ESP32-S3-Touch-LCD-2.8C: 2.8" round IPS 480x480 (ST7701 on 16-bit parallel RGB), GT911 capacitive touch,
@@ -85,6 +107,7 @@ Not included yet: sound, motion sensing, Wi-Fi.
 
 - `platformio.ini`: the board, platform and libraries (NimBLE-Arduino 2.x, GFX Library for Arduino). Two environments: `waveshare_s3_round28` (the firmware) and `waveshare_s3_round28_test` (display + touch test).
 - `include/config.h`: settings (adapter name and UUIDs, thresholds, pages, timing). `include/board_round28.h`: pins, panel timings, layout.
+- AMOLED 1.75 board: `include/board_amoled175.h` (pins), `src/display_amoled175.h` (CO5300 + CST9217), `src/panel_crop.h` (466 px panel from the 480 px frame buffer, tested), `src/amoled175_bringup.cpp` (hardware test). See the section "AMOLED 1.75 board" above.
 - `src/main.cpp`: BLE / OBD, moods, the UI loop. `src/display_round28.h`, `src/round28_init.h`: panel and touch. `src/round_ui.h`, `src/round_font.h`: dial, brightness and status pages.
 - `src/mochi.h`, `src/scaled_gfx.h`: the animated character and its scaler. `src/car_events.h`, `src/gear.h`, `src/obd_parse.h`: pure logic with host tests in `tools/tests/`.
 - `tools/preview/`: render the face and pages on a computer; `round_ui_selftest.cpp` must print PASS. `tools/fontgen/`: font generators. `hardware/enclosure/`: a 3D-printable case.
