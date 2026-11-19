@@ -30,10 +30,10 @@
 #define PIN_TOUCH_INT 11
 #define PIN_TOUCH_RST 40
 
-// The touch controller's own axes versus the picture (measured: X matches, Y is upside down); the bring-up sketch (env waveshare_s3_amoled175_test)
+// The touch controller's own axes versus the picture (measured on the board: the touch chip is turned 180 degrees against the picture, so both are flipped); the bring-up sketch (env waveshare_s3_amoled175_test)
 // prints the raw and mapped coordinates so a wrong axis shows up at once. Set these to 1 if a swipe or a tap lands mirrored or rotated.
 #define TOUCH_SWAP_XY 0
-#define TOUCH_FLIP_X  0
+#define TOUCH_FLIP_X  1          // confirmed on the board: with Y flipped, left and right were still reversed (the touch layer is turned 180 degrees against the picture)
 #define TOUCH_FLIP_Y  1          // measured on the board: the CST9217's Y axis runs bottom to top (a touch on the top cross read about 416, on the bottom cross about 6)
 
 #define PIN_BUTTON    0          // BOOT button (the PWR button is wired to the power chip, not to a GPIO)
