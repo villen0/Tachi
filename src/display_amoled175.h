@@ -59,6 +59,7 @@ static bool roundDisplayInit() {
 // ---- CST9217 touch (SensorLib), mapped to frame-buffer coordinates ----
 static TouchDrvCST92xx cst;
 static bool touchDown = false;
+static int16_t touchRawX = 0, touchRawY = 0;      // the last raw point from the controller (for the bring-up sketch)
 static void touchInit() {
   cst.setPins(PIN_TOUCH_RST, PIN_TOUCH_INT);
   touchOk = cst.begin(Wire, CST92XX_SLAVE_ADDRESS, PIN_I2C_SDA, PIN_I2C_SCL);
@@ -72,7 +73,7 @@ static bool touchPoll(bool *down, int *x, int *y) {
   if (!touchOk) return false;
   int16_t tx[1] = {0}, ty[1] = {0};
   uint8_t n = cst.getPoint(tx, ty, 1);
-  if (n > 0) { touchMap(tx[0], ty[0], x, y); *down = true; touchDown = true; return true; }
+  if (n > 0) { touchRawX = tx[0]; touchRawY = ty[0]; touchMap(tx[0], ty[0], x, y); *down = true; touchDown = true; return true; }
   if (touchDown) { touchDown = false; *down = false; return true; }
   return false;
 }

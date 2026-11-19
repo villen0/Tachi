@@ -69,30 +69,35 @@ static void imuCheck() {
   Serial.println("IMU: no answer at 0x6B / 0x6A");
 }
 
+// Calibration targets: touch the CENTRE of each numbered cross in order (1 to 8), about a second each. The sketch prints the average raw point of each touch.
+static const int CALX[8] = {233, 233, 233, 233, 233, 233, 70, 396}, CALY[8] = {40, 130, 230, 330, 390, 440, 233, 233};
+static void drawTargets() {
+  rgbDisp->fillScreen(BLACK);
+  rgbDisp->drawCircle(PANEL_W / 2, PANEL_H / 2, PANEL_W / 2 - 1, WHITE);
+  for (int i = 0; i < 8; i++) {
+    rgbDisp->drawFastHLine(CALX[i] - 14, CALY[i], 29, YELLOW); rgbDisp->drawFastVLine(CALX[i], CALY[i] - 14, 29, YELLOW);
+    rgbDisp->setTextSize(2); rgbDisp->setTextColor(WHITE); rgbDisp->setCursor(CALX[i] + 18, CALY[i] - 8); rgbDisp->printf("%d", i + 1);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1500);
-  Serial.println("\nRevsense AMOLED 1.75 bring-up: " __DATE__ " " __TIME__);
+  Serial.println("\nRevsense AMOLED 1.75 touch calibration: " __DATE__ " " __TIME__);
   if (!roundDisplayInit()) Serial.println("display init FAILED");
-  drawTestPicture();
-  delay(3000);
-  framebufferTest();                     // the bars stay on screen: drawn the way the full firmware draws
-  i2cScan();
+  setBacklight(45);
+  drawTargets();
   touchInit();
-  imuCheck();
-  Serial.printf("touch axes: swap=%d flipX=%d flipY=%d (board_amoled175.h). Tap near each corner of the circle and compare raw and mapped.\n", TOUCH_SWAP_XY, TOUCH_FLIP_X, TOUCH_FLIP_Y);
-  Serial.println("then the frame-buffer picture stays at 45 % brightness: 8 vertical bars, ruler ticks on the left, white frame");
+  Serial.println("CAL: touch the centre of cross 1, 2, ... 8 in order (one second each, lift between).");
+  for (int i = 0; i < 8; i++) Serial.printf("CAL target %d is at panel %d,%d\n", i + 1, CALX[i], CALY[i]);
 }
 
 void loop() {
-  static uint32_t lastStep = 0; static int step = 0;
-  static bool cycle = false;
-  if (cycle && millis() - lastStep > 6000) { lastStep = millis(); static const int lv[4] = {20, 55, 100, 85}; setBacklight(lv[step]); Serial.printf("brightness %d %%\n", lv[step]); step = (step + 1) & 3; }
+  static long sx = 0, sy = 0; static int n = 0, touchNo = 0;
   bool dn = false; int x = 0, y = 0;
-  if (touchPoll(&dn, &x, &y) && dn) {
-    int px = x - PANEL_CROP_X, py = y - PANEL_CROP_Y;           // back to panel pixels for drawing
-    // (the dots are not drawn while the rainbow is shown: watch the serial port, or tap to see the coordinates)
-    Serial.printf("touch: mapped x=%d y=%d (panel %d,%d)\n", x, y, px, py);
+  if (touchPoll(&dn, &x, &y)) {
+    if (dn) { sx += touchRawX; sy += touchRawY; n++; rgbDisp->fillCircle(x - PANEL_CROP_X, y - PANEL_CROP_Y, 3, RED); }
+    else if (n > 0) { touchNo++; Serial.printf("CAL touch %d: raw average %ld,%ld over %d samples\n", touchNo, sx / n, sy / n, n); sx = sy = 0; n = 0; }
   }
   delay(8);
 }
