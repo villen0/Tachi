@@ -18,11 +18,17 @@ static void i2cBegin() { if (!i2cStarted) { Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL,
 static Arduino_DataBus *amBus = new Arduino_ESP32QSPI(PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_D0, PIN_LCD_D1, PIN_LCD_D2, PIN_LCD_D3);
 static Arduino_CO5300 *rgbDisp = new Arduino_CO5300(amBus, PIN_LCD_RST, 0 /*rotation*/, PANEL_W, PANEL_H, 6 /*column offset: Waveshare's value for this panel*/, 0, 0, 0);
 
-// Sends one row span of the 480-wide frame buffer to the panel (x, y in frame-buffer pixels, p = the first pixel of the span).
-// The middle 466x466 is shown, so the span is shifted by the crop and clipped; the CO5300 likes even column starts and widths, so the span is widened to even.
+// Sends one row span of the 480-wide frame buffer to the panel (x, y in frame-buffer pixels, p = the first pixel of the span in the frame buffer).
+// The middle 466x466 is shown, so the span is shifted by the crop and clipped; the CO5300 needs even column starts / widths and windows that start
+// on an even row with an even height, so the span goes out as two rows (this row and its partner, both read from the frame buffer).
 static inline void panelPush(int x, int y, int w, const uint16_t *p) {
   panelcrop::Span sp;
-  if (panelcrop::cropSpan(x, y, w, PANEL_CROP_X, PANEL_CROP_Y, PANEL_W, PANEL_H, &sp)) rgbDisp->draw16bitRGBBitmap(sp.px, sp.py, (uint16_t *)(p + sp.skip), sp.w, 1);
+  if (!panelcrop::cropSpan(x, y, w, PANEL_CROP_X, PANEL_CROP_Y, PANEL_W, PANEL_H, &sp)) return;
+  static uint16_t pairBuf[PANEL_W * 2];
+  int y0 = panelcrop::pairRow(sp.py);                                   // panel row of the pair's first row
+  const uint16_t *r0 = p + sp.skip + (y0 - sp.py) * LCD_W;              // that row's pixels in the frame buffer (p is this span's row)
+  memcpy(pairBuf, r0, sp.w * 2); memcpy(pairBuf + sp.w, r0 + LCD_W, sp.w * 2);
+  rgbDisp->draw16bitRGBBitmap(sp.px, y0, pairBuf, sp.w, 2);
 }
 static void waitBeamPast(int) {}                   // no scan-line synchronisation yet (the panel's TE pin could do it); partial rows are sent as they are
 

@@ -28,6 +28,7 @@ int main() {
     CHECK(srcFirst >= 0 && srcLast < FB);
     CHECK(srcFirst - x == s.px - (x - CR));                                                // pixel (px) comes from frame-buffer column px + CR
   }
+  for (int y = 0; y < 466; y++) { int a = pairRow(y); CHECK((a & 1) == 0 && (y == a || y == a + 1) && a + 1 < 466); }   // every panel row belongs to a pair that fits in the panel
   printf("%ld spans tried, %ld visible\n", spans, drawn);
   // touch mapping
   int x, y;

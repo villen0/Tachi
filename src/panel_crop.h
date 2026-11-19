@@ -21,6 +21,10 @@ inline bool cropSpan(int x, int y, int w, int cropX, int cropY, int panelW, int 
   return true;
 }
 
+// The CO5300 (like most QSPI AMOLEDs) wants drawing windows that start on an even row and are an even number of rows tall: a one-row span is
+// sent together with its partner row (an even row pairs with the one below it, an odd row with the one above). Returns the pair's first row.
+inline int pairRow(int py) { return py & ~1; }
+
 // The touch controller's raw point -> frame-buffer pixels (the shown panel is the middle of the frame buffer).
 inline void mapTouch(int rx, int ry, bool swapXY, bool flipX, bool flipY, int panelW, int panelH, int cropX, int cropY, int *x, int *y) {
   int a = rx, b = ry;

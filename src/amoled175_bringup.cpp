@@ -30,6 +30,29 @@ static void drawTestPicture() {                      // drawn on the panel direc
   rgbDisp->setTextColor(0x7BEF); rgbDisp->setCursor(cx - 100, cy + 40); rgbDisp->print("touch the screen");
 }
 
+// The exact path the full firmware uses: a 480x480 frame buffer in PSRAM pushed row by row with panelPush (cropped to the panel, rows sent in pairs).
+// A rainbow with a white frame, numbered stripes and a red / blue / green / yellow square in each corner of the 466 px panel must appear.
+static void framebufferTest() {
+  uint16_t *fb = (uint16_t *)ps_malloc((size_t)LCD_W * LCD_H * 2);
+  if (!fb) { Serial.println("framebuffer test: no PSRAM"); return; }
+  // eight vertical colour bars (white, yellow, cyan, green, magenta, red, blue, grey), dark at the bottom: if rows were shifted, the bars would lean.
+  const uint16_t bar[8] = {WHITE, YELLOW, CYAN, GREEN, MAGENTA, RED, BLUE, 0x7BEF};
+  for (int y = 0; y < LCD_H; y++) for (int x = 0; x < LCD_W; x++) fb[y * LCD_W + x] = (y > 360) ? 0x0000 : bar[x * 8 / LCD_W];
+  auto box = [&](int x0, int y0, int x1, int y1, uint16_t c) { for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) fb[y * LCD_W + x] = c; };
+  for (int k = 0; k < 4; k++) { box(PANEL_CROP_X + k, PANEL_CROP_Y + k, LCD_W - 1 - PANEL_CROP_X - k, PANEL_CROP_Y + k, WHITE); box(PANEL_CROP_X + k, LCD_H - 1 - PANEL_CROP_Y - k, LCD_W - 1 - PANEL_CROP_X - k, LCD_H - 1 - PANEL_CROP_Y - k, WHITE);
+    box(PANEL_CROP_X + k, PANEL_CROP_Y + k, PANEL_CROP_X + k, LCD_H - 1 - PANEL_CROP_Y - k, WHITE); box(LCD_W - 1 - PANEL_CROP_X - k, PANEL_CROP_Y + k, LCD_W - 1 - PANEL_CROP_X - k, LCD_H - 1 - PANEL_CROP_Y - k, WHITE); }
+  box(PANEL_CROP_X + 20, PANEL_CROP_Y + 90, PANEL_CROP_X + 60, PANEL_CROP_Y + 130, RED); box(LCD_W - 1 - PANEL_CROP_X - 60, PANEL_CROP_Y + 90, LCD_W - 1 - PANEL_CROP_X - 20, PANEL_CROP_Y + 130, GREEN);
+  box(PANEL_CROP_X + 20, LCD_H - 1 - PANEL_CROP_Y - 130, PANEL_CROP_X + 60, LCD_H - 1 - PANEL_CROP_Y - 90, BLUE); box(LCD_W - 1 - PANEL_CROP_X - 60, LCD_H - 1 - PANEL_CROP_Y - 130, LCD_W - 1 - PANEL_CROP_X - 20, LCD_H - 1 - PANEL_CROP_Y - 90, YELLOW);
+  for (int y = PANEL_CROP_Y + 8; y < LCD_H - PANEL_CROP_Y - 8; y += 20) box(PANEL_CROP_X + 8, y, PANEL_CROP_X + ((y / 20) % 5 == 0 ? 60 : 30), y + 1, 0x0000);   // ruler ticks: every 20 rows, longer every 100
+  uint32_t t0 = millis();
+  setBacklight(45);                                    // steady and not too bright for a photo
+  for (int y = 0; y < LCD_H; y++) panelPush(0, y, LCD_W, fb + y * LCD_W);
+  Serial.printf("framebuffer test: full frame pushed in %u ms\n", (unsigned)(millis() - t0));
+  // partial updates like the dials: a few spans on odd and even rows, shifted by one pixel each time
+  for (int y = 200; y < 215; y++) { for (int x = 100; x < 180; x++) fb[y * LCD_W + x] = WHITE; panelPush(99 + (y & 1), y, 82, fb + y * LCD_W + 99 + (y & 1)); }
+  free(fb);
+}
+
 static void i2cScan() {
   Serial.println("I2C scan (expected: 0x18 ES8311, 0x20 TCA9554, 0x34 AXP2101, 0x40 ES7210, 0x51 PCF85063, 0x5A CST9217, 0x6B QMI8658):");
   int n = 0;
@@ -52,20 +75,23 @@ void setup() {
   Serial.println("\nRevsense AMOLED 1.75 bring-up: " __DATE__ " " __TIME__);
   if (!roundDisplayInit()) Serial.println("display init FAILED");
   drawTestPicture();
+  delay(3000);
+  framebufferTest();                     // the bars stay on screen: drawn the way the full firmware draws
   i2cScan();
   touchInit();
   imuCheck();
   Serial.printf("touch axes: swap=%d flipX=%d flipY=%d (board_amoled175.h). Tap near each corner of the circle and compare raw and mapped.\n", TOUCH_SWAP_XY, TOUCH_FLIP_X, TOUCH_FLIP_Y);
-  Serial.println("brightness steps every 6 s: 20%, 55%, 100%, 85% (the picture must get brighter, then settle)");
+  Serial.println("then the frame-buffer picture stays at 45 % brightness: 8 vertical bars, ruler ticks on the left, white frame");
 }
 
 void loop() {
   static uint32_t lastStep = 0; static int step = 0;
-  if (millis() - lastStep > 6000) { lastStep = millis(); static const int lv[4] = {20, 55, 100, 85}; setBacklight(lv[step]); Serial.printf("brightness %d %%\n", lv[step]); step = (step + 1) & 3; }
+  static bool cycle = false;
+  if (cycle && millis() - lastStep > 6000) { lastStep = millis(); static const int lv[4] = {20, 55, 100, 85}; setBacklight(lv[step]); Serial.printf("brightness %d %%\n", lv[step]); step = (step + 1) & 3; }
   bool dn = false; int x = 0, y = 0;
   if (touchPoll(&dn, &x, &y) && dn) {
     int px = x - PANEL_CROP_X, py = y - PANEL_CROP_Y;           // back to panel pixels for drawing
-    rgbDisp->fillCircle(px, py, 8, YELLOW);
+    // (the dots are not drawn while the rainbow is shown: watch the serial port, or tap to see the coordinates)
     Serial.printf("touch: mapped x=%d y=%d (panel %d,%d)\n", x, y, px, py);
   }
   delay(8);
