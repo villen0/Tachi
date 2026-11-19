@@ -1046,7 +1046,14 @@ static void pollTouch() {
       bool next = (dx < 0) != (SWIPE_NEXT_ON_RIGHT != 0);                    // SWIPE_NEXT_ON_RIGHT flips the direction (config.h)
       if (next) { if (btnShortPresses < 5) btnShortPresses = btnShortPresses + 1; }
       else      { if (btnPrevPresses < 5) btnPrevPresses = btnPrevPresses + 1; }
-    } else if (!btnLongFired && btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;   // a tap
+    } else if (!btnLongFired) {                                                  // a tap
+#if TAP_HALVES
+      if (sx < LCD_W / 2) { if (btnPrevPresses < 5) btnPrevPresses = btnPrevPresses + 1; }   // left half: previous page
+      else if (btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;                   // right half: next page
+#else
+      if (btnShortPresses < 5) btnShortPresses = btnShortPresses + 1;                         // anywhere: next page
+#endif
+    }
   }
 }
 

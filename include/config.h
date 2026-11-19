@@ -56,6 +56,7 @@
 #define TRIPS_CHAR_UUID  "52657673-656e-7365-0000-4e4156000004"   // the board notifies trips here after the app writes "Q|T" to the NAV characteristic
 #define CONFIG_CHAR_UUID "52657673-656e-7365-0000-4e4156000005"   // the board notifies its settings here after the app writes "S?" (or changes one with "S|key|value")
 #define CODES_CHAR_UUID  "52657673-656e-7365-0000-4e4156000006"   // the board notifies its fault codes here after the app writes "F?" ("F|X" clears them)
+#define TAP_HALVES 1           // a tap on the right half of a page = next page, on the left half = previous page (0: a tap anywhere = next page). Buttons and sliders are not affected
 #define NAV_STALE_MS 20000     // no update from the phone for this long: the turn card goes away
 #define SHOW_PAGE_BATTERY  0   // battery page: one value with a bar, same style as TEMPS (comes right after it)
 #define SHOW_PAGE_CUSTOM   0   // custom boost page: the arc with three readouts (needs SHOW_PAGE_STYLES; hidden, the Arc page keeps the boost gauge)
